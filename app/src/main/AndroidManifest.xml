@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Needler application manifest.
+
+  Deliberately absent, because other work is writing those classes:
+    * the launcher <activity> (Connect / main host)
+    * the <service> for the Media3 MediaLibraryService, which belongs in
+      player/service/src/main/AndroidManifest.xml next to the class it names
+    * the Glance <receiver> entries, which belong in
+      widget/src/main/AndroidManifest.xml
+    * the Android Auto <meta-data android:name="com.google.android.gms.car.application">
+      and its automotive_app_desc resource
+  Declaring an element that names a class which does not exist yet merges fine
+  but fails lint's MissingClass check, so each one lands with its class.
+
+  Also not done here: removing WorkManager's default initializer. That is only
+  correct once NeedlerApplication implements Configuration.Provider and supplies
+  a HiltWorkerFactory; doing it first would leave WorkManager uninitialised at
+  runtime. When that arrives, add the InitializationProvider/tools:node="remove"
+  block for androidx.work.WorkManagerInitializer.
+
+  android:label is a literal rather than @string/app_name so this file does not
+  depend on a strings.xml that does not exist yet.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Talking to the DroppedNeedle server at all. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      Required to tell a metered connection from an unmetered one, which three
+      separate requirements depend on: "Stream on mobile data: MP3 320" only
+      while metered, "Download to device on Wi-Fi only", and respecting Data
+      Saver (no artwork prefetch, no speculative buffering when restricted).
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Pull finished / pull failed / new release notifications (Android 13+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      One foreground service only, for media playback, owned by the Media3
+      session. Offline downloads run as expedited WorkManager jobs instead.
+      FOREGROUND_SERVICE_MEDIA_PLAYBACK is mandatory from targetSdk 34.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <!-- Keeps playback alive with the screen off. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:name=".NeedlerApplication"
+        android:label="Needler"
+        android:supportsRtl="true"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config" />
+
+</manifest>

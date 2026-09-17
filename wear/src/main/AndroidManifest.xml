@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Wear OS companion manifest.
+
+  The launcher <activity> is not declared yet; it lands with the class.
+
+  standalone=false because v1 plays on-device audio synced from the phone over
+  the data layer and has no server connection of its own — the watch app is not
+  usable without the phone app.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <application
+        android:label="Needler"
+        android:supportsRtl="true"
+        android:allowBackup="false">
+
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="false" />
+
+    </application>
+
+</manifest>

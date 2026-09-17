@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  :core:network — the module that owns every outbound HTTP call, so it declares the
+  permissions that make those calls possible rather than leaving them to :app.
+
+  No `package` attribute: the namespace comes from `android.namespace` in
+  core/network/build.gradle.kts (AGP 9 requires it there).
+
+  Deliberately NOT declared here:
+
+  * `android:usesCleartextTraffic` / `android:networkSecurityConfig`. REQUIREMENTS.md
+    §"Accepted URL forms" requires `http://192.168.1.50:8688` to work, and the platform
+    blocks cleartext by default from API 28 — but a library that flips that flag weakens
+    every host for the whole app. The scoped fix belongs in :app: a
+    `res/xml/network_security_config.xml` that permits cleartext, ideally narrowed to
+    private address ranges, referenced from the application element.
+    OkHttp itself imposes no HTTPS-only rule (see NeedlerHttpClient), so the transport
+    side is already ready for it.
+
+  * Any `<application>` element. Nothing in this module needs a component, and an
+    application element here would merge into the app's and invite exactly the kind of
+    global default this module is careful to avoid.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Every call on both lanes: /api/v1 and /subsonic/rest, plus audio and artwork. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Needed to tell a metered connection from an unmetered one. Two requirements depend on
+      it: "Stream on mobile data: MP3 320" may only request a transcode while metered, and
+      "Download to device on Wi-Fi only" defaults to on. It also backs the offline-first
+      behaviour, where an unreachable server is a state rather than an error.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+</manifest>
