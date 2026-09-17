@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 
 /**
- * Typography for Needler, transcribed from the inline styles in `design/html/*.html`.
+ * Typography for Needler, transcribed from the inline styles in `design/html`.
  *
  * Two families, both from Google Fonts:
  *

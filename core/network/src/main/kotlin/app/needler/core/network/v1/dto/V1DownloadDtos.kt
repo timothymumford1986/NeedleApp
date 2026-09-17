@@ -19,7 +19,7 @@ public data class DownloadListDto(
  * One acquisition task. `GET /api/v1/downloads` and `GET /api/v1/downloads/{task_id}`.
  *
  * [id] is a **string**. All `*_at` fields are epoch **seconds as floats**, unlike the
- * `/requests/*` lane which uses ISO strings.
+ * `/requests` lane which uses ISO strings.
  *
  * [status] is one of `queued`, `downloading`, `processing`, `completed`, `partial`, `failed`,
  * `cancelled`. (`retrying` and `awaiting_review` exist but only on the per-task SSE stream, which

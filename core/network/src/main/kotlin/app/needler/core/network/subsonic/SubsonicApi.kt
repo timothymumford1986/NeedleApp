@@ -35,7 +35,7 @@ public enum class AlbumListType(public val wire: String) {
 }
 
 /**
- * The `/subsonic/rest/*` lane: browsing and playing the owned library, playlists and favourites.
+ * The `/subsonic/rest` lane: browsing and playing the owned library, playlists and favourites.
  *
  * Auth is the `apiKey=<app-password>` query parameter — the `apiKeyAuthentication` extension.
  * The legacy `u`+`t`+`s` salted-MD5 scheme is deliberately not implemented. `v`, `c=Needler` and
