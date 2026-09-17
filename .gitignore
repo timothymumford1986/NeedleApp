@@ -1,0 +1,30 @@
+# Android / Gradle
+*.iml
+.gradle/
+build/
+captures/
+local.properties
+.cxx/
+*.apk
+*.aab
+*.aar
+*.ap_
+*.dex
+*.class
+release/
+
+# Signing — never commit these
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# IDE
+.idea/
+*.hprof
+.kotlin/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
