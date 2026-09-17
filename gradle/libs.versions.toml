@@ -45,7 +45,7 @@ kotlin = "2.4.20"                    # src: MC org/jetbrains/kotlin/kotlin-gradl
 ksp = "2.3.12"                       # src: MC com/google/devtools/ksp/symbol-processing-gradle-plugin (<release>)
 
 # ---- sdk levels ----
-compileSdk = "36"                    # forced by androidx aar-metadata minCompileSdk=37 (see notes)
+compileSdk = "37"                    # android-37.x; okhttp-android 5.5.0 + androidx require minCompileSdk=37
 minSdk = "26"                        # REQUIREMENTS.md "Target devices"
 targetSdk = "36"                     # REQUIREMENTS.md "Target devices"
 

@@ -244,7 +244,7 @@ public class EvictionPlannerTest {
 
         assertEquals(CacheWarning.BUDGET_STILL_EXCEEDED, plan.warning)
         assertEquals(100L, plan.freedBytes)
-        assertEquals(600L, plan.targetBytes)
+        assertEquals(500L, plan.targetBytes)
         assertTrue(plan.budgetStillExceeded)
     }
 

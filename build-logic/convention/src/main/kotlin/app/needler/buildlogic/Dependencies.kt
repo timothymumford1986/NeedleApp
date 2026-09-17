@@ -1,6 +1,7 @@
 package app.needler.buildlogic
 
 import org.gradle.api.Project
+import org.gradle.api.tasks.testing.AbstractTestTask
 
 /**
  * Test dependencies every Kotlin module in this project gets.
@@ -17,6 +18,14 @@ internal fun Project.addSharedUnitTestDependencies() {
         addProvider("testImplementation", libs.library("kotlinx.coroutines.test"))
         addProvider("testImplementation", libs.library("turbine"))
         addProvider("testImplementation", libs.library("mockk.unit"))
+    }
+
+    // Gradle 9 fails a test task that discovers nothing, which breaks every module
+    // that has no tests yet (the feature modules, :widget, :wear). A module with no
+    // tests is a gap to fill, not a build failure, so the check is off project-wide.
+    // Modules that DO have tests still fail normally when a test fails.
+    tasks.withType(AbstractTestTask::class.java).configureEach {
+        failOnNoDiscoveredTests.set(false)
     }
 }
 
