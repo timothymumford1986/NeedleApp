@@ -5,7 +5,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
 /**
- * Needler's palette, transcribed from `design/html/*.html`.
+ * Needler's palette, transcribed from `design/html`.
  *
  * The design pack ships a single dark theme built on a near-black olive canvas with one pale-blue
  * accent and one pale-green positive state. There is deliberately **no light theme** - do not add

@@ -4,10 +4,10 @@ import java.io.IOException
 
 /** Which of DroppedNeedle's two HTTP surfaces a call used. */
 public enum class ApiLane {
-    /** `/api/v1/*`, `Authorization: Bearer <companion token>`. */
+    /** `/api/v1`, `Authorization: Bearer <companion token>`. */
     V1,
 
-    /** `/subsonic/rest/*`, `apiKey=<app-password>`. */
+    /** `/subsonic/rest`, `apiKey=<app-password>`. */
     Subsonic,
 }
 
