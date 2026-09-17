@@ -62,3 +62,16 @@ include(":player:service")
 
 include(":widget")
 include(":wear")
+
+// Build output can be redirected off this checkout by setting `needler.buildDir`
+// in ~/.gradle/gradle.properties. Needed when the checkout lives in a synced
+// folder (OneDrive, Dropbox): the sync client holds handles on Gradle's
+// intermediates and Gradle then fails with "Unable to delete directory".
+// Unset by default, so a normal clone and CI keep the standard ./build layout.
+val redirectedBuildRoot: String? = providers.gradleProperty("needler.buildDir").orNull
+if (!redirectedBuildRoot.isNullOrBlank()) {
+    val root = file(redirectedBuildRoot)
+    gradle.beforeProject {
+        layout.buildDirectory.set(File(root, path.removePrefix(":").replace(':', '/').ifEmpty { "root" }))
+    }
+}
