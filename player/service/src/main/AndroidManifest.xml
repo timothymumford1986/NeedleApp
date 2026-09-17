@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  :player:service declares the foreground-service permissions it is the reason
+  for. They are also declared in app/src/main/AndroidManifest.xml; duplicate
+  <uses-permission> entries merge to one.
+
+  The <service> element for the MediaLibraryService is NOT here yet, because the
+  class it has to name does not exist yet and lint fails on a manifest that
+  names a missing class. When it is written, add it here (not in :app) so the
+  declaration lives beside the class:
+
+      <service
+          android:name=".<TheServiceClass>"
+          android:exported="true"
+          android:foregroundServiceType="mediaPlayback">
+          <intent-filter>
+              <action android:name="androidx.media3.session.MediaSessionService" />
+              <action android:name="android.media.browse.MediaBrowserService" />
+          </intent-filter>
+      </service>
+
+  The MediaBrowserService action is what makes Android Auto and older media
+  clients able to browse; REQUIREMENTS.md wants Auto browse and search from the
+  start because retrofitting it means restructuring playback.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+</manifest>

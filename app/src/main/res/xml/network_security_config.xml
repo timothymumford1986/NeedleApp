@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Network security configuration.
+
+  REQUIREMENTS.md "Connectivity and failures > Accepted URL forms" requires
+  http://192.168.1.50:8688 — a plain-HTTP server on a local network — to work,
+  and a port-only host with no scheme defaults to http://. Android blocks
+  cleartext by default from API 28, so it has to be permitted here.
+
+  This is done with a network security config rather than
+  android:usesCleartextTraffic on <application> because the config is the
+  mechanism that survives: it can later be narrowed to <domain-config> entries
+  for specific hosts, or restricted to debug builds, without touching the
+  manifest attribute that some libraries also read.
+
+  Trust anchors are the system store only. The self-signed-certificate flow in
+  REQUIREMENTS.md ("Self-signed certificates") is deliberately NOT implemented
+  here: it pins the user-confirmed leaf certificate for one host through an
+  OkHttp trust manager in :core:network, so validation is never weakened
+  globally and a changed fingerprint can fail loudly. Adding
+  <certificates src="user" /> below would quietly trust every user-installed CA
+  for every host, which is a strictly larger grant than the requirement asks
+  for; if private-CA setups turn out to need it, add it as a <domain-config>
+  for the one configured host, not to base-config.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

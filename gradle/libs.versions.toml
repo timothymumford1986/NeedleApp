@@ -1,0 +1,205 @@
+# Needler version catalogue
+#
+# Every version below was read from the authoritative publishing repository on
+# 2026-09-17 (not from memory). "src:" names where each number came from.
+#
+#   GMaven = https://dl.google.com/dl/android/maven2/<path>/maven-metadata.xml
+#   MC     = https://repo1.maven.org/maven2/<path>/maven-metadata.xml
+#
+# --------------------------------------------------------------------------
+# Toolchain compatibility notes (read before bumping anything)
+# --------------------------------------------------------------------------
+# * AGP 9.4.0 requires Gradle >= 9.6.0 and JDK >= 17.
+#   src: https://developer.android.com/build/releases/gradle-plugin (AGP 9.4 row)
+# * AGP 9 enables *built-in Kotlin*: the org.jetbrains.kotlin.android plugin
+#   must NOT be applied any more. AGP 9.4.0 itself depends on KGP 2.2.10, so the
+#   Kotlin version is raised to 2.4.20 by putting kotlin-gradle-plugin on the
+#   build classpath in build-logic/convention/build.gradle.kts.
+#   src: https://developer.android.com/build/migrate-to-built-in-kotlin
+#   src: POM of com.android.tools.build:gradle:9.4.0 (declares KGP 2.2.10)
+# * Kotlin 2.4.x needs AGP >= 8.5.2, so AGP 9.4.0 is fine.
+#   src: https://developer.android.com/build/kotlin-support
+# * Kotlin 2.4.20 is a *floor*, not a preference: coil 3.6.2 is published
+#   against kotlin-stdlib 2.4.10 and hilt 2.60.1 against 2.3.21, so an older
+#   Kotlin compiler cannot read their metadata.
+#   src: POMs of io.coil-kt.coil3:coil-android:3.6.2 and com.google.dagger:hilt-compiler:2.60.1
+# * The Compose compiler plugin is versioned WITH Kotlin, so
+#   compose-compiler == kotlin == 2.4.20. Do not decouple them.
+# * KSP no longer encodes the Kotlin version in its own version string. The last
+#   hyphenated release was 2.2.21-2.0.5; from 2.3.0 onwards KSP2 versions
+#   independently (it is no longer a compiler plugin). 2.3.12 is the current
+#   release; the hilt 2.60.1 processor is built on symbol-processing-api 2.3.7,
+#   i.e. the same 2.3.x line.
+#   src: MC com/google/devtools/ksp/symbol-processing-gradle-plugin
+#   src: https://github.com/google/ksp/blob/main/docs/ksp2.md
+# * compileSdk MUST be 37: compose-ui 1.12.1, core-ktx 1.19.0, lifecycle 2.11.0,
+#   navigation-compose 2.10.1, material3-adaptive 1.3.0 and coil 3.6.2 all
+#   declare minCompileSdk=37 (and minAndroidGradlePluginVersion=9.1.0) in their
+#   aar-metadata.properties. targetSdk stays 36 per REQUIREMENTS.md "Scope".
+# * Hilt >= 2.59 *requires* AGP 9. src: https://github.com/google/dagger/releases
+
+[versions]
+# ---- build toolchain ----
+agp = "9.4.0"                        # src: GMaven com/android/tools/build/gradle (latest stable)
+kotlin = "2.4.20"                    # src: MC org/jetbrains/kotlin/kotlin-gradle-plugin (<release>)
+ksp = "2.3.12"                       # src: MC com/google/devtools/ksp/symbol-processing-gradle-plugin (<release>)
+
+# ---- sdk levels ----
+compileSdk = "36"                    # forced by androidx aar-metadata minCompileSdk=37 (see notes)
+minSdk = "26"                        # REQUIREMENTS.md "Target devices"
+targetSdk = "36"                     # REQUIREMENTS.md "Target devices"
+
+# ---- androidx / compose ----
+androidxCoreKtx = "1.19.0"           # src: GMaven androidx/core/core-ktx
+androidxActivityCompose = "1.13.0"   # src: GMaven androidx/activity/activity-compose
+androidxLifecycle = "2.11.0"         # src: GMaven androidx/lifecycle/lifecycle-runtime-compose
+androidxNavigationCompose = "2.10.1" # src: GMaven androidx/navigation/navigation-compose
+androidxSplashscreen = "1.2.0"       # src: GMaven androidx/core/core-splashscreen
+composeBom = "2026.09.00"            # src: GMaven androidx/compose/compose-bom
+                                     # manages compose 1.12.1, material3 1.4.0, material3.adaptive 1.3.0
+
+# ---- data / platform ----
+media3 = "1.11.1"                    # src: GMaven androidx/media3/media3-exoplayer
+room = "2.8.5"                       # src: GMaven androidx/room/room-runtime
+work = "2.11.2"                      # src: GMaven androidx/work/work-runtime
+datastore = "1.2.1"                  # src: GMaven androidx/datastore/datastore-preferences
+securityCrypto = "1.1.0"             # src: GMaven androidx/security/security-crypto
+                                     # NOTE: androidx.security:security-crypto is deprecated upstream and
+                                     # 1.1.0 is the last stable release. REQUIREMENTS.md mandates
+                                     # EncryptedSharedPreferences, so it stays for v1.
+glance = "1.2.0"                     # src: GMaven androidx/glance/glance-appwidget (latest stable; 1.3.0 is alpha)
+wearCompose = "1.6.2"                # src: GMaven androidx/wear/compose/compose-material3 (1.7.0 is rc only)
+wearToolingPreview = "1.0.0"         # src: GMaven androidx/wear/wear-tooling-preview
+playServicesWearable = "20.0.1"      # src: GMaven com/google/android/gms/play-services-wearable
+
+# ---- di / http / serialisation ----
+hilt = "2.60.1"                      # src: MC com/google/dagger/hilt-android
+androidxHilt = "1.4.0"               # src: GMaven androidx/hilt/hilt-work (also hilt-navigation-compose)
+okhttp = "5.5.0"                     # src: MC com/squareup/okhttp3/okhttp
+coil = "3.6.2"                       # src: MC io/coil-kt/coil3/coil
+kotlinxCoroutines = "1.11.0"         # src: MC org/jetbrains/kotlinx/kotlinx-coroutines-core
+kotlinxSerialization = "1.11.0"      # src: MC org/jetbrains/kotlinx/kotlinx-serialization-json (1.12.0 is RC)
+kotlinxDatetime = "0.8.0"            # src: MC org/jetbrains/kotlinx/kotlinx-datetime
+                                     # NOTE: from 0.7.0 `kotlinx.datetime.Instant` is a deprecated
+                                     # typealias for `kotlin.time.Instant`. Verified in the 0.8.0 jar
+                                     # (kotlinx/datetime/DeprecatedInstantKt.class) that the level is
+                                     # DeprecationLevel.WARNING, so existing `kotlinx.datetime.Instant`
+                                     # imports still compile. Migrate to `kotlin.time.Instant` before
+                                     # 0.9.x, which is likely to raise it to ERROR.
+
+# ---- test ----
+# JUnit 4 is the deliberate project-wide choice: AGP unit tests, androidx.test,
+# room-testing and compose ui-test-junit4 are all JUnit4-based, and JUnit 5 still
+# needs extra wiring to run instrumented tests. One framework, everywhere.
+junit = "4.13.2"                     # src: MC junit/junit
+androidxTestExtJunit = "1.3.0"       # src: GMaven androidx/test/ext/junit
+androidxTestEspresso = "3.7.0"       # src: GMaven androidx/test/espresso/espresso-core
+turbine = "1.2.1"                    # src: MC app/cash/turbine/turbine
+mockk = "1.14.11"                    # src: MC io/mockk/mockk
+
+[libraries]
+# ---- build-logic classpath (consumed only by build-logic/convention) ----
+android-gradlePlugin = { group = "com.android.tools.build", name = "gradle", version.ref = "agp" }
+kotlin-gradlePlugin = { group = "org.jetbrains.kotlin", name = "kotlin-gradle-plugin", version.ref = "kotlin" }
+compose-gradlePlugin = { group = "org.jetbrains.kotlin", name = "compose-compiler-gradle-plugin", version.ref = "kotlin" }
+ksp-gradlePlugin = { group = "com.google.devtools.ksp", name = "symbol-processing-gradle-plugin", version.ref = "ksp" }
+hilt-gradlePlugin = { group = "com.google.dagger", name = "hilt-android-gradle-plugin", version.ref = "hilt" }
+
+# ---- androidx base ----
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "androidxCoreKtx" }
+androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "androidxSplashscreen" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "androidxActivityCompose" }
+androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "androidxLifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "androidxLifecycle" }
+androidx-lifecycle-service = { group = "androidx.lifecycle", name = "lifecycle-service", version.ref = "androidxLifecycle" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "androidxNavigationCompose" }
+
+# ---- compose (versions come from the BOM; deliberately no version.ref here) ----
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+compose-runtime = { group = "androidx.compose.runtime", name = "runtime" }
+compose-ui = { group = "androidx.compose.ui", name = "ui" }
+compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+compose-ui-text-googleFonts = { group = "androidx.compose.ui", name = "ui-text-google-fonts" }
+compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
+# animation also brings animation-core, which is where the Animatable/Easing/
+# infiniteRepeatable API the design system's motion uses actually lives.
+compose-animation = { group = "androidx.compose.animation", name = "animation" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+compose-material3-windowSizeClass = { group = "androidx.compose.material3", name = "material3-window-size-class" }
+compose-material3-adaptiveNavigationSuite = { group = "androidx.compose.material3", name = "material3-adaptive-navigation-suite" }
+compose-adaptive = { group = "androidx.compose.material3.adaptive", name = "adaptive" }
+compose-adaptive-layout = { group = "androidx.compose.material3.adaptive", name = "adaptive-layout" }
+compose-adaptive-navigation = { group = "androidx.compose.material3.adaptive", name = "adaptive-navigation" }
+
+# ---- media3 ----
+media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
+media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
+media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
+media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasource-okhttp", version.ref = "media3" }
+media3-cast = { group = "androidx.media3", name = "media3-cast", version.ref = "media3" }
+media3-database = { group = "androidx.media3", name = "media3-database", version.ref = "media3" }
+
+# ---- room ----
+room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
+
+# ---- persistence / background / crypto ----
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
+androidx-work-testing = { group = "androidx.work", name = "work-testing", version.ref = "work" }
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+
+# ---- widgets / wear ----
+glance-appwidget = { group = "androidx.glance", name = "glance-appwidget", version.ref = "glance" }
+glance-material3 = { group = "androidx.glance", name = "glance-material3", version.ref = "glance" }
+wear-compose-foundation = { group = "androidx.wear.compose", name = "compose-foundation", version.ref = "wearCompose" }
+wear-compose-material3 = { group = "androidx.wear.compose", name = "compose-material3", version.ref = "wearCompose" }
+wear-compose-navigation = { group = "androidx.wear.compose", name = "compose-navigation", version.ref = "wearCompose" }
+wear-toolingPreview = { group = "androidx.wear", name = "wear-tooling-preview", version.ref = "wearToolingPreview" }
+playServices-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "playServicesWearable" }
+
+# ---- di ----
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
+hilt-android-testing = { group = "com.google.dagger", name = "hilt-android-testing", version.ref = "hilt" }
+androidx-hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "androidxHilt" }
+androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "androidxHilt" }
+androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "androidxHilt" }
+
+# ---- http / images / serialisation ----
+okhttp-core = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver3-junit4", version.ref = "okhttp" }
+coil-core = { group = "io.coil-kt.coil3", name = "coil", version.ref = "coil" }
+coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
+coil-network-okhttp = { group = "io.coil-kt.coil3", name = "coil-network-okhttp", version.ref = "coil" }
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlinx-datetime = { group = "org.jetbrains.kotlinx", name = "kotlinx-datetime", version.ref = "kotlinxDatetime" }
+
+# ---- test ----
+junit4 = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "androidxTestEspresso" }
+turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
+mockk-unit = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+# NOTE: there is intentionally no org.jetbrains.kotlin.android alias.
+# AGP 9 compiles Kotlin itself (built-in Kotlin) and is incompatible with it.
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+room = { id = "androidx.room", version.ref = "room" }
