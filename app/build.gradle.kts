@@ -10,9 +10,30 @@
 // It also owns the two screens that are not features: Connect (screens 01/16)
 // and Settings (screen 12).
 
+// ---------------------------------------------------------------------------
+// Screenshots
+// ---------------------------------------------------------------------------
+// Every screen in this module renders to a PNG on the JVM - no emulator, no
+// device, no connected phone. Regenerate the whole set with:
+//
+//     ./gradlew :app:recordScreenshots
+//
+// The images land in `screenshots/` at the repository root, which is committed,
+// so they can be opened directly rather than dug out of build output. Add
+// `-Pneedler.screenshots.verify` to compare against the committed images and
+// fail on a difference instead of overwriting them.
+//
+// The rendering itself is Roborazzi over Robolectric's native graphics mode;
+// how that is wired, and why the Roborazzi Gradle plugin is deliberately not
+// applied, is in build-logic/.../ScreenshotConventionPlugin.kt. The test helper
+// that names the device sizes is
+// app/src/test/kotlin/app/needler/screenshot/NeedlerScreenshots.kt.
+// ---------------------------------------------------------------------------
+
 plugins {
     id("needler.android.application")
     id("needler.hilt")
+    id("needler.screenshots")
 }
 
 android {
@@ -44,6 +65,12 @@ dependencies {
 
     // ---- navigation and the activity host ----
     implementation(libs.androidx.core.ktx)
+    // Material 3 itself arrives transitively through :core:design's `api`, but
+    // :app names it too: the navigation host uses Material's Scaffold insets
+    // and window size classes directly, and a module should declare what it
+    // compiles against.
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material3.windowSizeClass)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

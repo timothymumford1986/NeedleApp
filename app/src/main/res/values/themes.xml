@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Two themes, and the split between them is the whole point.
+
+  `Theme.Needler.Splash` is what the *window* is created with. It exists solely
+  so androidx.core.splashscreen has something to read: a background colour and
+  the theme to swap to once the first frame is ready. It is never seen for
+  longer than the system takes to hand the activity a window.
+
+  `Theme.Needler` is what the activity actually runs under, applied by
+  `installSplashScreen()` through `postSplashScreenTheme`. It is a bare
+  no-action-bar theme with a canvas-coloured window background, because
+  everything visible after that point is drawn by Compose.
+
+  REQUIREMENTS.md "Performance budgets": the 2.1 s record animation is longer
+  than cold start should take, so it must overlay a screen that is already
+  loaded rather than gate it. That animation is therefore NOT this splash - it
+  is `NeedlerSplash` from :core:design, composed over the real content. The
+  system splash here is dismissed on the first frame and never held.
+-->
+<resources>
+
+    <style name="Theme.Needler" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/needler_canvas</item>
+        <!--
+          Edge-to-edge is enabled from MainActivity via enableEdgeToEdge(), which
+          sets these at runtime as well; declaring them here stops the bars
+          flashing an opaque colour on the very first frame.
+        -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Dark-only palette: the bars' icons are always light-on-dark. -->
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.Needler.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/needler_canvas</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_mark</item>
+        <item name="postSplashScreenTheme">@style/Theme.Needler</item>
+    </style>
+
+</resources>

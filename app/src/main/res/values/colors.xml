@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The two palette values the *platform* needs before Compose exists.
+
+  Everything else lives in :core:design's Kotlin palette, which is the single
+  source of truth. These two are duplicated here only because a window
+  background and a splash-screen background are read from the theme by the
+  system, before a single composable has run.
+-->
+<resources>
+    <!-- NeedlerColors.canvas -->
+    <color name="needler_canvas">#FF0D120A</color>
+    <!-- NeedlerColors.textPrimary -->
+    <color name="needler_text_primary">#FFF2F5EE</color>
+</resources>
