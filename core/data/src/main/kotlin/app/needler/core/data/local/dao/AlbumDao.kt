@@ -185,6 +185,19 @@ public interface AlbumDao {
     )
     public fun observeLibraryTotals(): Flow<LibraryTotalsRow>
 
+    /**
+     * The encoded `genres` column of every owned album.
+     *
+     * Genres are a denormalised display column rather than a table, so the Genres screen counts them
+     * in Kotlin. The column is tiny and only owned albums carry one, so this stays far inside the
+     * 50 ms local-search budget even on a large library.
+     */
+    @Query("SELECT genres FROM album WHERE in_library = 1 AND genres IS NOT NULL")
+    public fun observeGenreColumns(): Flow<List<String>>
+
+    @Query("SELECT COUNT(*) FROM album WHERE in_library = 1 AND genres LIKE :genrePattern")
+    public fun observeAlbumCountForGenre(genrePattern: String): Flow<Int>
+
     @Query("SELECT COUNT(*) FROM album WHERE in_library = 1")
     public fun observeLibraryAlbumCount(): Flow<Int>
 

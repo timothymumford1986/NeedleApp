@@ -88,6 +88,16 @@ public abstract class PlaylistDao {
     @Query("DELETE FROM playlist_track WHERE playlist_id = :playlistId")
     public abstract suspend fun deleteTracksOf(playlistId: String)
 
+    /**
+     * The raw entry rows, in order.
+     *
+     * The observable projection above joins `track` for rendering; a reorder or an index-based
+     * removal needs the rows themselves, because it has to renumber positions the join has already
+     * flattened.
+     */
+    @Query("SELECT * FROM playlist_track WHERE playlist_id = :playlistId ORDER BY position ASC")
+    public abstract suspend fun getTracksOf(playlistId: String): List<PlaylistTrackEntity>
+
     @Query("SELECT COUNT(*) FROM playlist_track WHERE playlist_id = :playlistId")
     public abstract suspend fun countTracks(playlistId: String): Int
 

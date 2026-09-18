@@ -96,6 +96,22 @@ public interface FavouriteDao {
     /** Marks a star as awaiting replay, so the UI can show it without claiming the server agrees. */
     @Query(
         """
+        SELECT EXISTS(
+            SELECT 1 FROM favourite
+            WHERE entity_type = 'artist' AND entity_id = :artistMbid
+        )
+        """,
+    )
+    public fun observeArtistIsStarred(artistMbid: String): Flow<Boolean>
+
+    @Query("SELECT * FROM favourite WHERE entity_type = :entityType AND entity_id = :entityId")
+    public suspend fun getFavourite(entityType: String, entityId: String): FavouriteEntity?
+
+    @Query("SELECT * FROM favourite WHERE pending_sync = 1 ORDER BY starred_at ASC")
+    public suspend fun getPendingSync(): List<FavouriteEntity>
+
+    @Query(
+        """
         UPDATE favourite SET pending_sync = :pendingSync
         WHERE entity_type = :entityType AND entity_id = :entityId
         """,
