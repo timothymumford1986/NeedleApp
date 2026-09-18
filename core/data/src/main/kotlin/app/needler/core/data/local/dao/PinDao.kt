@@ -5,6 +5,7 @@ import androidx.room.Query
 import androidx.room.Upsert
 import app.needler.core.data.local.entity.DownloadStateDb
 import app.needler.core.data.local.entity.PinEntity
+import app.needler.core.data.local.projection.DownloadedAlbumRow
 import app.needler.core.data.local.projection.PinnedAlbumRow
 import kotlinx.coroutines.flow.Flow
 
@@ -57,6 +58,54 @@ public interface PinDao {
         """,
     )
     public fun observePinnedAlbums(): Flow<List<PinnedAlbumRow>>
+
+    /**
+     * Downloaded albums with the bytes each one occupies, largest first: the Storage screen's
+     * removal list.
+     *
+     * Ordered by size descending because the whole point of the list is to answer "what is taking up
+     * the room", and a user freeing space wants the 4 GB box set at the top, not the album they
+     * happened to pin most recently. Title breaks ties so the order is stable between reads.
+     *
+     * Only `pinned = 1` rows are summed. An album that was unpinned still has cached bytes, but those
+     * belong to the cached-while-listening tier and are cleared by its own action, not by removing a
+     * download.
+     */
+    @Query(
+        """
+        SELECT
+            pin.release_group_mbid AS release_group_mbid,
+            album.title AS title,
+            album.artist_name AS artist_name,
+            pin.pinned_at AS pinned_at,
+            (
+                SELECT COALESCE(SUM(ac.size_bytes), 0) FROM audio_cache ac
+                WHERE ac.release_group_mbid = pin.release_group_mbid AND ac.pinned = 1
+            ) AS size_bytes
+        FROM pin
+        JOIN album ON album.release_group_mbid = pin.release_group_mbid
+        ORDER BY size_bytes DESC, album.title ASC
+        """,
+    )
+    public fun observeDownloadedAlbums(): Flow<List<DownloadedAlbumRow>>
+
+    @Query(
+        """
+        SELECT
+            pin.release_group_mbid AS release_group_mbid,
+            album.title AS title,
+            album.artist_name AS artist_name,
+            pin.pinned_at AS pinned_at,
+            (
+                SELECT COALESCE(SUM(ac.size_bytes), 0) FROM audio_cache ac
+                WHERE ac.release_group_mbid = pin.release_group_mbid AND ac.pinned = 1
+            ) AS size_bytes
+        FROM pin
+        JOIN album ON album.release_group_mbid = pin.release_group_mbid
+        ORDER BY size_bytes DESC, album.title ASC
+        """,
+    )
+    public suspend fun getDownloadedAlbums(): List<DownloadedAlbumRow>
 
     @Query("SELECT * FROM pin WHERE release_group_mbid = :releaseGroupMbid")
     public fun observePin(releaseGroupMbid: String): Flow<PinEntity?>
@@ -126,11 +175,17 @@ public interface PinDao {
     )
 
     /**
-     * Removes the pin row only.
+     * Removes the pin row only - the *intent* to keep the album, not its bytes.
      *
-     * Unpinning does **not** delete audio: the rows in `audio_cache` are flipped to `pinned = 0` by
-     * the caller and then compete in the LRU like anything else played recently. Deleting the bytes
-     * here would throw away a download the user might have just been listening to.
+     * This statement is half of "remove from device" and must never be the whole of it. The audio
+     * rows are deleted alongside it, in the same transaction, by
+     * [app.needler.core.data.local.NeedlerDatabase.removeDownloadedAlbum], which collects the file
+     * paths first so the caller can unlink them.
+     *
+     * Deleting only this row would leave the bytes on disk in the cached tier, where they free
+     * nothing now and may sit until an LRU pass that never comes. With no storage limit left in the
+     * app, removing a download is the user's only lever on a full device, so a removal that frees
+     * nothing is a broken removal.
      */
     @Query("DELETE FROM pin WHERE release_group_mbid = :releaseGroupMbid")
     public suspend fun delete(releaseGroupMbid: String)

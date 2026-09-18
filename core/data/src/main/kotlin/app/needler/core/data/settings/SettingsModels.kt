@@ -1,7 +1,5 @@
 package app.needler.core.data.settings
 
-import app.needler.core.data.local.cache.CacheBudget
-
 /*
  * Everything on the Settings screen (design/html/12-Settings.html), plus the two sub-screens it
  * leads to: the equaliser (19) and crossfade (20).
@@ -174,11 +172,16 @@ public data class NotificationSettings(
         get() = !pullFinished && !pullFailed && !newReleaseFromFollowedArtist
 }
 
-/** The Storage section of screen 12. */
+/**
+ * The Storage section of screen 12.
+ *
+ * **There is no storage-limit setting.** The screen as drawn offered 1/2/4/8/16 GB and unlimited;
+ * the policy replaced it outright. Downloaded albums have no limit - the user chose them and removes
+ * them by hand - and the cached-while-listening tier is bounded by device free space
+ * ([app.needler.core.data.local.cache.FreeSpaceFloor]), which is invisible and self-managing. So
+ * what is left here is two toggles.
+ */
 public data class StorageSettings(
-    /** Bytes, or [CacheBudget.UNLIMITED]. Defaults to the 4 GB drawn on screen 12. */
-    val budgetBytes: Long = CacheBudget.DEFAULT_BYTES,
-
     /**
      * "Keep pulled albums on device": auto-pin any album this device successfully pulled, so newly
      * acquired music is already offline next time.
@@ -195,9 +198,7 @@ public data class StorageSettings(
      * under Pulling would teach users that requesting music costs them data, which is false.
      */
     val downloadToDeviceOnWifiOnly: Boolean = true,
-) {
-    public val isUnlimited: Boolean get() = CacheBudget.isUnlimited(budgetBytes)
-}
+)
 
 /** Every setting in one snapshot, for callers that want a single read. */
 public data class NeedlerSettings(
