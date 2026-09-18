@@ -183,10 +183,14 @@ public class EvictionPlannerTest {
         )
 
         assertEquals(CacheWarning.PINS_EXCEED_BUDGET, plan.warning)
-        // Everything evictable goes, which is the whole unpinned tier - and nothing else can.
-        assertEquals(listOf("old", "new"), plan.victims.map { it.key.releaseGroupMbid })
-        assertEquals(300L, plan.freedBytes)
-        assertEquals(5_000L, plan.resultingTotalBytes)
+        // Nothing is evicted. Clearing the whole unpinned tier would free 300 against a 4,300
+        // shortfall, so it would still be over budget - it would only cost the user their
+        // recently-played offline tracks for no gain.
+        assertTrue(plan.victims.isEmpty())
+        assertEquals(0L, plan.freedBytes)
+        assertEquals(5_300L, plan.resultingTotalBytes)
+        // The shortfall is still reported, so the UI can say how far over the budget is.
+        assertEquals(4_300L, plan.targetBytes)
         assertTrue(plan.budgetStillExceeded)
     }
 

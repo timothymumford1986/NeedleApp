@@ -98,7 +98,7 @@ fun NeedlerStateBadge(
 
         // The pack renders this one as muted metadata rather than as a coloured badge. It uses the
         // AA-compliant muted value because "no source found" is the only explanation the user gets.
-        NeedlerAlbumBadge.NoSource -> colors.textMutedAccessible
+        NeedlerAlbumBadge.NoSource -> colors.textMuted
     }
 
     val label = badge.label()

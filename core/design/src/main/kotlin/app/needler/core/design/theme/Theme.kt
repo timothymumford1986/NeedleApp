@@ -87,9 +87,9 @@ object NeedlerTheme {
  * `primary` is the accent, `secondary`/`tertiary` the positive green, and the three surface levels
  * map to `background`, `surface` and `surfaceVariant`.
  *
- * The pack draws **no error colour** - even "Remove all from device" is accent-coloured - so
- * `error` is mapped to the accent rather than inventing a red. A feature that genuinely needs a
- * destructive colour needs a design decision, not a guess here.
+ * The pack draws no error colour - "Remove all from device" was accent-coloured, identical to
+ * "Connect" - so [NeedlerColors.destructive] was added as a product decision and `error` maps to
+ * it. See that property for the value and its measured contrast.
  */
 internal fun NeedlerColors.toMaterialColorScheme() = darkColorScheme(
     primary = accent,
@@ -114,10 +114,10 @@ internal fun NeedlerColors.toMaterialColorScheme() = darkColorScheme(
     surfaceTint = accent,
     inverseSurface = inverseSurface,
     inverseOnSurface = onInverseSurface,
-    error = accent,
-    onError = onAccent,
+    error = destructive,
+    onError = onDestructive,
     errorContainer = surfaceRaised,
-    onErrorContainer = accent,
+    onErrorContainer = destructive,
     outline = textMuted,
     outlineVariant = hairline,
     scrim = artworkShadow,

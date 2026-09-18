@@ -82,7 +82,7 @@ fun NeedlerSegmentedTabs(
                     text = option,
                     style = typography.metaStrong,
                     color = when {
-                        !enabled -> colors.textMutedAccessible
+                        !enabled -> colors.textMuted
                         selected -> colors.onInverseSurface
                         else -> colors.textSecondary
                     },

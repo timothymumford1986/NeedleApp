@@ -80,7 +80,7 @@ fun NeedlerTrackRow(
     val typography = NeedlerTheme.typography
     val titleColor = when {
         isPlaying -> colors.accent
-        !available -> colors.textMutedAccessible
+        !available -> colors.textMuted
         else -> colors.textPrimary
     }
     val spoken = buildString {
@@ -114,7 +114,7 @@ fun NeedlerTrackRow(
             Text(
                 text = index.toString(),
                 style = typography.trackIndex,
-                color = colors.textMutedAccessible,
+                color = colors.textMuted,
                 modifier = Modifier.width(18.dp),
             )
         }
@@ -129,7 +129,7 @@ fun NeedlerTrackRow(
         Text(
             text = duration,
             style = typography.duration,
-            color = colors.textMutedAccessible,
+            color = colors.textMuted,
         )
         if (onMoreClick != null) {
             NeedlerIconButton(
@@ -187,7 +187,7 @@ fun NeedlerSettingsRow(
             Text(
                 text = label,
                 style = typography.body,
-                color = if (enabled) colors.textPrimary else colors.textMutedAccessible,
+                color = if (enabled) colors.textPrimary else colors.textMuted,
                 modifier = Modifier.weight(1f),
             )
             if (value != null) {
@@ -247,13 +247,13 @@ fun NeedlerToggleRow(
                 Text(
                     text = label,
                     style = typography.body,
-                    color = if (enabled) colors.textPrimary else colors.textMutedAccessible,
+                    color = if (enabled) colors.textPrimary else colors.textMuted,
                 )
                 if (subtitle != null) {
                     Text(
                         text = subtitle,
                         style = typography.caption,
-                        color = colors.textMutedAccessible,
+                        color = colors.textMuted,
                     )
                 }
             }
@@ -490,7 +490,7 @@ fun NeedlerOutputRow(
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     val tint = when {
-        !enabled -> colors.textMutedAccessible
+        !enabled -> colors.textMuted
         selected -> colors.accent
         else -> colors.textPrimary
     }
@@ -520,7 +520,7 @@ fun NeedlerOutputRow(
                 Text(
                     text = unavailableReason ?: detail,
                     style = typography.caption,
-                    color = colors.textMutedAccessible,
+                    color = colors.textMuted,
                     maxLines = 2,
                 )
             }

@@ -55,7 +55,7 @@ fun NeedlerSectionHeader(
                 text = trailing,
                 style = typography.meta,
                 // Counts and durations are information, so they take the AA-compliant muted value.
-                color = colors.textMutedAccessible,
+                color = colors.textMuted,
             )
         }
     }
