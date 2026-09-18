@@ -882,7 +882,7 @@ Screen 12 carries the disclaimer text, and it is a requirement rather than decor
 
 The attribution line credits Dropped Needle, slskd, MusicBrainz, ListenBrainz and Cover Art Archive. A Licences screen must list every bundled dependency and its licence.
 
-DroppedNeedle is AGPL-3.0, but Needler talks to it only over HTTP and links none of its code, so no copyleft obligation attaches to Needler itself. Needler's own licence is still to be chosen.
+DroppedNeedle is AGPL-3.0, but Needler talks to it only over HTTP and links none of its code, so no copyleft obligation attaches to Needler itself. **Needler is licensed Apache-2.0** — MIT's permissions plus an explicit patent grant, which protects the project and its contributors, and the licence the Android and Kotlin toolchain it builds on already uses. The Licences screen must therefore show Apache-2.0 for Needler alongside each bundled dependency.
 
 ### Observability
 
@@ -1006,9 +1006,8 @@ Recorded so the reasoning is not re-litigated. Each is now specified in the sect
 3. **What is done about non-text contrast (WCAG 1.4.11)?** The hairline measures 1.20:1 and control boundaries are effectively invisible. Raising it changes the look of every surface in the pack, so it wants a decision rather than a patch.
 4. **Should Cast ship in v1** given it cannot work on a VPN-only or self-signed server, which is the likely setup?
 5. **Should Wear wait** for a Play Store listing, or ship as a sideloaded developer surface?
-6. **What licence** does Needler itself carry? The Licences screen needs an answer.
-7. **Is the crossfade preview on screen 20 live audio** or an illustration? Live cross-track preview needs the full dual-player pipeline running inside a settings screen.
-8. **Should a failed pull retry automatically?** Screen 06 shows a manual Retry only.
+6. **Is the crossfade preview on screen 20 live audio** or an illustration? Live cross-track preview needs the full dual-player pipeline running inside a settings screen.
+7. **Should a failed pull retry automatically?** Screen 06 shows a manual Retry only.
 
 ### Sources
 

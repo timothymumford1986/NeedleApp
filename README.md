@@ -59,6 +59,14 @@ pull are the same thing in two states. See [REQUIREMENTS.md](REQUIREMENTS.md) fo
 Kotlin 2.4.20, Jetpack Compose with adaptive layouts, Media3/ExoPlayer, Room, WorkManager, Hilt,
 OkHttp, Coil. Built with AGP 9.4 and Gradle 9.6.
 
+## Licence
+
+[Apache-2.0](LICENSE). You may use, modify and redistribute this, including commercially,
+provided you keep the notice and state your changes.
+
+Needler talks to DroppedNeedle over HTTP and links none of its code, so DroppedNeedle's
+AGPL-3.0 does not extend to this project.
+
 ## Disclaimer
 
 Needler is an independent client for a DroppedNeedle server that you install, configure and operate
