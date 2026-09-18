@@ -8,12 +8,41 @@ home-screen widgets, Android Auto and a Wear OS companion.
 
 ## Status
 
-Pre-implementation. The requirements and architecture are settled; no app code yet.
+The foundation layers are built and tested. There is no user interface yet, so the app
+assembles and installs but does not yet show you anything.
+
+| Module | State |
+| --- | --- |
+| `:core:domain` — models, repository interfaces, use cases | Built |
+| `:core:design` — palette, type, motion, shared components | Built |
+| `:core:network` — both server APIs, TLS pinning, capability probe | Built |
+| `:core:data` — database, offline store, settings, credentials | Built |
+| Build setup — 12 modules, version catalog, CI | Built |
+| Screens — library, search, pulls, player | Not started |
+| `:player:service` — Media3 playback | Not started |
+| `:widget`, `:wear` | Not started |
+
+Roughly 20,000 lines of Kotlin, 101 tests passing, `app-debug.apk` and `wear-debug.apk`
+both assemble.
 
 | | |
 | --- | --- |
-| [REQUIREMENTS.md](REQUIREMENTS.md) | Requirements and architecture, including the DroppedNeedle API surface Needler consumes |
+| [REQUIREMENTS.md](REQUIREMENTS.md) | Requirements and architecture, and the canonical spec — kept in step with the code |
 | [design/](design/) | 21 screens as HTML and PNG, plus a PDF — the UI source of truth |
+
+## Building
+
+Needs JDK 21 and the Android SDK with `android-37.x` installed. `compileSdk` is 37 because
+`okhttp-android` and the androidx libraries require it; `targetSdk` is 36 and `minSdk` is 26.
+
+```
+./gradlew test assembleDebug
+```
+
+If your checkout lives in a synced folder (OneDrive, Dropbox), the sync client will hold
+handles on Gradle's output and the build will fail with "Unable to delete directory". Put
+`needler.buildDir=/some/path/outside/the/sync` in `~/.gradle/gradle.properties` to move the
+build output elsewhere.
 
 ## How it works
 
@@ -27,8 +56,8 @@ pull are the same thing in two states. See [REQUIREMENTS.md](REQUIREMENTS.md) fo
 
 ## Stack
 
-Kotlin, Jetpack Compose with adaptive layouts, Media3/ExoPlayer, Room, WorkManager, Hilt.
-Minimum SDK 26, target SDK 36.
+Kotlin 2.4.20, Jetpack Compose with adaptive layouts, Media3/ExoPlayer, Room, WorkManager, Hilt,
+OkHttp, Coil. Built with AGP 9.4 and Gradle 9.6.
 
 ## Disclaimer
 

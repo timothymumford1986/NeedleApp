@@ -151,6 +151,27 @@ public interface AudioCacheDao {
     )
     public suspend fun getAllRowsForRemoval(): List<EvictionCandidateRow>
 
+    /**
+     * Every cached row of one album, with its path and its bytes: what "remove from device" is about
+     * to delete.
+     *
+     * Read before [deleteAlbum], because afterwards nothing knows what was on disk or what it
+     * weighed - and the removal has to unlink the files and tell the user how much it freed.
+     *
+     * `pinned` is deliberately not filtered. The user removed *the album*, and to them the album is
+     * either on the device or it is not; leaving behind whatever happened to be cached from streaming
+     * it would keep bytes that the row they just deleted appeared to account for.
+     */
+    @Query(
+        """
+        SELECT release_group_mbid, disc_no, track_no, file_path, size_bytes, last_played_at, downloaded_at
+        FROM audio_cache
+        WHERE release_group_mbid = :releaseGroupMbid
+        ORDER BY disc_no ASC, track_no ASC
+        """,
+    )
+    public suspend fun getAlbumRowsForRemoval(releaseGroupMbid: String): List<EvictionCandidateRow>
+
     // ---------------------------------------------------------------- staleness
 
     /**
@@ -311,8 +332,30 @@ public interface AudioCacheDao {
     )
     public suspend fun deleteByCanonicalKeys(canonicalKeys: List<String>): Int
 
+    /**
+     * Drops every cached row of one album: the index half of "remove from device".
+     *
+     * Call it only from
+     * [app.needler.core.data.local.NeedlerDatabase.removeDownloadedAlbum], which reads the paths
+     * first and removes the pin in the same transaction. Rows without their files leak bytes that
+     * only an uninstall reclaims.
+     */
     @Query("DELETE FROM audio_cache WHERE release_group_mbid = :releaseGroupMbid")
     public suspend fun deleteAlbum(releaseGroupMbid: String)
+
+    /**
+     * "Clear cached music": drops the cached-while-listening tier and leaves every download alone.
+     *
+     * The `pinned = 0` predicate is the entire safety property of this statement. Downloads are what
+     * the user explicitly asked to keep and are never removed by anything but the user, so no clear
+     * short of "Remove all from device" may touch a pinned row.
+     *
+     * Call it only from
+     * [app.needler.core.data.local.NeedlerDatabase.clearCachedAudio], which collects the file paths
+     * first: rows without their files leak bytes that only an uninstall reclaims.
+     */
+    @Query("DELETE FROM audio_cache WHERE pinned = 0")
+    public suspend fun clearUnpinned()
 
     /** "Remove all from device" clears audio; the metadata mirror is never touched by it. */
     @Query("DELETE FROM audio_cache")

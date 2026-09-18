@@ -5,8 +5,8 @@ import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.PinSource
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.RemovedDownload
 import app.needler.core.domain.model.ServerCapabilities
-import app.needler.core.domain.model.StorageBudget
 import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
 import app.needler.core.domain.model.flatMap
@@ -25,9 +25,10 @@ import kotlinx.coroutines.flow.first
  *    letting a `403` surface mid-download.
  * 2. Only owned albums can be pinned. A catalogue-only album has to be pulled to the server first, so
  *    pinning one is a programming error, not a user-facing state.
- * 3. Pinned content is exempt from the storage budget, so pinning can push usage over it. The
- *    requirement is to **warn rather than silently evict** what the user asked to keep, which is why
- *    this returns [PinAlbumResult.willExceedBudget] instead of quietly trimming the cache.
+ * 3. Downloads have no storage limit, so a pin is never refused for space and never triggers an
+ *    eviction. It can still be the thing that leaves the device short of room, so this reports
+ *    [PinAlbumResult.willLeaveDeviceLowOnSpace] and lets the UI say so - the user removes albums by
+ *    hand, and the app never deletes what they asked to keep.
  */
 public class PinAlbumForOfflineUseCase(
     private val libraryRepository: LibraryRepository,
@@ -63,22 +64,39 @@ public class PinAlbumForOfflineUseCase(
             Outcome.Success(
                 PinAlbumResult(
                     releaseGroupMbid = releaseGroupMbid,
-                    willExceedBudget = willExceedBudget(usage, album.sizeBytes),
+                    willLeaveDeviceLowOnSpace = willLeaveDeviceLowOnSpace(usage, album.sizeBytes),
                     waitingForUnmeteredNetwork = preferences.downloadToDeviceOnWifiOnly && metered,
                 ),
             )
         }
     }
 
-    /** Unpins an album and deletes its bytes: "remove from device". */
-    public suspend fun unpin(releaseGroupMbid: ReleaseGroupMbid): Outcome<Unit> =
+    /**
+     * Unpins an album and deletes its bytes: "remove from device".
+     *
+     * Returns what the removal freed, because on a device with no storage limit this action is the
+     * user's only way to recover room and the UI has to be able to confirm that it worked.
+     */
+    public suspend fun unpin(releaseGroupMbid: ReleaseGroupMbid): Outcome<RemovedDownload> =
         pinRepository.unpinAlbum(releaseGroupMbid)
 
-    private fun willExceedBudget(usage: StorageUsage, albumSizeBytes: Long?): Boolean {
-        val budget: StorageBudget = usage.budget
-        if (budget !is StorageBudget.Limited) return false
-        val incoming: Long = albumSizeBytes ?: 0L
-        return usage.pinnedBytes + incoming > budget.bytes
+    /**
+     * True when downloading this album would leave the device under the free-space floor.
+     *
+     * Advisory only. A download is never refused or trimmed for space - it is exactly the content the
+     * user asked to keep - so the honest thing is to let the pin succeed and tell them their device
+     * is getting full, with the Storage screen's per-album removal a tap away.
+     *
+     * A server-reported size of null means "unknown", which cannot be warned about without guessing,
+     * so it is treated as no warning rather than as zero bytes.
+     *
+     * The floor compared against is the one on the snapshot, not the global minimum: it is computed
+     * for this device's volume, so a 1 TB phone is not told it is fine at 3 GB free while the
+     * eviction policy already considers it short.
+     */
+    private fun willLeaveDeviceLowOnSpace(usage: StorageUsage, albumSizeBytes: Long?): Boolean {
+        val incoming: Long = albumSizeBytes ?: return usage.deviceLowOnSpace
+        return usage.deviceFreeBytes - incoming < usage.freeSpaceFloorBytes
     }
 }
 
@@ -91,10 +109,11 @@ public class PinAlbumForOfflineUseCase(
 public data class PinAlbumResult(
     val releaseGroupMbid: ReleaseGroupMbid,
     /**
-     * True when pinned content now exceeds the storage budget. Pinned content is never evicted, so the
-     * correct response is a warning, not a cleanup.
+     * True when this download is likely to leave the device under the free-space floor. Downloads are
+     * never evicted, so the correct response is a warning and an offer to remove albums, not a
+     * cleanup the app performs on its own.
      */
-    val willExceedBudget: Boolean,
+    val willLeaveDeviceLowOnSpace: Boolean,
     /**
      * True when "Download to device on Wi-Fi only" is on and the connection is metered, so the download
      * is deferred - see [app.needler.core.domain.model.OfflineDownloadState.WaitingForUnmeteredNetwork].

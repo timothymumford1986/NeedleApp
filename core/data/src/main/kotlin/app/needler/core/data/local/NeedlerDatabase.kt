@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
+import app.needler.core.data.local.cache.RemovedAudio
 import app.needler.core.data.local.dao.AlbumDao
 import app.needler.core.data.local.dao.ArtistDao
 import app.needler.core.data.local.dao.AudioCacheDao
@@ -184,6 +185,70 @@ public abstract class NeedlerDatabase : RoomDatabase() {
         val filePaths: List<String> = audioCacheDao().getAllRowsForRemoval().map { it.filePath }
         audioCacheDao().clear()
         pinDao().clear()
+        filePaths
+    }
+
+    /**
+     * Removes one downloaded album from the device - "Remove from device" on the Storage screen and
+     * on the album screen.
+     *
+     * ## Why this deletes rather than demotes
+     *
+     * Unpinning used to flip the album's `audio_cache` rows to `pinned = 0` and leave the bytes on
+     * disk to compete in the LRU. Under the current policy that is a defect, not a nuance: there is
+     * no storage limit any longer, so removing a download is the **only** lever the user has on a
+     * full device. A removal that frees nothing immediately - and leaves the Storage figure exactly
+     * where it was - breaks the workflow the feature exists for, and the bytes might never be evicted
+     * at all if the device is comfortable.
+     *
+     * The pin row and the audio rows go together, in one transaction, so a crash cannot leave a pin
+     * whose audio is gone (the downloader would fetch it all again) or audio whose pin is gone (bytes
+     * nothing on the Storage screen accounts for).
+     *
+     * Every row of the album goes, pinned or not: to the user an album is on the device or it is not,
+     * and leaving behind what happened to be cached from streaming it would free less than the screen
+     * just said it would.
+     *
+     * ## What the caller must do with the result
+     *
+     * The same contract as [clearCachedAudio] and [clearForServerChange]: the files are **not**
+     * deleted here, because a Room transaction is no place for filesystem work. The caller unlinks
+     * [app.needler.core.data.local.cache.RemovedAudio.filePaths] after this returns, and reports
+     * `bytes` to the user as what the removal freed.
+     *
+     * An album with nothing on disk answers [app.needler.core.data.local.cache.RemovedAudio.Empty]
+     * and still drops the pin: unpinning a download that never landed is a normal thing to do.
+     *
+     * @param releaseGroupMbid the album to remove.
+     * @return the file paths to unlink and the bytes the index accounted for them.
+     */
+    public open suspend fun removeDownloadedAlbum(releaseGroupMbid: String): RemovedAudio =
+        withTransaction {
+            // Collected first: after the delete there is no record of what was on disk.
+            val removed: RemovedAudio = RemovedAudio.of(
+                audioCacheDao().getAlbumRowsForRemoval(releaseGroupMbid),
+            )
+            audioCacheDao().deleteAlbum(releaseGroupMbid)
+            pinDao().delete(releaseGroupMbid)
+            removed
+        }
+
+    /**
+     * Clears the cached-while-listening tier only - "Clear cached music" on the Storage screen.
+     *
+     * The safe half of the clearing workflow: these bytes were retained as a side effect of
+     * streaming, are re-fetchable, and were never explicitly asked for. **Downloads are untouched**,
+     * pin rows included, because a download is exactly what the user did ask for; only
+     * [clearAllAudio] or [removeDownloadedAlbum] removes one.
+     *
+     * Returns the file paths to delete, for the same reason as [clearForServerChange]: file deletion
+     * cannot happen inside a Room transaction, so the caller unlinks them after this returns. The
+     * paths are collected before the rows are dropped, since afterwards there is no record of what
+     * was on disk.
+     */
+    public open suspend fun clearCachedAudio(): List<String> = withTransaction {
+        val filePaths: List<String> = audioCacheDao().getAllUnpinnedCandidates().map { it.filePath }
+        audioCacheDao().clearUnpinned()
         filePaths
     }
 

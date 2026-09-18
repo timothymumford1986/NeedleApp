@@ -87,6 +87,24 @@ public data class PinnedAlbumRow(
 )
 
 /**
+ * One downloaded album as the Storage screen lists it: identity, what to draw, and the bytes a
+ * removal would free.
+ *
+ * Deliberately narrower than [PinnedAlbumRow], which carries the whole album entity and the
+ * downloader's progress counters. This row exists for a list whose job is "what is taking up room,
+ * largest first", so it carries only what that list renders and what a removal needs - and
+ * [sizeBytes] is measured from `audio_cache`, not from the album's server-reported size, because the
+ * user is being shown what they would actually get back.
+ */
+public data class DownloadedAlbumRow(
+    @ColumnInfo(name = "release_group_mbid") val releaseGroupMbid: String,
+    @ColumnInfo(name = "title") val title: String,
+    @ColumnInfo(name = "artist_name") val artistName: String,
+    @ColumnInfo(name = "size_bytes") val sizeBytes: Long,
+    @ColumnInfo(name = "pinned_at") val pinnedAt: Long,
+)
+
+/**
  * An active pull joined to whatever the mirror knows about the album, so the Pulls screen and the
  * pull widget render from one query even for an album that is not owned yet.
  */

@@ -8,10 +8,8 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
-import app.needler.core.data.local.cache.CacheBudget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -78,11 +76,6 @@ public class NeedlerSettingsStore(
 
     public val storage: Flow<StorageSettings> = preferences
         .map { it.toStorageSettings() }
-        .distinctUntilChanged()
-
-    /** The storage budget on its own: the cache index reads this on every eviction pass. */
-    public val storageBudgetBytes: Flow<Long> = storage
-        .map { it.budgetBytes }
         .distinctUntilChanged()
 
     // ------------------------------------------------------------------ playing
@@ -198,14 +191,8 @@ public class NeedlerSettingsStore(
 
     // ------------------------------------------------------------------ storage
 
-    /**
-     * Sets the device storage limit. Pass [CacheBudget.UNLIMITED] for "Unlimited"; any other
-     * non-positive value is stored as unlimited rather than as a budget that would evict everything.
-     */
-    public suspend fun setStorageBudgetBytes(budgetBytes: Long) {
-        val sanitised: Long = if (CacheBudget.isUnlimited(budgetBytes)) CacheBudget.UNLIMITED else budgetBytes
-        dataStore.edit { it[Keys.STORAGE_BUDGET_BYTES] = sanitised }
-    }
+    // There is deliberately no storage-limit setter. The limit is gone: downloads are unlimited
+    // and the cached tier is bounded by device free space, which nobody configures.
 
     public suspend fun setKeepPulledAlbumsOnDevice(enabled: Boolean) {
         dataStore.edit { it[Keys.KEEP_PULLED_ALBUMS] = enabled }
@@ -267,7 +254,6 @@ public class NeedlerSettingsStore(
     )
 
     private fun Preferences.toStorageSettings(): StorageSettings = StorageSettings(
-        budgetBytes = this[Keys.STORAGE_BUDGET_BYTES] ?: CacheBudget.DEFAULT_BYTES,
         keepPulledAlbumsOnDevice = this[Keys.KEEP_PULLED_ALBUMS] ?: false,
         downloadToDeviceOnWifiOnly = this[Keys.DOWNLOAD_WIFI_ONLY] ?: true,
     )
@@ -311,7 +297,8 @@ public class NeedlerSettingsStore(
         val NOTIFY_PULL_FAILED: Preferences.Key<Boolean> = booleanPreferencesKey("notify_pull_failed")
         val NOTIFY_NEW_RELEASE: Preferences.Key<Boolean> = booleanPreferencesKey("notify_new_release")
 
-        val STORAGE_BUDGET_BYTES: Preferences.Key<Long> = longPreferencesKey("storage_budget_bytes")
+        // "storage_budget_bytes" was the user-set limit. It is retired, not renamed: the name
+        // stays burned so a future setting cannot inherit a stale byte count from an old install.
         val KEEP_PULLED_ALBUMS: Preferences.Key<Boolean> =
             booleanPreferencesKey("keep_pulled_albums_on_device")
         val DOWNLOAD_WIFI_ONLY: Preferences.Key<Boolean> =

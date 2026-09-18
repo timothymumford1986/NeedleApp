@@ -1,113 +1,160 @@
 package app.needler.core.data.local.cache
 
 /**
- * Decides which cached tracks to evict for a given budget. Pure, deterministic, no Room, no Android.
+ * Decides which cached tracks to evict to keep the device above its free-space floor. Pure,
+ * deterministic, no Room, no Android, no `StatFs`: free space arrives as a parameter.
  *
- * ## The policy, and where it comes from
+ * ## The policy, and why it looks like this
  *
- * REQUIREMENTS.md, "Budget and storage":
+ * There is no user-facing storage limit. The two offline tiers are bounded by different things:
  *
- *  * "The limit is user-set, defaulting to 4 GB." - the limit is on on-device audio.
- *  * "Pinned content is exempt from the limit and from LRU eviction. If pins alone exceed the
- *    budget, warn rather than silently evicting what the user asked to keep."
- *  * "Eviction scans unpinned rows by `last_played` ascending until usage fits the budget."
+ *  * **Downloaded (pinned)** albums have **no limit at all**. The user chose them, so nothing here
+ *    ever evicts one - not when the device is nearly full, not when a download is in flight, never.
+ *    Pinned rows are not even offered as candidates, so no plan can name one as a victim.
+ *  * **Cached while listening** fills up silently as a side effect of streaming, so it cannot be
+ *    unbounded or the app quietly eats the device. It is bounded by **device free space**: keep the
+ *    caller's `floorBytes` free, which is at least [FreeSpaceFloor.MINIMUM_BYTES] and scales with
+ *    the volume - see [FreeSpaceFloor.forVolume]. The number arrives as a parameter precisely so
+ *    that this object never has to know which device it is running on.
  *
- * Read together, the budget caps *total* on-device audio, and the only tier eviction may touch is
- * the unpinned one. So:
+ * Bounding the silent tier by free space rather than by a number the user picks is the whole change.
+ * A budget asked the user to predict how much music they wanted kept, and then evicted music on a
+ * device with 200 GB spare when they guessed low. Free space measures the thing that actually
+ * matters, needs no preference, and self-corrects when the device's contents change underneath it.
+ *
+ * ## The arithmetic
+ *
+ * Free space is the device's current figure, so bytes already cached are not free and evicting a
+ * byte returns a byte:
  *
  * ```
- * bytesToFree = max(0, pinnedBytes + unpinnedBytes + incomingBytes - budget)
+ * housekeepingTarget = max(0, floor - freeSpace)          bring the device back to the floor
+ * incomingTarget     = incoming - (freeSpace + freed - floor)   room for what is about to be written
  * ```
  *
- * and the plan takes unpinned rows in LRU order until it has freed that much. Two consequences are
- * worth stating out loud, because they are the cases the requirements gloss over:
+ * The two stages behave differently on purpose:
  *
- *  1. **When pins alone exceed the budget the plan evicts nothing** and reports
- *     [CacheWarning.PINS_EXCEED_BUDGET]. Eviction cannot touch pins, so clearing the whole
- *     unpinned tier would still leave the budget exceeded - it would cost the user their
- *     recently-played offline tracks and fix nothing. Reporting it is the only useful action.
- *  2. **Pinned bytes are never counted as evictable**, so a plan can be short of its target. The
- *     caller must not loop: a second pass would find the same candidates and free nothing.
+ *  1. **Housekeeping is best effort.** If the device is below the floor, every byte freed is real
+ *     room recovered, so the pass frees what it can and reports [CacheWarning.DEVICE_LOW_ON_SPACE]
+ *     if that was not enough. It never reaches into the downloaded tier to close the gap.
+ *  2. **Making room for an incoming write is all or nothing.** If the floor cannot be met even after
+ *     the whole evictable tier is gone, the bytes are **skipped**, not forced in, and nothing extra
+ *     is evicted for them: evicting further would cost the user recently-played music *and* still
+ *     leave the write unable to fit. The track streams as normal; it is simply not retained. See
+ *     [EvictionPlan.skipsIncoming].
+ *
+ * A failed free-space reading ([FreeSpaceFloor.UNKNOWN]) suspends the policy entirely rather than
+ * guessing in either direction. See [FreeSpaceFloor.UNKNOWN] for why.
  *
  * ## Determinism
  *
  * The planner sorts its own input rather than trusting the query's ORDER BY, and the sort is total:
  * last played, then downloaded-at, then the canonical track key. Two runs over the same cache
- * therefore choose exactly the same victims, which is what makes this testable and what stops an
- * eviction pass from thrashing a different arbitrary tail on every call.
+ * therefore choose exactly the same victims however the rows arrived, which is what makes this
+ * testable and what stops a pass from thrashing a different arbitrary tail on every call.
  */
 public object EvictionPlanner {
 
     /**
      * Plans an eviction pass.
      *
-     * @param usage current usage, split by tier.
-     * @param budgetBytes the user's limit, or [CacheBudget.UNLIMITED].
-     * @param candidates unpinned rows only. Order is irrelevant; this function sorts them.
-     * @param incomingBytes bytes about to be written - a download that is about to start. Counted
-     *   against the budget so room is made *before* the write rather than after it has overshot.
+     * @param usage current usage, split by tier. Only the unpinned half is ever evictable.
+     * @param freeSpaceBytes free space on the volume the audio lives on, or [FreeSpaceFloor.UNKNOWN].
+     * @param candidates unpinned rows only. Order is irrelevant; this function sorts them. A list
+     *   truncated by the caller's scan limit can only make the plan more conservative: it may skip an
+     *   incoming write it could in principle have made room for, never evict something it should not.
+     * @param incomingBytes bytes about to be written - a download or a stream being retained.
+     *   Counted so room is made *before* the write rather than after the device has already dipped
+     *   below the floor.
+     * @param floorBytes free space to preserve. A parameter because the floor depends on the device:
+     *   production passes [FreeSpaceFloor.forVolume] of the audio volume, which is
+     *   [FreeSpaceFloor.MINIMUM_BYTES] on a small one and a percentage of a large one. The default is
+     *   the minimum, which is also what tests working in small numbers override.
      */
     public fun plan(
         usage: CacheUsage,
-        budgetBytes: Long,
+        freeSpaceBytes: Long,
         candidates: List<EvictionCandidate>,
         incomingBytes: Long = 0L,
+        floorBytes: Long = FreeSpaceFloor.MINIMUM_BYTES,
     ): EvictionPlan {
-        if (CacheBudget.isUnlimited(budgetBytes)) {
-            return EvictionPlan.nothingToDo(usage.totalBytes)
-        }
-
-        val projectedTotal: Long = usage.totalBytes + maxOf(0L, incomingBytes)
-        val bytesToFree: Long = projectedTotal - budgetBytes
-
-        val pinsExceedBudget: Boolean = usage.pinnedBytes > budgetBytes
-        if (bytesToFree <= 0L) {
-            // Within budget. A pin-heavy cache can still be worth warning about, but there is
-            // nothing to evict, so the plan is empty.
+        if (FreeSpaceFloor.isUnknown(freeSpaceBytes)) {
+            // Nothing is known about the device, so nothing is evicted and nothing is skipped.
             return EvictionPlan.nothingToDo(
                 totalBytes = usage.totalBytes,
-                warning = if (pinsExceedBudget) CacheWarning.PINS_EXCEED_BUDGET else null,
+                freeBytes = freeSpaceBytes,
+                floorBytes = floorBytes,
             )
         }
 
-        if (pinsExceedBudget) {
-            // Pins alone are over the limit, so no amount of eviction can get under it: the
-            // unpinned tier would be wiped and the budget would STILL be exceeded. Evicting
-            // achieves nothing except costing the user their recently-played offline tracks, so
-            // the plan is empty and the situation is reported instead. Product decision, 2026-09-18.
-            //
-            // targetBytes carries the real shortfall rather than 0, so `budgetStillExceeded` stays
-            // true and the UI can say by how much. Using nothingToDo() here would zero the target
-            // and make an over-budget cache report as fine.
-            return EvictionPlan(
-                victims = emptyList(),
-                freedBytes = 0L,
-                targetBytes = bytesToFree,
-                resultingTotalBytes = usage.totalBytes,
-                warning = CacheWarning.PINS_EXCEED_BUDGET,
+        val incoming: Long = maxOf(0L, incomingBytes)
+        val fullTarget: Long = floorBytes + incoming - freeSpaceBytes
+        if (fullTarget <= 0L) {
+            // Above the floor with room for the write: nothing to do, and nothing to warn about.
+            return EvictionPlan.nothingToDo(
+                totalBytes = usage.totalBytes,
+                freeBytes = freeSpaceBytes,
+                floorBytes = floorBytes,
             )
         }
 
         val ordered: List<EvictionCandidate> = candidates.sortedWith(LRU_ORDER)
         val victims: MutableList<EvictionCandidate> = ArrayList()
         var freed: Long = 0L
-        for (candidate in ordered) {
-            if (freed >= bytesToFree) break
+        var next: Int = 0
+
+        // Stage 1: bring the device back to the floor, best effort. Every byte freed here is real
+        // room recovered on a device that is genuinely short of it, so a partial result is still
+        // worth having - unlike stage 2, which is worth nothing unless it succeeds completely.
+        val housekeepingTarget: Long = maxOf(0L, floorBytes - freeSpaceBytes)
+        while (freed < housekeepingTarget && next < ordered.size) {
+            val candidate: EvictionCandidate = ordered[next]
             victims.add(candidate)
             freed += candidate.sizeBytes
+            next += 1
         }
 
+        // Stage 2: make room for the incoming write, all or nothing.
+        var skipsIncoming = false
+        if (incoming > 0L) {
+            val headroom: Long = freeSpaceBytes + freed - floorBytes
+            val stillNeeded: Long = incoming - headroom
+            if (stillNeeded > 0L) {
+                val remaining: Long = (next until ordered.size).sumOf { ordered[it].sizeBytes }
+                if (remaining < stillNeeded) {
+                    // The floor cannot be met even by clearing the rest of the tier. Skip the write
+                    // instead of evicting for a write that still would not fit: the user would lose
+                    // recently-played music and gain nothing. Stage 1's victims are kept, because
+                    // they were freed to fix the device, not to make room for these bytes.
+                    skipsIncoming = true
+                } else {
+                    var extra: Long = 0L
+                    while (extra < stillNeeded && next < ordered.size) {
+                        val candidate: EvictionCandidate = ordered[next]
+                        victims.add(candidate)
+                        extra += candidate.sizeBytes
+                        next += 1
+                    }
+                    freed += extra
+                }
+            }
+        }
+
+        val resultingFree: Long = freeSpaceBytes + freed
         val warning: CacheWarning? = when {
-            pinsExceedBudget -> CacheWarning.PINS_EXCEED_BUDGET
-            freed < bytesToFree -> CacheWarning.BUDGET_STILL_EXCEEDED
+            skipsIncoming -> CacheWarning.INCOMING_NOT_CACHED
+            resultingFree < floorBytes -> CacheWarning.DEVICE_LOW_ON_SPACE
             else -> null
         }
 
         return EvictionPlan(
             victims = victims,
             freedBytes = freed,
-            targetBytes = bytesToFree,
+            targetBytes = fullTarget,
             resultingTotalBytes = usage.totalBytes - freed,
+            resultingFreeBytes = resultingFree,
+            skipsIncoming = skipsIncoming,
+            floorBytes = floorBytes,
             warning = warning,
         )
     }
@@ -115,34 +162,40 @@ public object EvictionPlanner {
     /**
      * Plans the eviction needed before writing [incomingBytes] of new audio.
      *
-     * Used by the downloader and by the streaming cache: make room first, so the budget is a limit
-     * rather than a line the cache crosses and then retreats behind.
+     * Used by the downloader and by the streaming cache: make room first, so the floor is a floor
+     * rather than a line the device drops below and then climbs back over.
      */
     public fun planForIncoming(
         usage: CacheUsage,
-        budgetBytes: Long,
+        freeSpaceBytes: Long,
         candidates: List<EvictionCandidate>,
         incomingBytes: Long,
+        floorBytes: Long = FreeSpaceFloor.MINIMUM_BYTES,
     ): EvictionPlan = plan(
         usage = usage,
-        budgetBytes = budgetBytes,
+        freeSpaceBytes = freeSpaceBytes,
         candidates = candidates,
         incomingBytes = incomingBytes,
+        floorBytes = floorBytes,
     )
 
     /**
-     * True when [incomingBytes] can be written without exceeding the budget once [plan] has been
-     * applied. False means even evicting the whole unpinned tier leaves no room, which happens only
-     * when pins fill the budget.
+     * True when [incomingBytes] can be retained without taking the device below the floor, assuming
+     * the whole cached tier may be evicted for it.
+     *
+     * False means only the user deleting something would help - downloads, or files belonging to
+     * other apps - so the caller skips the write rather than evicting. An unknown free-space reading
+     * answers true: the policy is suspended, not inverted.
      */
     public fun fitsAfterEviction(
         usage: CacheUsage,
-        budgetBytes: Long,
+        freeSpaceBytes: Long,
         incomingBytes: Long,
+        floorBytes: Long = FreeSpaceFloor.MINIMUM_BYTES,
     ): Boolean {
-        if (CacheBudget.isUnlimited(budgetBytes)) return true
-        // Everything unpinned is evictable; pinned bytes are not.
-        return usage.pinnedBytes + maxOf(0L, incomingBytes) <= budgetBytes
+        if (FreeSpaceFloor.isUnknown(freeSpaceBytes)) return true
+        // Everything unpinned is evictable; pinned bytes are not, at any level of disk pressure.
+        return freeSpaceBytes + usage.unpinnedBytes - maxOf(0L, incomingBytes) >= floorBytes
     }
 
     /**
