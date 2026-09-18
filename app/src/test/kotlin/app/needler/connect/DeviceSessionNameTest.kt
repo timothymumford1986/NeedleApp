@@ -15,13 +15,18 @@ import org.junit.Test
 class DeviceSessionNameTest {
 
     @Test
-    fun `a pixel keeps its model name and drops the duplicated maker`() {
+    fun `the model is the name, as REQUIREMENTS gives it`() {
         assertEquals("Needler · Pixel 8", DeviceSessionName.of("Google", "Pixel 8"))
     }
 
     @Test
-    fun `a maker that is not already in the model is kept`() {
-        assertEquals("Needler · samsung SM-S918B", DeviceSessionName.of("samsung", "SM-S918B"))
+    fun `an opaque model is still the whole name`() {
+        assertEquals("Needler · SM-S918B", DeviceSessionName.of("samsung", "SM-S918B"))
+    }
+
+    @Test
+    fun `the maker is the fallback when the device reports no model`() {
+        assertEquals("Needler · samsung", DeviceSessionName.of("samsung", null))
     }
 
     @Test

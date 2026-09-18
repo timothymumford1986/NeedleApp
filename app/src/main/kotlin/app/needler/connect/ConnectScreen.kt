@@ -67,11 +67,12 @@ import app.needler.core.domain.model.CertificateInfo
  *
  * ## Failures
  *
- * Every failure is rendered inline below the form by `ConnectFailureNotice`,
- * because all of them are answered either by changing something in the form or
- * by doing something outside the app, and a dialog helps with neither. The
- * untrusted-certificate case is the one that carries an action, and it shows
- * the fingerprint, subject, issuer and expiry before offering it.
+ * Every failure is rendered inline, above the form, by
+ * `ConnectFailureNotice` - not in a dialog, because all of them are answered
+ * either by changing something in the form or by doing something outside the
+ * app, and a dialog helps with neither. The untrusted-certificate case is the
+ * one that carries an action, and it shows the fingerprint, subject, issuer and
+ * expiry before offering it.
  *
  * The screen is stateless: [ConnectRoute] owns the state and the repository, so
  * every state here can be rendered from a literal in a test or a screenshot.
@@ -160,15 +161,13 @@ private fun PhoneConnect(
                 )
             }
 
-            ConnectForm(
-                state = state,
-                onServerChange = onServerChange,
-                onUsernameChange = onUsernameChange,
-                onPasswordChange = onPasswordChange,
-                onConnect = onConnect,
-                modifier = Modifier.needlerRise(stagger = 2),
-            )
-
+            // Above the form, not below it. The notice for an untrusted
+            // certificate carries a fingerprint the user is being asked to
+            // check and a button that pins it, and at the foot of a scrolling
+            // form both sit below the fold - a security decision the user never
+            // sees they are being offered. Putting it here also reads correctly
+            // for the failures whose answer is in a field: the explanation
+            // comes before the thing to change.
             if (state.failure != null) {
                 ConnectFailureNotice(
                     failure = state.failure,
@@ -177,6 +176,15 @@ private fun PhoneConnect(
                     retryEnabled = state.canConnect,
                 )
             }
+
+            ConnectForm(
+                state = state,
+                onServerChange = onServerChange,
+                onUsernameChange = onUsernameChange,
+                onPasswordChange = onPasswordChange,
+                onConnect = onConnect,
+                modifier = Modifier.needlerRise(stagger = 2),
+            )
         }
 
         Spacer(modifier = Modifier.height(spacing.step8))
@@ -261,13 +269,6 @@ private fun TabletConnect(
                     style = typography.displayCompact,
                     color = colors.textPrimary,
                 )
-                ConnectForm(
-                    state = state,
-                    onServerChange = onServerChange,
-                    onUsernameChange = onUsernameChange,
-                    onPasswordChange = onPasswordChange,
-                    onConnect = onConnect,
-                )
                 if (state.failure != null) {
                     ConnectFailureNotice(
                         failure = state.failure,
@@ -276,6 +277,13 @@ private fun TabletConnect(
                         retryEnabled = state.canConnect,
                     )
                 }
+                ConnectForm(
+                    state = state,
+                    onServerChange = onServerChange,
+                    onUsernameChange = onUsernameChange,
+                    onPasswordChange = onPasswordChange,
+                    onConnect = onConnect,
+                )
                 ConnectButton(state = state, onConnect = onConnect)
             }
         }
