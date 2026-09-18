@@ -80,7 +80,7 @@ fun NeedlerBottomNavBar(
                     item = item,
                     modifier = Modifier.weight(1f),
                     selectedColor = colors.accent,
-                    unselectedColor = colors.textMutedAccessible,
+                    unselectedColor = colors.textMuted,
                 )
             }
         }
@@ -126,7 +126,7 @@ fun NeedlerNavigationRail(
                     // the label at large font scales.
                     modifier = Modifier.width(sizes.navRailItemSize),
                     selectedColor = colors.accent,
-                    unselectedColor = colors.textMutedAccessible,
+                    unselectedColor = colors.textMuted,
                     selectedBackground = colors.surfaceRaised,
                 )
             }

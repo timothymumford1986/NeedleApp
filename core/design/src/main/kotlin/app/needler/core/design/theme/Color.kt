@@ -36,8 +36,11 @@ data class NeedlerColors(
      *
      * This is the design value and is kept exactly as drawn. It measures **4.21:1** on [canvas],
      * 3.82:1 on [surface] and 3.42:1 on [surfaceRaised], so it fails WCAG AA (4.5:1) for normal
-     * text everywhere the pack uses it. Use [textMutedAccessible] wherever the text carries
-     * information the user must be able to read; see that property's docs.
+     * text everywhere the pack uses it.
+     *
+     * This failure is a deliberate, recorded product decision: the drawn value was chosen over a
+     * lighter same-hue alternative (`#828f7a`, which measures 5.56:1 on [canvas] and clears AA on
+     * every background the pack uses). Revisit here if that call is ever reversed.
      */
     val textMuted: Color = Color(0xFF6F7A68),
     /** Primary buttons, links, transport and the active nav item. `#aed5f2`. */
@@ -125,31 +128,22 @@ data class NeedlerColors(
     // ---- Documented accessible alternative ----------------------------------------------------
 
     /**
-     * Accessible stand-in for [textMuted]. **Not** part of the drawn design.
+     * Destructive actions: "Remove all from device", unpinning, sign-out, delete confirmations.
      *
-     * REQUIREMENTS.md flags `#6f7a68` on `#0d120a` as the contrast risk in the pack, and it is:
-     * the measured ratio is 4.21:1, below the 4.5:1 WCAG AA threshold for normal text (it does
-     * clear the 3:1 bar for large text and for non-text UI components). Rather than silently
-     * repainting the palette, the design value is kept and this lighter value of the same hue and
-     * saturation is offered alongside it.
+     * The pack draws no destructive colour, so "Remove all from device" on screen 12 rendered in
+     * the same accent blue as "Connect" and "Play" - a permanent data-loss action styled exactly
+     * like the primary action. This value was added on that basis.
      *
-     * `#828f7a` measures **5.56:1** on [canvas], 5.02:1 on [surface] and 4.51:1 on
-     * [surfaceRaised] - AA on every background the pack puts muted text on.
-     *
-     * Use it for muted text that carries information: timecodes, durations, counts, the
-     * "no source found" line, input placeholders. Keep [textMuted] for decorative uses and for
-     * large type, where the drawn value already complies.
+     * It is a pale, desaturated red chosen to sit in the same family as the pack's other two
+     * signal colours ([accent] pale blue, [positive] pale green) rather than a saturated warning
+     * red, which would be louder than anything else in the design. Measured **7.93:1** on
+     * [canvas], 7.21:1 on [surface] and 6.44:1 on [surfaceRaised] - AA on all three.
      */
-    val textMutedAccessible: Color = Color(0xFF828F7A),
-) {
-    /**
-     * Muted text colour, honouring an accessibility preference.
-     *
-     * Pass `true` - typically from the app's "high contrast text" setting - to swap in
-     * [textMutedAccessible].
-     */
-    fun muted(accessible: Boolean): Color = if (accessible) textMutedAccessible else textMuted
-}
+    val destructive: Color = Color(0xFFE8908A),
+
+    /** Text and icons on a [destructive] fill. Measured 7.93:1. */
+    val onDestructive: Color = Color(0xFF200C0A),
+)
 
 /** The one palette in the pack. Dark only. */
 val NeedlerDarkColors: NeedlerColors = NeedlerColors()

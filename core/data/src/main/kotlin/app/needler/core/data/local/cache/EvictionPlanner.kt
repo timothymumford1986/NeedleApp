@@ -22,11 +22,10 @@ package app.needler.core.data.local.cache
  * and the plan takes unpinned rows in LRU order until it has freed that much. Two consequences are
  * worth stating out loud, because they are the cases the requirements gloss over:
  *
- *  1. **When pins alone exceed the budget, the plan evicts the whole unpinned tier** and reports
- *     [CacheWarning.PINS_EXCEED_BUDGET]. It cannot do better without touching pins, which is
- *     forbidden. Dropping the played-track cache is recoverable - those bytes are re-fetchable and
- *     were never explicitly requested - whereas deleting a pin is the one thing the user said not
- *     to do. The warning is what makes the situation visible rather than silent.
+ *  1. **When pins alone exceed the budget the plan evicts nothing** and reports
+ *     [CacheWarning.PINS_EXCEED_BUDGET]. Eviction cannot touch pins, so clearing the whole
+ *     unpinned tier would still leave the budget exceeded - it would cost the user their
+ *     recently-played offline tracks and fix nothing. Reporting it is the only useful action.
  *  2. **Pinned bytes are never counted as evictable**, so a plan can be short of its target. The
  *     caller must not loop: a second pass would find the same candidates and free nothing.
  *
@@ -68,6 +67,24 @@ public object EvictionPlanner {
             return EvictionPlan.nothingToDo(
                 totalBytes = usage.totalBytes,
                 warning = if (pinsExceedBudget) CacheWarning.PINS_EXCEED_BUDGET else null,
+            )
+        }
+
+        if (pinsExceedBudget) {
+            // Pins alone are over the limit, so no amount of eviction can get under it: the
+            // unpinned tier would be wiped and the budget would STILL be exceeded. Evicting
+            // achieves nothing except costing the user their recently-played offline tracks, so
+            // the plan is empty and the situation is reported instead. Product decision, 2026-09-18.
+            //
+            // targetBytes carries the real shortfall rather than 0, so `budgetStillExceeded` stays
+            // true and the UI can say by how much. Using nothingToDo() here would zero the target
+            // and make an over-budget cache report as fine.
+            return EvictionPlan(
+                victims = emptyList(),
+                freedBytes = 0L,
+                targetBytes = bytesToFree,
+                resultingTotalBytes = usage.totalBytes,
+                warning = CacheWarning.PINS_EXCEED_BUDGET,
             )
         }
 

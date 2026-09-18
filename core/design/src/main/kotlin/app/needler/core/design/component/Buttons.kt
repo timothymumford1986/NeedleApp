@@ -99,7 +99,7 @@ fun NeedlerPrimaryButton(
         else -> colors.surface
     }
     val content = when {
-        !enabled -> colors.textMutedAccessible
+        !enabled -> colors.textMuted
         tone == NeedlerButtonTone.Accent -> colors.onAccent
         tone == NeedlerButtonTone.Positive -> colors.onPositive
         else -> colors.textPrimary
@@ -146,7 +146,7 @@ fun NeedlerSecondaryButton(
 ) {
     val colors = NeedlerTheme.colors
     val content = when {
-        !enabled -> colors.textMutedAccessible
+        !enabled -> colors.textMuted
         selected -> colors.positive
         else -> colors.textPrimary
     }
@@ -192,7 +192,7 @@ fun NeedlerPillButton(
     val shape = NeedlerTheme.shapes.pill
     val sizes = NeedlerTheme.sizes
     val content = when {
-        !enabled -> colors.textMutedAccessible
+        !enabled -> colors.textMuted
         selected -> colors.onInverseSurface
         emphasised -> colors.textPrimary
         else -> colors.textSecondary
@@ -256,7 +256,7 @@ fun NeedlerTextButton(
         Text(
             text = text,
             style = NeedlerTheme.typography.body,
-            color = if (enabled) color else colors.textMutedAccessible,
+            color = if (enabled) color else colors.textMuted,
         )
     }
 }

@@ -119,7 +119,7 @@ fun NeedlerLabelledTextField(
                                 // Placeholders carry information here - the URL form the user has
                                 // to match - so they use the AA-compliant muted value rather than
                                 // the drawn 4.21:1 one.
-                                color = colors.textMutedAccessible,
+                                color = colors.textMuted,
                             )
                         }
                         innerTextField()
@@ -133,7 +133,7 @@ fun NeedlerLabelledTextField(
             Text(
                 text = supporting,
                 style = typography.caption,
-                color = if (errorText != null) colors.accent else colors.textMutedAccessible,
+                color = if (errorText != null) colors.accent else colors.textMuted,
             )
         }
     }
@@ -183,7 +183,7 @@ fun NeedlerSearchField(
                         Text(
                             text = placeholder,
                             style = typography.bodyLarge,
-                            color = colors.textMutedAccessible,
+                            color = colors.textMuted,
                             maxLines = 1,
                         )
                     }
@@ -234,7 +234,7 @@ fun NeedlerSearchFieldButton(
             Text(
                 text = placeholder,
                 style = NeedlerTheme.typography.bodyLarge,
-                color = colors.textMutedAccessible,
+                color = colors.textMuted,
                 maxLines = 1,
                 modifier = Modifier.weight(1f),
             )
