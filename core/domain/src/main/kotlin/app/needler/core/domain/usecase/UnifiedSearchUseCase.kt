@@ -144,6 +144,11 @@ public class UnifiedSearchUseCase(
             SessionState.NotConfigured -> NeedlerError.CapabilityUnavailable("no server configured")
             is SessionState.SubsonicDisabled -> NeedlerError.SubsonicProtocolDisabled
             is SessionState.Authenticated -> null
+
+            // Unreachable: an app-password repair leaves the catalogue lane usable, so the guard
+            // above has already returned. Listed rather than folded into an `else` so that a new
+            // state cannot slip through this branch unexamined.
+            is SessionState.RepairingAppPassword -> null
         }
     }
 

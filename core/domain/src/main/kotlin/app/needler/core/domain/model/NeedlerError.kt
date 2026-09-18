@@ -7,13 +7,13 @@ import kotlin.time.Duration
  *
  * The distinctions matter to the UI, which is why this is a sealed hierarchy rather than a message
  * string: a stale `/api/v1` session must keep playback alive and show a soft prompt, while a rejected
- * app-password must force re-onboarding. Collapsing those two into "unauthorised" would produce exactly
- * the wrong behaviour in both cases.
+ * app-password must trigger a silent repair. Collapsing those two into "unauthorised" would produce
+ * exactly the wrong behaviour in both cases.
  *
  * | Condition | Case here |
  * | --- | --- |
  * | `401` on `/api/v1` | [SessionExpired] - mark stale, keep playback, prompt to sign in |
- * | `401` on Subsonic (code 40 or 44) | [AppPasswordRevoked] - full re-onboarding |
+ * | `401` on Subsonic (code 40 or 44) | [AppPasswordRevoked] - mint a replacement silently |
  * | Subsonic `status=failed` code 0 | [SubsonicProtocolDisabled] - name the admin setting |
  * | `429` with `Retry-After` | [RateLimited] - honour the header, retry once, then original stream |
  * | `416` on a range request | [RangeNotSatisfiable] - cached length wrong, discard and refetch |
@@ -46,8 +46,14 @@ public sealed interface NeedlerError {
     /**
      * Subsonic rejected the app-password (`401`, error code 40 or 44).
      *
-     * The library and playback lane is gone, so this is the one auth failure that genuinely requires
-     * full re-onboarding: an app-password's secret is returned exactly once and is never re-fetchable.
+     * The library and playback lane is gone until a replacement is minted, which the app does for
+     * itself: `POST /api/v1/connect-apps/app-passwords` needs only the companion bearer. So this is
+     * a *recoverable* failure, not a fatal one - see
+     * [app.needler.core.domain.model.SessionState.RepairingAppPassword]. It forces re-onboarding
+     * only when the bearer is dead too, because then there is nothing left to mint with.
+     *
+     * Callers on the playback path should treat it as "pause and wait", not as "this track is
+     * unplayable": the repair is one round trip, after which the same stream succeeds.
      */
     public data class AppPasswordRevoked(
         val subsonicErrorCode: Int? = null,

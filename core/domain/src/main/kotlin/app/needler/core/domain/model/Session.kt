@@ -169,8 +169,23 @@ public enum class OpenSubsonicExtension(public val wireName: String) {
  * impossible without storing the account password, which Needler does not do - it prompts instead, and
  * warns in-app from day 25.
  *
- * A rejected app-password is the opposite case: Subsonic `401` (code 40 or 44) means the library lane
- * is gone, and that genuinely requires full re-onboarding - [ReonboardingRequired].
+ * A rejected app-password is **not** the opposite case, and this is the correction that matters most
+ * here. Subsonic `401` (code 40 or 44) means the library lane is gone *for now*, but
+ * `POST /api/v1/connect-apps/app-passwords` needs only the companion bearer - which the app is still
+ * holding - so Needler mints a replacement and carries on. That is [RepairingAppPassword]: playback
+ * pauses for as long as the repair takes and then resumes, and the user is told nothing, because
+ * nothing about their intent has changed. The alternative, which this app deliberately does not do,
+ * throws away a working session and a multi-gigabyte cache over one revoked secret - most often a
+ * secret the user revoked from the web UI without realising which app it belonged to.
+ *
+ * Re-onboarding is therefore required in exactly one case: **both** credentials are dead.
+ *
+ * | Bearer | App-password | State |
+ * | --- | --- | --- |
+ * | valid | valid | [Authenticated] |
+ * | expired | valid | [PlayerOnly] - prompt to sign in; playback unaffected |
+ * | valid | revoked | [RepairingAppPassword] - mint a replacement silently |
+ * | expired | revoked | [ReonboardingRequired] |
  *
  * Any code gating a feature must branch on this type, not on "is there a token", so the degraded case
  * cannot be forgotten.
@@ -242,7 +257,54 @@ public sealed interface SessionState {
     }
 
     /**
-     * The library lane itself is unusable, so the app cannot function: full re-onboarding is required.
+     * The app-password was rejected while the companion bearer is still alive, and a replacement is
+     * being minted right now.
+     *
+     * **This is a recoverable state, not a failure.** It is the only state in which the catalogue
+     * lane works and the library lane does not, which is the exact inverse of [PlayerOnly]: search,
+     * requests and the queue are fine because they run on the bearer, while streaming, playlists and
+     * favourites wait for the new secret.
+     *
+     * Playback pauses for the duration and then resumes. Nothing in the UI announces this state - no
+     * dialog, no prompt, no sign-in screen - because there is nothing for the user to do and the
+     * repair is one HTTP round trip. A UI may render it as the ordinary buffering it looks like from
+     * the outside.
+     *
+     * [lastAttemptError] is set when a repair attempt failed in a way worth retrying - the phone was
+     * offline, or the server answered `5xx`. The state is kept rather than escalated, because a
+     * retryable failure says nothing about whether the bearer is still good.
+     *
+     * Reachable only from [Authenticated], which is why [user] and the capabilities are non-null
+     * here: if the bearer were dead the app would already be in [PlayerOnly], and an app-password
+     * rejection from there means both credentials are gone.
+     */
+    public data class RepairingAppPassword(
+        val server: ServerIdentity,
+        val user: User,
+        val capabilities: ServerCapabilities,
+        /** Carried through the repair so the day-25 expiry warning is not lost by it. */
+        val bearerExpiresAt: Instant?,
+        val lastAttemptError: NeedlerError? = null,
+    ) : SessionState {
+        override val canUseCatalogueLane: Boolean get() = true
+        override val canUseLibraryLane: Boolean get() = false
+
+        /** The state to move to once a replacement app-password is stored. */
+        public fun repaired(): Authenticated = Authenticated(
+            server = server,
+            user = user,
+            capabilities = capabilities,
+            bearerExpiresAt = bearerExpiresAt,
+        )
+    }
+
+    /**
+     * Both credentials are dead, so nothing can be minted from anything: the user must sign in again.
+     *
+     * This is **not** where a revoked app-password lands. A revoked app-password with a live bearer
+     * is [RepairingAppPassword] and is repaired silently; only the loss of both secrets, an
+     * unreadable keystore, a changed server or an explicit sign-out gets here. See
+     * [ReonboardingReason] for the four ways in.
      */
     public data class ReonboardingRequired(
         val server: ServerIdentity?,
@@ -255,6 +317,96 @@ public sealed interface SessionState {
     public companion object {
         /** Warn from day 25 of the bearer's 30-day life. */
         public val ReauthWarningWindow: Duration = 5.days
+
+        /**
+         * The state to move to when Subsonic rejects the app-password (code 40 or 44).
+         *
+         * The whole product decision is this one function, so it lives in the domain rather than
+         * being re-derived by the repository, the credential store and whatever else sees the
+         * rejection. With the bearer alive the app repairs itself silently; only with the bearer
+         * dead as well does the user ever hear about it.
+         *
+         * @param bearerAlive whether a companion bearer that has neither expired nor been revoked is
+         *   still held. It is the sole input, because it is the sole thing needed to mint a
+         *   replacement app-password.
+         */
+        public fun afterAppPasswordRejected(
+            current: SessionState,
+            bearerAlive: Boolean,
+        ): SessionState = when (current) {
+            is Authenticated ->
+                if (bearerAlive) {
+                    RepairingAppPassword(
+                        server = current.server,
+                        user = current.user,
+                        capabilities = current.capabilities,
+                        bearerExpiresAt = current.bearerExpiresAt,
+                    )
+                } else {
+                    ReonboardingRequired(current.server, ReonboardingReason.BOTH_CREDENTIALS_DEAD)
+                }
+
+            // A second rejection while a repair is in flight is the common case, not an anomaly:
+            // several Subsonic calls are usually in the air when the first one is refused. Staying
+            // put makes the repair idempotent instead of restarting it once per failed request.
+            is RepairingAppPassword ->
+                if (bearerAlive) {
+                    current
+                } else {
+                    ReonboardingRequired(current.server, ReonboardingReason.BOTH_CREDENTIALS_DEAD)
+                }
+
+            // Player-only already means the bearer is gone, so there is nothing left to mint with.
+            is PlayerOnly ->
+                ReonboardingRequired(current.server, ReonboardingReason.BOTH_CREDENTIALS_DEAD)
+
+            // The lane was never usable in these states, so a rejection on it changes nothing.
+            is SubsonicDisabled, NotConfigured, is ReonboardingRequired -> current
+        }
+
+        /**
+         * The state to move to when a repair attempt fails.
+         *
+         * A retryable failure - offline, `5xx`, rate limited - keeps the app in
+         * [RepairingAppPassword] with the error recorded. It says nothing about whether the bearer
+         * is still good, and escalating to re-onboarding on a lost connection would hand the user a
+         * sign-in screen for a problem that fixes itself when the train leaves the tunnel.
+         *
+         * Anything permanent - the bearer itself refused, the server refusing to mint - means the
+         * silent path is exhausted and signing in again is the only way out.
+         */
+        public fun afterAppPasswordRepairFailed(
+            current: RepairingAppPassword,
+            error: NeedlerError,
+        ): SessionState = if (error.isRetryable) {
+            current.copy(lastAttemptError = error)
+        } else {
+            ReonboardingRequired(current.server, ReonboardingReason.BOTH_CREDENTIALS_DEAD)
+        }
+
+        /**
+         * The state to move to when `/api/v1` answers `401`.
+         *
+         * From [Authenticated] this is the documented degradation to a pure music player. From
+         * [RepairingAppPassword] it is the one case that cannot degrade: the bearer was the tool the
+         * repair was using, so losing it mid-repair leaves both credentials dead.
+         */
+        public fun afterBearerRejected(
+            current: SessionState,
+            reason: PlayerOnlyReason,
+        ): SessionState = when (current) {
+            is Authenticated -> PlayerOnly(
+                server = current.server,
+                user = current.user,
+                capabilities = current.capabilities,
+                reason = reason,
+            )
+
+            is RepairingAppPassword ->
+                ReonboardingRequired(current.server, ReonboardingReason.BOTH_CREDENTIALS_DEAD)
+
+            is PlayerOnly, is SubsonicDisabled, NotConfigured, is ReonboardingRequired -> current
+        }
     }
 }
 
@@ -267,10 +419,23 @@ public enum class PlayerOnlyReason {
     BEARER_REJECTED,
 }
 
-/** Why the user must onboard again from scratch. */
+/**
+ * Why the user must onboard again from scratch.
+ *
+ * There is deliberately no "app-password revoked" reason. A revoked app-password with a live bearer
+ * is repaired silently ([SessionState.RepairingAppPassword]); only the loss of *both* credentials
+ * reaches this enum, which is what [BOTH_CREDENTIALS_DEAD] names.
+ */
 public enum class ReonboardingReason {
-    /** Subsonic returned `401` with code 40 or 44: the app-password was revoked. */
-    APP_PASSWORD_REVOKED,
+    /**
+     * The app-password was rejected (Subsonic code 40 or 44) **and** the companion bearer is gone
+     * too, so there is nothing left to mint a replacement with.
+     *
+     * This is the only credential failure that ever reaches the user. Reaching it from a *single*
+     * revoked secret would be a bug: it would discard a working session and a multi-gigabyte cache
+     * to fix something one authenticated request repairs.
+     */
+    BOTH_CREDENTIALS_DEAD,
 
     /** The stored secrets could not be read back from Keystore-backed storage. */
     CREDENTIALS_UNREADABLE,

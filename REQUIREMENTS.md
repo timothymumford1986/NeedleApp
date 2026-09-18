@@ -413,6 +413,23 @@ This is a deliberate choice against server transcoding. The server allows one tr
 5. All audio requests must be `Range`-capable. The server honours ranges, returns `416` correctly, and disables gzip on audio so seeking works.
 6. **Transcoded bytes are never retained.** A track streamed as MP3 320 on mobile data plays and is then thrown away; only original-format bytes are ever written to the audio store. See "Why transcoded bytes are never cached".
 
+### Why Media3's cache is not used
+
+Media3 ships a byte-range cache, `CacheDataSource` over `SimpleCache`, and it is the obvious thing to reach for. Needler does not use it. All retained audio goes to the project's own `audio_cache` store, and Media3's caching layer is left switched off.
+
+Four reasons, each of which alone would be enough:
+
+| | |
+| --- | --- |
+| It reintroduces the budget | Its evictor takes a fixed byte cap and deletes oldest-first — exactly the storage limit this product deliberately removed. |
+| It cannot protect downloads | It has no notion of an album the user asked to keep. Downloads and incidental cache would compete on equal terms. |
+| It would cache transcodes | It retains whatever passes through it, so a FLAC streamed as MP3 320 on mobile data becomes that track's permanent offline copy — the precise bug rule 6 exists to prevent. |
+| It holds no fingerprint | The staleness check compares `file_id`, size, duration and format per track. `SimpleCache` stores opaque byte ranges with nowhere to put that. |
+
+Running both stores was considered — Media3's for streaming, ours for downloads — and rejected. Settings has to answer "what is taking up the room" with one honest number split by tier, and two stores with two eviction policies cannot be reconciled into that. It would also leave the transcode rule enforced in one store and not the other.
+
+So: when the store already holds a track, playback reads the local file. When it does not, playback streams over HTTP and a thin write-through wrapper copies the bytes into the store as they are read — one fetch, not a stream followed by a download. The wrapper declines to retain anything when the bytes are transcoded, when free space is short, or when the track is already held. A write that is abandoned mid-track is discarded rather than committed, because a truncated file recorded as complete would play as a song that stops halfway, months later, with no clue why.
+
 ### Queue
 
 The queue is "in the crate" (screens 08 and 09): a Playing row, an Up next list with a count and total duration, drag-to-reorder handles, and a Clear action. It lives on the device and persists across restarts.
@@ -745,7 +762,7 @@ Dependencies run one way. `:app` and the feature modules depend on `:core:domain
 | --- | --- | --- |
 | UI | Compose, Material 3 adaptive | One codebase across both widths |
 | Player | Media3 `ExoPlayer` and `MediaLibraryService` | Range, gapless, caching and Auto in one stack |
-| Audio cache | Media3 `CacheDataSource` with `SimpleCache` | Byte-range caching already solved |
+| Audio cache | The project's own `audio_cache` store — **not** Media3's `CacheDataSource`/`SimpleCache` | See "Why Media3's cache is not used" |
 | HTTP | OkHttp with a Media3 datasource | One client, one cert-pinning policy |
 | Serialisation | `kotlinx.serialization` | Subsonic JSON and v1 both |
 | Database | Room with FTS4 | Offline search over the mirror |

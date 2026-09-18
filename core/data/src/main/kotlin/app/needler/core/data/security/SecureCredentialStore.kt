@@ -81,10 +81,18 @@ public class SecureCredentialStore private constructor(
      */
     public val sessionStale: StateFlow<Boolean> = sessionStaleState.asStateFlow()
 
-    /** True once re-onboarding is required because the app-password itself was rejected. */
-    private val appPasswordRevokedState: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    /**
+     * True while the app-password has been rejected and no replacement has been stored yet.
+     *
+     * **Not a request to re-onboard.** With the bearer still alive the data layer mints a
+     * replacement app-password with it and playback resumes with nothing shown to the user; this
+     * flow is what tells it there is a repair to do, and what the session state renders as
+     * `RepairingAppPassword` while it happens. See [isReonboardingRequired] for the case that does
+     * reach the user.
+     */
+    private val appPasswordRepairNeededState: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
-    public val appPasswordRevoked: StateFlow<Boolean> = appPasswordRevokedState.asStateFlow()
+    public val appPasswordRepairNeeded: StateFlow<Boolean> = appPasswordRepairNeededState.asStateFlow()
 
     init {
         cachedServerUrl = preferences.getString(KEY_SERVER_URL, null)
@@ -93,6 +101,9 @@ public class SecureCredentialStore private constructor(
         cachedFingerprint = preferences.getString(KEY_CERT_FINGERPRINT, null)
         parsedServerUrl = ServerUrl.parseOrNull(cachedServerUrl)
         sessionStaleState.value = cachedBearer == null && cachedAppPassword != null
+        // A process that died mid-repair comes back with a bearer and no app-password. The repair is
+        // resumed rather than restarted from a sign-in screen, which is the whole point of it.
+        appPasswordRepairNeededState.value = cachedAppPassword == null && cachedBearer != null
     }
 
     // ------------------------------------------------------------------ CredentialProvider
@@ -127,23 +138,41 @@ public class SecureCredentialStore private constructor(
     }
 
     /**
-     * The Subsonic lane answered code 40 or 44: the app-password is gone, so full re-onboarding is
-     * required. Everything is dropped, including the bearer, because the account may have been
-     * revoked entirely.
+     * The Subsonic lane answered code 40 or 44: the app-password has been revoked.
+     *
+     * **The bearer is deliberately kept.** It is the credential that mints the replacement -
+     * `POST /api/v1/connect-apps/app-passwords` needs nothing else - so discarding it here would
+     * destroy the only tool the repair has and turn one revoked secret into a lost session, a lost
+     * cache and a sign-in screen. The user revoking an app-password from the web UI without
+     * realising which app it belonged to is the common case, not an exotic one.
+     *
+     * Only the app-password goes, and [appPasswordRepairNeeded] is raised so the data layer can mint
+     * a replacement. Playback pauses until it does, because streaming is on the Subsonic lane, and
+     * then resumes with nothing shown to the user.
+     *
+     * Non-blocking and safe to call repeatedly, as the contract requires: several Subsonic requests
+     * are usually in flight when the first one is refused. The removal is queued with `apply()`
+     * rather than committed - a lost removal costs nothing, because the secret is already useless.
      */
     override fun onAppPasswordRejected() {
         cachedAppPassword = null
-        cachedBearer = null
-        appPasswordRevokedState.value = true
-        sessionStaleState.value = true
+        appPasswordRepairNeededState.value = true
         runCatching {
             preferences.edit()
                 .remove(KEY_APP_PASSWORD)
-                .remove(KEY_COMPANION_BEARER)
-                .remove(KEY_BEARER_ISSUED_AT)
                 .apply()
         }
     }
+
+    /**
+     * True when both credentials are gone and a server is saved: the one credential state the user
+     * has to be told about, because nothing left on the device can mint anything.
+     *
+     * A missing server is not this state - that is an app that has never been set up, which the
+     * Connect screen owns.
+     */
+    public fun isReonboardingRequired(): Boolean =
+        parsedServerUrl != null && cachedAppPassword == null && cachedBearer == null
 
     // ------------------------------------------------------------------ writes
 
@@ -180,7 +209,7 @@ public class SecureCredentialStore private constructor(
     }
 
     /**
-     * Saves the app-password secret.
+     * Saves the app-password secret, whether from onboarding or from a silent repair.
      *
      * **Check the result.** The secret is shown exactly once by
      * `POST /api/v1/connect-apps/app-passwords` and is never re-fetchable, so a false return must
@@ -191,7 +220,7 @@ public class SecureCredentialStore private constructor(
         val committed: Boolean = commit { it.putString(KEY_APP_PASSWORD, secret) }
         if (committed) {
             cachedAppPassword = secret
-            appPasswordRevokedState.value = false
+            appPasswordRepairNeededState.value = false
         }
         return committed
     }
@@ -277,7 +306,7 @@ public class SecureCredentialStore private constructor(
             cachedFingerprint = null
             parsedServerUrl = null
             sessionStaleState.value = false
-            appPasswordRevokedState.value = false
+            appPasswordRepairNeededState.value = false
         }
         return committed
     }
@@ -324,8 +353,11 @@ public class SecureCredentialStore private constructor(
          * symptom is a [GeneralSecurityException] or [IOException] from
          * `EncryptedSharedPreferences.create`. When that happens the ciphertext on disk is
          * permanently undecryptable, so the only recovery is to delete the file and start again -
-         * which forces re-onboarding, exactly as a revoked app-password does. Failing to handle it
-         * would instead crash the app on every launch with no way out but reinstalling.
+         * which forces re-onboarding. This is one of the few paths that does: **a revoked
+         * app-password is not**, because with the bearer still readable the app mints a replacement
+         * and says nothing. Here both secrets are unreadable at once, so there is nothing left to
+         * repair with. Failing to handle it would instead crash the app on every launch with no way
+         * out but reinstalling.
          *
          * Deleting the file does **not** revoke anything server-side. The companion session and the
          * app-password remain listed on the server until the user revokes them or they expire; the

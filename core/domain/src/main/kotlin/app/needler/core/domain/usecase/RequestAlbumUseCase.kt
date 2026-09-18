@@ -140,5 +140,10 @@ public class RequestAlbumUseCase(
         SessionState.NotConfigured -> NeedlerError.CapabilityUnavailable("no server configured")
         is SessionState.SubsonicDisabled -> NeedlerError.SubsonicProtocolDisabled
         is SessionState.Authenticated -> NeedlerError.Unexpected("catalogue lane refused while authenticated")
+
+        // Repairing the app-password costs the *library* lane, never this one: the bearer is what
+        // the repair runs on, so requesting an album keeps working throughout.
+        is SessionState.RepairingAppPassword ->
+            NeedlerError.Unexpected("catalogue lane refused during app-password repair")
     }
 }
