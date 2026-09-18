@@ -97,6 +97,23 @@ androidxTestEspresso = "3.7.0"       # src: GMaven androidx/test/espresso/espres
 turbine = "1.2.1"                    # src: MC app/cash/turbine/turbine
 mockk = "1.14.11"                    # src: MC io/mockk/mockk
 
+# ---- JVM screenshot rendering (no emulator, no device) ----
+# Roborazzi renders Compose to PNG on the JVM by driving Robolectric's native
+# graphics pipeline, so `screenshots/` regenerates from a plain unit test.
+# Compatibility checked against this project's toolchain on 2026-09-18:
+#   * robolectric 4.17 publishes an android-all for API 37
+#     (org/robolectric/android-all-instrumented/17-robolectric-15733970-i7),
+#     which is what compileSdk 37 needs. Tests themselves run on targetSdk 36.
+#     src: MC org/robolectric/android-all-instrumented/maven-metadata.xml
+#   * roborazzi 1.74.0 is the current release, taken as a plain test dependency.
+#     The Roborazzi *Gradle plugin* is deliberately NOT applied: it is untested
+#     against AGP 9 and none of what it adds is needed here. See
+#     build-logic/convention/src/main/kotlin/ScreenshotConventionPlugin.kt.
+#     src: MC io/github/takahirom/roborazzi/roborazzi/maven-metadata.xml
+robolectric = "4.17"                 # src: MC org/robolectric/robolectric (<release>)
+roborazzi = "1.74.0"                 # src: MC io/github/takahirom/roborazzi/roborazzi (<release>)
+androidxTestCore = "1.7.0"           # src: GMaven androidx/test/core (ActivityScenario)
+
 [libraries]
 # ---- build-logic classpath (consumed only by build-logic/convention) ----
 android-gradlePlugin = { group = "com.android.tools.build", name = "gradle", version.ref = "agp" }
@@ -191,6 +208,12 @@ androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espres
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 mockk-unit = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
+
+# ---- jvm screenshot rendering ----
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
+androidx-test-core = { group = "androidx.test", name = "core", version.ref = "androidxTestCore" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

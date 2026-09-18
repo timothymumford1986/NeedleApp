@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The system splash icon: the record mark from the design pack's launch
+  animation, reduced to the one shape that reads at 108dp - a ring with a
+  spindle dot.
+
+  Deliberately static. The animated version of this mark is
+  `NeedlerSplash`/`NeedlerRecordMark` in :core:design, which is composed over
+  loaded content and is tap-skippable; this drawable only has to fill the gap
+  between the window appearing and the first Compose frame.
+
+  Geometry follows the pack's 200-unit viewBox scaled to 108: a 7-unit ring at
+  r=86 and an 18-unit label, i.e. stroke 3.78 at r=46.4 and a dot of r=9.7 on a
+  108x108 canvas.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:strokeColor="@color/needler_text_primary"
+        android:strokeWidth="3.78"
+        android:fillColor="#00000000"
+        android:pathData="M 54,7.6 A 46.4,46.4 0 1 1 53.99,7.6 Z" />
+
+    <path
+        android:fillColor="@color/needler_text_primary"
+        android:pathData="M 54,44.3 A 9.7,9.7 0 1 1 53.99,44.3 Z" />
+
+</vector>

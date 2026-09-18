@@ -59,5 +59,10 @@ gradlePlugin {
             implementationClass = "HiltConventionPlugin"
             description = "KSP + Hilt wiring for a module that participates in the DI graph."
         }
+        register("screenshots") {
+            id = "needler.screenshots"
+            implementationClass = "ScreenshotConventionPlugin"
+            description = "Renders Compose screens to PNG on the JVM (Roborazzi + Robolectric)."
+        }
     }
 }
