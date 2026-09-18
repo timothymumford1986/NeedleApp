@@ -101,6 +101,11 @@ public class ResolvePlayableSourceUseCase(
      */
     private fun libraryLaneBlocker(session: SessionState): NeedlerError = when (session) {
         is SessionState.ReonboardingRequired -> NeedlerError.AppPasswordRevoked()
+
+        // The app-password is being replaced right now. This is the reason playback pauses for the
+        // length of the repair and then resumes: the track is not unplayable, its credential is
+        // simply a few hundred milliseconds away. Nothing here reaches the user.
+        is SessionState.RepairingAppPassword -> NeedlerError.AppPasswordRevoked()
         is SessionState.SubsonicDisabled -> NeedlerError.SubsonicProtocolDisabled
         SessionState.NotConfigured -> NeedlerError.CapabilityUnavailable("no server configured")
         is SessionState.PlayerOnly -> NeedlerError.Unexpected("library lane refused in player-only mode")

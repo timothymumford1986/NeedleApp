@@ -44,8 +44,19 @@ public interface CredentialProvider {
     public fun onBearerRejected() {}
 
     /**
-     * Called when the Subsonic lane answers error code 40 or 44 — the app-password is gone and
-     * full re-onboarding is required.
+     * Called when the Subsonic lane answers error code 40 or 44: the app-password has been revoked.
+     *
+     * **This is not a request to re-onboard.** As long as [bearerToken] is still alive the data
+     * layer mints a replacement app-password with it - the minting endpoint needs only the bearer -
+     * and playback resumes with nothing shown to the user. Only when both credentials are dead does
+     * anyone have to sign in again. Implementations must therefore keep the bearer here and discard
+     * the app-password alone; clearing both would destroy the very thing the repair runs on and turn
+     * one revoked secret, often revoked from the web UI by mistake, into a lost session and a lost
+     * cache.
+     *
+     * Must be non-blocking and safe to call repeatedly from any thread: several Subsonic requests
+     * are usually in flight when the first one is refused, and each of them reports it. The repair
+     * itself is single-flight in the data layer, not here.
      */
     public fun onAppPasswordRejected() {}
 }

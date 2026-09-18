@@ -57,6 +57,87 @@ public data class PlayQueue(
     /** Total duration of the whole crate, in milliseconds, ignoring tracks of unknown length. */
     public val totalDurationMs: Long
         get() = items.sumOf { item -> item.track.durationMs ?: 0L }
+
+    /**
+     * The crate with [newItems] inserted at [index], or appended when [index] is null.
+     *
+     * [currentIndex] follows the item that is playing rather than the slot it sits in, so adding
+     * tracks above the Playing row cannot silently change what is playing.
+     *
+     * An [index] outside the list is clamped rather than rejected: the crate screen can issue an
+     * insert against a position that a concurrent skip has already moved past, and dropping the
+     * user's tracks on the floor - or crashing the session - is worse than appending them.
+     */
+    public fun withItemsInserted(newItems: List<QueueItem>, index: Int? = null): PlayQueue {
+        if (newItems.isEmpty()) return this
+        val at: Int = (index ?: items.size).coerceIn(0, items.size)
+        val updated: List<QueueItem> = buildList(items.size + newItems.size) {
+            addAll(items.subList(0, at))
+            addAll(newItems)
+            addAll(items.subList(at, items.size))
+        }
+        val current: Int? = currentIndex
+        val movedCurrent: Int? = when {
+            current == null -> null
+            at <= current -> current + newItems.size
+            else -> current
+        }
+        return PlayQueue(items = updated, currentIndex = movedCurrent)
+    }
+
+    /**
+     * The crate with the item at [fromIndex] moved to [toIndex]: one drag of a reorder handle.
+     *
+     * The rule that matters is that **[currentIndex] tracks the playing item, not the position**.
+     * Recomputing it from the indices alone means dragging any row past the Playing row restarts
+     * playback on a different track, which is the classic reorder bug and is invisible until a user
+     * reorders while listening.
+     *
+     * An out-of-range index returns the crate unchanged. A drag and a skip can land in either order,
+     * and a stale index from the UI must not throw inside the player session.
+     */
+    public fun withItemMoved(fromIndex: Int, toIndex: Int): PlayQueue {
+        if (fromIndex !in items.indices || toIndex !in items.indices) return this
+        if (fromIndex == toIndex) return this
+        val playing: QueueItem? = currentItem
+        val updated: MutableList<QueueItem> = items.toMutableList()
+        val moved: QueueItem = updated.removeAt(fromIndex)
+        updated.add(toIndex, moved)
+        val followed: Int? = playing?.let { item -> updated.indexOfFirst { it.id == item.id } }
+        return PlayQueue(items = updated, currentIndex = followed?.takeIf { it >= 0 })
+    }
+
+    /**
+     * The crate with the row carrying [itemId] removed.
+     *
+     * [QueueItem.id] is a queue-local row identifier, so the same track appearing twice loses only
+     * the row the user swiped. Removing the playing row leaves [currentIndex] pointing at the same
+     * position, which is now the track that followed it - what "remove this from the crate" means to
+     * someone looking at the screen. Removing the last row while it plays leaves nothing current, and
+     * the session stops rather than wrapping round to the top.
+     */
+    public fun withItemRemoved(itemId: String): PlayQueue {
+        val removedAt: Int = items.indexOfFirst { it.id == itemId }
+        if (removedAt < 0) return this
+        val updated: List<QueueItem> = items.filterIndexed { index, _ -> index != removedAt }
+        val current: Int? = currentIndex
+        val followed: Int? = when {
+            current == null -> null
+            removedAt < current -> current - 1
+            else -> current
+        }
+        return PlayQueue(
+            items = updated,
+            currentIndex = followed?.takeIf { it in updated.indices },
+        )
+    }
+
+    /** The empty crate: the Clear action on screens 08 and 09. */
+    public fun cleared(): PlayQueue = Empty
+
+    public companion object {
+        public val Empty: PlayQueue = PlayQueue(items = emptyList(), currentIndex = null)
+    }
 }
 
 /**

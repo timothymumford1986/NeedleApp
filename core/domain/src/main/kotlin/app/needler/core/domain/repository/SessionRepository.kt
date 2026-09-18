@@ -22,10 +22,12 @@ public interface SessionRepository {
     /**
      * The current session state.
      *
-     * Feature gating must branch on this rather than on "do we have a token", because the degraded
-     * [SessionState.PlayerOnly] case has a *valid* app-password and must keep playback, library
-     * browsing, playlists and favourites fully working while search, requests and the queue are
-     * unavailable.
+     * Feature gating must branch on this rather than on "do we have a token", because two states are
+     * partial rather than broken, in opposite directions. [SessionState.PlayerOnly] has a *valid*
+     * app-password and must keep playback, library browsing, playlists and favourites fully working
+     * while search, requests and the queue are unavailable. [SessionState.RepairingAppPassword] is
+     * the inverse and is transient: the catalogue lane works, the library lane is waiting on a new
+     * app-password, and neither a prompt nor an error belongs on screen while it does.
      */
     public fun observeSession(): Flow<SessionState>
 
@@ -118,10 +120,45 @@ public interface SessionRepository {
     public suspend fun markSessionStale(reason: PlayerOnlyReason)
 
     /**
-     * Marks the app-password rejected after a Subsonic `401` (error code 40 or 44), which requires full
-     * re-onboarding: this is the one auth failure that cannot be degraded around.
+     * Records that Subsonic rejected the app-password (error code 40 or 44) and returns the state
+     * the session moved to.
+     *
+     * This does **not** mean re-onboarding. With the companion bearer still alive the session moves
+     * to [SessionState.RepairingAppPassword] and [repairAppPassword] mints a replacement silently;
+     * only a rejection with the bearer already dead reaches
+     * [SessionState.ReonboardingRequired]. The transition itself is
+     * [SessionState.afterAppPasswordRejected], so every caller that sees a code 40 or 44 - the
+     * Subsonic client, the player service, a background sync - agrees on the answer.
+     *
+     * Safe to call repeatedly: several Subsonic requests are usually in flight when the first one is
+     * refused, and each of them reports it.
      */
-    public suspend fun markAppPasswordRevoked()
+    public suspend fun markAppPasswordRejected(subsonicErrorCode: Int? = null): SessionState
+
+    /**
+     * Mints a replacement app-password with the existing companion bearer, and stores it.
+     *
+     * `POST /api/v1/connect-apps/app-passwords` needs only the bearer, so the app already holds
+     * everything required and the user is told nothing: playback pauses for as long as this takes
+     * and then resumes. Losing the app-password must not cost the user a sign-in, a re-sync and a
+     * multi-gigabyte cache, which is what full re-onboarding would have cost.
+     *
+     * Implementations must be **single-flight**: many in-flight Subsonic calls fail at once, and one
+     * repair per failed request would burn through the server's cap of 25 active app-passwords per
+     * user in a single burst. Concurrent callers await the same attempt.
+     *
+     * The secret is returned exactly once and is never re-fetchable, so a failed write aborts and
+     * revokes rather than leaving a credential neither side can use - the same rule onboarding
+     * follows.
+     *
+     * Failure does not necessarily end the repair: a retryable error leaves the session in
+     * [SessionState.RepairingAppPassword] with
+     * [SessionState.RepairingAppPassword.lastAttemptError] set, so a repair that failed in a tunnel
+     * resumes when the connection comes back. Only a permanent failure - the bearer refused too -
+     * lands on [SessionState.ReonboardingRequired]. See
+     * [SessionState.afterAppPasswordRepairFailed].
+     */
+    public suspend fun repairAppPassword(): Outcome<SessionState>
 
     /**
      * Signs out. When [revokeRemote] is true the companion session and app-password are revoked
