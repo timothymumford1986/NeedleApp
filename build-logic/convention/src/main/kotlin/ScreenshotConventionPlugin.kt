@@ -89,6 +89,32 @@ class ScreenshotConventionPlugin : Plugin<Project> {
                 // instruments a lot of framework classes; the default heap is
                 // not enough to render a tablet-sized bitmap.
                 maxHeapSize = "2g"
+
+                // Robolectric reaches into the JDK to emulate the framework,
+                // and the module system says no by default. On JDK 21 the first
+                // thing that fails is `ApplicationSharedMemory.create()` during
+                // application set-up: it goes through Robolectric's
+                // FileDescriptor interceptor, which calls
+                // `jdk.internal.access.SharedSecrets` - a package java.base does
+                // not export at all. That surfaces as the deeply unhelpful
+                // "Failed to interact with raw FileDescriptor internals; perhaps
+                // JRE has changed?", with the real IllegalAccessException three
+                // frames down.
+                //
+                // The export is the one that is strictly required; the opens
+                // below are Robolectric's documented set and cost nothing.
+                jvmArgs(
+                    "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+                    "--add-opens=java.base/java.net=ALL-UNNAMED",
+                    "--add-opens=java.base/java.nio=ALL-UNNAMED",
+                    "--add-opens=java.base/java.security=ALL-UNNAMED",
+                    "--add-opens=java.base/java.text=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                    "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED",
+                )
             }
 
             tasks.register("recordScreenshots") {

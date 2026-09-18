@@ -142,6 +142,39 @@ public abstract class TrackDao {
     )
     public abstract suspend fun findTracksWithChangedFileId(releaseGroupMbid: String): List<TrackEntity>
 
+    /**
+     * Tracks of every owned album carrying one genre.
+     *
+     * `track` has no genre column - genres are denormalised onto the album, which is where the
+     * design pack shows them - so the bucket is a join. [genrePattern] must come from
+     * `GenreCodec.likePattern`, which brackets the term with the column's delimiters so `rock` does
+     * not also match `rockabilly`.
+     */
+    @Query(
+        """
+        SELECT track.* FROM track
+        JOIN album ON album.release_group_mbid = track.release_group_mbid
+        WHERE album.in_library = 1 AND album.genres LIKE :genrePattern
+        ORDER BY album.artist_normalised ASC, album.title_normalised ASC,
+                 track.disc_no ASC, track.track_no ASC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public abstract fun observeTracksByGenre(
+        genrePattern: String,
+        limit: Int,
+        offset: Int,
+    ): Flow<List<TrackEntity>>
+
+    @Query(
+        """
+        SELECT * FROM track
+        WHERE (release_group_mbid || '/' || CAST(disc_no AS TEXT) || '/' || CAST(track_no AS TEXT))
+              IN (:canonicalKeys)
+        """,
+    )
+    public abstract suspend fun getTracksByCanonicalKeys(canonicalKeys: List<String>): List<TrackEntity>
+
     @Query("SELECT COUNT(*) FROM track")
     public abstract fun observeTrackCount(): Flow<Int>
 
