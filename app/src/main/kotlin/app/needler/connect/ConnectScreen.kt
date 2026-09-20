@@ -321,7 +321,7 @@ private fun ConnectForm(
             label = "USERNAME",
             value = state.username,
             onValueChange = onUsernameChange,
-            placeholder = "tim",
+            placeholder = "yourname",
             enabled = !state.connecting,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Text,

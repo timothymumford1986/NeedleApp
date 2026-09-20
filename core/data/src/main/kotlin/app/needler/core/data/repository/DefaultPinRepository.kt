@@ -1,7 +1,6 @@
 package app.needler.core.data.repository
 
 import app.needler.core.data.local.NeedlerDatabase
-import app.needler.core.data.local.TrackKeyDb
 import app.needler.core.data.local.cache.CacheIndex
 import app.needler.core.data.local.cache.CacheStatus
 import app.needler.core.data.local.cache.DeviceFreeSpace
@@ -19,6 +18,7 @@ import app.needler.core.data.local.entity.DownloadStateDb
 import app.needler.core.data.local.entity.PinEntity
 import app.needler.core.data.platform.ArtworkCacheSize
 import app.needler.core.data.local.projection.CacheUsageRow
+import app.needler.core.data.local.projection.EvictionCandidateRow
 import app.needler.core.data.mapper.EntityMappers
 import app.needler.core.data.settings.NeedlerSettingsStore
 import app.needler.core.data.settings.StorageSettings
@@ -337,19 +337,21 @@ public class DefaultPinRepository(
      * the bytes, or the downloader would immediately fetch everything again.
      */
     override suspend fun removeAllFromDevice(): Outcome<EvictionReport> {
+        // The keys and their accounted sizes are read **before** the transaction drops the rows:
+        // afterwards there is no record of what was on disk, and a caller holding only file paths
+        // could not say what the removal freed.
+        val doomed: List<EvictionCandidateRow> = audioCacheDao.getAllRowsForRemoval()
         val paths: List<String> = database.clearAllAudio()
-        var freed = 0L
-        val cleared: List<TrackKeyDb> = emptyList()
         for (path in paths) {
-            val file = java.io.File(path)
-            val size: Long = runCatching { file.length() }.getOrDefault(0L)
-            if (runCatching { deleteFile(path) }.getOrDefault(false)) freed += size
+            runCatching { deleteFile(path) }
         }
         artworkCacheSize.clear()
         return Outcome.Success(
             EvictionReport(
-                evictedTracks = cleared.map(EntityMappers::trackKey),
-                freedBytes = freed,
+                evictedTracks = doomed.map { EntityMappers.trackKey(it.key) },
+                // What the cache index accounted for these rows, which is what the Storage screen
+                // listed against them.
+                freedBytes = doomed.sumOf { it.sizeBytes },
                 floorStillUnmet = false,
             ),
         )

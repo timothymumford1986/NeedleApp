@@ -47,7 +47,7 @@ class ConnectViewModelTest {
         assertFalse(viewModel.state.value.canConnect)
 
         viewModel.onServerChange("https://music.yourhome.net")
-        viewModel.onUsernameChange("tim")
+        viewModel.onUsernameChange("yourname")
         assertFalse("username and server alone must not be enough", viewModel.state.value.canConnect)
 
         viewModel.onPasswordChange("hunter2")
@@ -63,7 +63,7 @@ class ConnectViewModelTest {
         assertEquals(
             listOf(
                 "probeServer(https://music.yourhome.net)",
-                "connect(https://music.yourhome.net, tim)",
+                "connect(https://music.yourhome.net, yourname)",
                 "negotiateCapabilities()",
             ),
             repository.calls,
@@ -214,7 +214,7 @@ class ConnectViewModelTest {
 
     private fun filledIn(): ConnectViewModel = viewModel().apply {
         onServerChange("https://music.yourhome.net")
-        onUsernameChange("tim")
+        onUsernameChange("yourname")
         onPasswordChange("hunter2")
     }
 
