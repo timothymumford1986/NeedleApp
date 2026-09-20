@@ -146,7 +146,7 @@ class ConnectScreenshotTest {
         /** The pack's own placeholder values, typed in. */
         val FILLED = ConnectUiState(
             server = "https://music.yourhome.net",
-            username = "tim",
+            username = "yourname",
             password = "hunter2hunter2",
         )
 

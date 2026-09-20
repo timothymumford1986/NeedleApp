@@ -33,6 +33,7 @@ import app.needler.core.network.v1.V1Api
 import app.needler.core.network.v1.dto.ScrobblePreferencesDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import app.needler.core.data.settings.CrossfadeSettings as StoredCrossfade
@@ -96,13 +97,17 @@ public class DefaultPlaybackSettingsRepository(
      * The toggle governs whether Needler reports plays at all; where they go is the server's
      * business, so the label comes from these targets rather than hard-coding ListenBrainz.
      */
-    override fun observeScrobblePreferences(): Flow<ScrobblePreferences> =
-        settingsStore.playback.map { playback: StoredPlayback ->
-            ScrobblePreferences(
-                reportingEnabled = playback.scrobbleEnabled,
-                serverTargets = scrobbleTargets.value,
-            )
-        }
+    override fun observeScrobblePreferences(): Flow<ScrobblePreferences> = combine(
+        settingsStore.playback,
+        scrobbleTargets,
+    ) { playback: StoredPlayback, targets: List<String> ->
+        ScrobblePreferences(
+            reportingEnabled = playback.scrobbleEnabled,
+            // The destinations come from the server, so a refresh that learns about Last.fm must
+            // re-emit here rather than waiting for an unrelated settings change.
+            serverTargets = targets,
+        )
+    }
 
     override suspend fun setGaplessEnabled(enabled: Boolean) {
         settingsStore.setGaplessEnabled(enabled)

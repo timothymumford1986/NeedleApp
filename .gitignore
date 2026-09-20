@@ -28,3 +28,7 @@ signing.properties
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Screenshots taken from a real device: these contain your own server address,
+# account name and library. Never commit them.
+screenshots/device/

@@ -349,7 +349,17 @@ public object EntityMappers {
 
     // ---------------------------------------------------------------------- pulls
 
-    public fun pull(row: PullRow, isPendingSubmission: Boolean = false): Pull = Pull(
+    /**
+     * A pull row as the Pulls screen renders it.
+     *
+     * [isPendingSubmission] is derived rather than passed: a row with no task id that is merely
+     * queued is one the server has not seen yet, which is exactly what an offline request leaves
+     * behind. A row awaiting approval also has no task id, and is not that - hence the status check.
+     */
+    public fun pull(
+        row: PullRow,
+        isPendingSubmission: Boolean = row.taskId == null && row.status == PullStatusDb.QUEUED,
+    ): Pull = Pull(
         releaseGroupMbid = ReleaseGroupMbid(row.releaseGroupMbid),
         albumTitle = row.albumTitle.orEmpty(),
         artistName = row.albumArtistName.orEmpty(),

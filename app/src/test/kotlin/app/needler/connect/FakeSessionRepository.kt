@@ -123,7 +123,7 @@ internal class FakeSessionRepository(
             libraryDownloadAllowed = true,
         )
 
-        val USER = User(id = "1", username = "tim", role = UserRole.ADMIN)
+        val USER = User(id = "1", username = "yourname", role = UserRole.ADMIN)
 
         val AUTHENTICATED = SessionState.Authenticated(
             server = IDENTITY,

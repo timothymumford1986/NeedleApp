@@ -110,13 +110,13 @@ public class FakeV1Api : V1Api {
         record("createDeviceSession(" + deviceName + ")")
         return DeviceSessionResponseDto(
             token = "companion-token",
-            user = UserDto(id = "u1", role = "admin", username = "tim"),
+            user = UserDto(id = "u1", role = "admin", username = "yourname"),
         )
     }
 
     override suspend fun me(bearer: String?): UserDto {
         record("me")
-        return UserDto(id = "u1", role = "admin", username = "tim")
+        return UserDto(id = "u1", role = "admin", username = "yourname")
     }
 
     override suspend fun sessions(): SessionListDto {

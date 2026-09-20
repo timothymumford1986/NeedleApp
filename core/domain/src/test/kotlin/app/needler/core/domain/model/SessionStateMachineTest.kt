@@ -22,7 +22,7 @@ public class SessionStateMachineTest {
 
     private val server = ServerIdentity(baseUrl = "https://music.example.net")
 
-    private val user = User(id = "u1", username = "tim", role = UserRole.USER)
+    private val user = User(id = "u1", username = "yourname", role = UserRole.USER)
 
     private val capabilities = ServerCapabilities(
         subsonicEnabled = true,
