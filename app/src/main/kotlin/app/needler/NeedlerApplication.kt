@@ -1,6 +1,10 @@
 package app.needler
 
 import android.app.Application
+import android.util.Log
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
+import app.needler.core.data.background.NeedlerNotifier
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -18,24 +22,56 @@ import javax.inject.Inject
  * module, the Glance widgets and the Media3 service ask for. Those bindings go
  * in Hilt modules under :app, not here.
  *
- * Two things are expected to be added to this class, by whoever writes them:
- *  - `Configuration.Provider` returning a configuration with the injected
- *    `HiltWorkerFactory`, so the polling and download Workers in :core:data can
- *    be constructed by Hilt. Removing WorkManager's default initializer in
- *    AndroidManifest.xml is only correct once that exists.
- *  - notification channel creation for the three switchable notifications
- *    (pull finished, pull failed, new release from a followed artist).
+ * Two things happen here that could not happen anywhere else.
  *
- * Nothing that touches the network, the database or the credential store should
- * run in `onCreate`: REQUIREMENTS.md budgets cold start to library content at
- * under 1.2 s on a mid-range 2022 phone.
+ * **`Configuration.Provider` with the injected `HiltWorkerFactory`.** The
+ * polling, sync and download Workers in :core:data are `@HiltWorker`s with
+ * constructor dependencies, and WorkManager's default factory cannot build one:
+ * it would throw at job start, on a background thread, with nothing in the app
+ * saying why. Supplying this configuration is also what makes removing
+ * WorkManager's default initializer from AndroidManifest.xml correct - the two
+ * changes are one change, and doing the manifest half first would leave
+ * WorkManager uninitialised at runtime. Note that returning a configuration
+ * does not *do* anything on its own: initialisation happens on demand, the
+ * first time something calls `WorkManager.getInstance`.
+ *
+ * **Notification channel creation.** Mandatory since Android 8, and mandatory
+ * *before* anything posts: a notification sent to a channel that does not exist
+ * is dropped silently. It is done here because this is the only place
+ * guaranteed to run before a Worker in this process does.
+ *
+ * Nothing that touches the network, the database or the credential store runs
+ * in `onCreate`: REQUIREMENTS.md budgets cold start to library content at under
+ * 1.2 s on a mid-range 2022 phone. Channel creation is a handful of binder
+ * calls against a service that is already up, and no I/O of ours.
  */
 @HiltAndroidApp
-class NeedlerApplication : Application(), SingletonImageLoader.Factory {
+class NeedlerApplication : Application(), SingletonImageLoader.Factory, Configuration.Provider {
 
     @Inject lateinit var http: NeedlerHttpClient
 
     @Inject lateinit var subsonic: SubsonicApi
+
+    @Inject lateinit var workerFactory: HiltWorkerFactory
+
+    @Inject lateinit var notifier: NeedlerNotifier
+
+    /**
+     * Read by WorkManager the first time `getInstance` is called, which is long
+     * after Hilt has injected [workerFactory].
+     */
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(workerFactory)
+            .setMinimumLoggingLevel(Log.INFO)
+            .build()
+
+    override fun onCreate() {
+        super.onCreate()
+        // Idempotent, and the only thing standing between a posted notification
+        // and it being discarded without a trace.
+        notifier.ensureChannels()
+    }
 
     /**
      * Coil asks for this lazily, the first time a screen actually draws artwork, so nothing here runs

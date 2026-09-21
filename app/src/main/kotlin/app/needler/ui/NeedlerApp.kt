@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.needler.core.data.background.NotificationDestination
 import app.needler.core.design.motion.NeedlerSplash
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.ui.navigation.NeedlerNavHost
@@ -36,12 +37,19 @@ import app.needler.ui.navigation.NeedlerNavHost
  * The finished flag is saved, so a configuration change - a rotation, a fold,
  * an unfold - does not replay a 2.1 s animation over a session the user is
  * already several taps into.
+ *
+ * [notificationDestination] is where a notification tap wants to land. It is
+ * passed straight through rather than acted on here: the splash draws over the
+ * navigation, it does not gate it, so a tap on "your album arrived" opens the
+ * album underneath the animation and is already there when it clears.
  */
 @Composable
 fun NeedlerApp(
     widthSizeClass: WindowWidthSizeClass,
     modifier: Modifier = Modifier,
     pullsBadgeCount: Int = 0,
+    notificationDestination: NotificationDestination? = null,
+    onNotificationDestinationHandled: () -> Unit = {},
 ) {
     var splashFinished by rememberSaveable { mutableStateOf(false) }
 
@@ -53,6 +61,8 @@ fun NeedlerApp(
         NeedlerNavHost(
             widthSizeClass = widthSizeClass,
             pullsBadgeCount = pullsBadgeCount,
+            notificationDestination = notificationDestination,
+            onNotificationDestinationHandled = onNotificationDestinationHandled,
         )
 
         if (!splashFinished) {

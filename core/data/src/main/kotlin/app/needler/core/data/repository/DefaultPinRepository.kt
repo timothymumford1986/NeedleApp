@@ -1,5 +1,6 @@
 package app.needler.core.data.repository
 
+import app.needler.core.data.background.BackgroundWorkScheduler
 import app.needler.core.data.local.NeedlerDatabase
 import app.needler.core.data.local.cache.CacheIndex
 import app.needler.core.data.local.cache.CacheStatus
@@ -72,6 +73,16 @@ public class DefaultPinRepository(
     private val artworkCacheSize: ArtworkCacheSize,
     private val deleteFile: (String) -> Boolean = { path -> java.io.File(path).delete() },
     private val nowMillis: () -> Long = System::currentTimeMillis,
+    /**
+     * Starts and stops the `WorkManager` job that actually fetches the bytes.
+     *
+     * Still nothing here downloads: this class records intent and asks for the job. The distinction
+     * is the reason pinning is fast and survives the screen - the per-track `Range` GETs have to
+     * outlive both, so they cannot be repository work. Defaults to
+     * [BackgroundWorkScheduler.None] so the storage-policy tests construct this class without a
+     * `WorkManager`.
+     */
+    private val workScheduler: BackgroundWorkScheduler = BackgroundWorkScheduler.None,
 ) : PinRepository {
 
     // ---------------------------------------------------------------------- reads
@@ -174,6 +185,8 @@ public class DefaultPinRepository(
         // flag. That is the whole reason the pinned and cached tiers share a table.
         audioCacheDao.setAlbumPinned(mbid.value, pinned = true)
         albumDao.setState(mbid.value, AlbumStateDb.PINNED, inLibrary = true, updatedAt = now)
+        // The pin is intent; this is what turns it into bytes on the device.
+        workScheduler.scheduleAlbumDownload(mbid.value)
         return Outcome.Ok
     }
 
@@ -189,6 +202,9 @@ public class DefaultPinRepository(
     override suspend fun unpinAlbum(mbid: ReleaseGroupMbid): Outcome<RemovedDownload> {
         // The transaction collects the paths before dropping the rows, because afterwards there is no
         // record of what was on disk - and files cannot be deleted inside a Room transaction.
+        // The job goes first. A download still running would re-create rows for the album whose
+        // files this call is about to unlink, and the Storage figure would go back up on its own.
+        workScheduler.cancelAlbumDownload(mbid.value)
         val removed: RemovedAudio = database.removeDownloadedAlbum(mbid.value)
         var freed = 0L
         var files = 0
@@ -226,6 +242,7 @@ public class DefaultPinRepository(
             error = null,
             updatedAt = nowMillis(),
         )
+        workScheduler.scheduleAlbumDownload(mbid.value)
         return Outcome.Ok
     }
 
@@ -341,6 +358,11 @@ public class DefaultPinRepository(
         // afterwards there is no record of what was on disk, and a caller holding only file paths
         // could not say what the removal freed.
         val doomed: List<EvictionCandidateRow> = audioCacheDao.getAllRowsForRemoval()
+        // Every download job is stopped before the rows go, for the same reason as in unpinAlbum:
+        // a job still in flight would immediately start putting back what the user just removed.
+        doomed.map { it.key.releaseGroupMbid }.distinct().forEach { mbid ->
+            workScheduler.cancelAlbumDownload(mbid)
+        }
         val paths: List<String> = database.clearAllAudio()
         for (path in paths) {
             runCatching { deleteFile(path) }

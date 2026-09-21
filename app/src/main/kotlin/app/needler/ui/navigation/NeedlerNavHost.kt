@@ -2,6 +2,7 @@ package app.needler.ui.navigation
 
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -13,6 +14,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.needler.connect.ConnectRoute
+import app.needler.core.data.background.NotificationDestination
 import app.needler.feature.library.album.AlbumRoute
 import app.needler.feature.library.artist.ArtistRoute
 import app.needler.feature.library.library.LibraryRoute
@@ -69,6 +71,8 @@ fun NeedlerNavHost(
     navController: NavHostController = rememberNavController(),
     startConnected: Boolean = false,
     pullsBadgeCount: Int = 0,
+    notificationDestination: NotificationDestination? = null,
+    onNotificationDestinationHandled: () -> Unit = {},
 ) {
     NavHost(
         navController = navController,
@@ -90,6 +94,8 @@ fun NeedlerNavHost(
             NeedlerHome(
                 widthSizeClass = widthSizeClass,
                 pullsBadgeCount = pullsBadgeCount,
+                notificationDestination = notificationDestination,
+                onNotificationDestinationHandled = onNotificationDestinationHandled,
             )
         }
     }
@@ -110,10 +116,33 @@ private fun NeedlerHome(
     pullsBadgeCount: Int,
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController(),
+    notificationDestination: NotificationDestination? = null,
+    onNotificationDestinationHandled: () -> Unit = {},
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val selected = NeedlerDestination.fromRoute(backStackEntry?.destination?.route)
         ?: NeedlerDestination.Start
+
+    // A notification tap lands here rather than on the outer graph, because
+    // every destination it can name - an album, an artist, the Pulls tab - is
+    // inside the navigation chrome. The pack keeps the bottom bar and the nav
+    // rail visible on album and artist detail, so opening one from a
+    // notification is a change of content, not of context.
+    //
+    // It is consumed once: onNotificationDestinationHandled clears the state,
+    // so a rotation does not re-navigate the user away from wherever they went
+    // after the tap.
+    LaunchedEffect(notificationDestination) {
+        val target: String = when (val destination = notificationDestination) {
+            null -> return@LaunchedEffect
+            is NotificationDestination.Album -> albumRoute(destination.releaseGroupMbid)
+            is NotificationDestination.Artist -> artistRoute(destination.artistMbid)
+            NotificationDestination.Pulls -> NeedlerDestination.Pulls.route
+            NotificationDestination.Library -> NeedlerDestination.Library.route
+        }
+        navController.navigate(target) { launchSingleTop = true }
+        onNotificationDestinationHandled()
+    }
 
     NeedlerNavigationScaffold(
         widthSizeClass = widthSizeClass,

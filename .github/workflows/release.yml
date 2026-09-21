@@ -72,13 +72,35 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/needler-release.jks"
           echo "Decoded $(stat -c%s "$RUNNER_TEMP/needler-release.jks") bytes"
 
+      # Android compares versionCode to decide what is an update. A constant
+      # would mean no release could install over another, so both numbers come
+      # from the tag: v1.2.3 -> versionCode 10203, versionName 1.2.3.
+      - name: Derive the version from the tag
+        id: version
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          SEMVER="${TAG#v}"
+          MAJOR="${SEMVER%%.*}"; REST="${SEMVER#*.}"
+          MINOR="${REST%%.*}"; PATCH="${REST#*.}"; PATCH="${PATCH%%-*}"
+          if ! [ "$MAJOR" -eq "$MAJOR" ] 2>/dev/null || ! [ "$MINOR" -eq "$MINOR" ] 2>/dev/null || ! [ "$PATCH" -eq "$PATCH" ] 2>/dev/null; then
+            echo "::error::Tag '$TAG' is not vMAJOR.MINOR.PATCH; refusing to guess a versionCode."
+            exit 1
+          fi
+          CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$SEMVER" >> "$GITHUB_OUTPUT"
+          echo "$TAG -> versionCode $CODE, versionName $SEMVER"
+
       - name: Assemble
         env:
           NEEDLER_KEYSTORE: ${{ runner.temp }}/needler-release.jks
           NEEDLER_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           NEEDLER_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           NEEDLER_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --stacktrace
+        run: >-
+          ./gradlew assembleRelease --stacktrace
+          -Pneedler.versionCode=${{ steps.version.outputs.code }}
+          -Pneedler.versionName=${{ steps.version.outputs.name }}
 
       - name: Verify the APK is actually signed
         run: |

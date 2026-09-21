@@ -1,8 +1,22 @@
 package app.needler.core.data.di
 
 import android.content.Context
+import androidx.work.WorkManager
+import app.needler.core.data.background.AlbumDownloadEngine
+import app.needler.core.data.background.AlbumDownloader
+import app.needler.core.data.background.AndroidNeedlerNotifier
+import app.needler.core.data.background.BackgroundStateStore
+import app.needler.core.data.background.BackgroundWorkScheduler
+import app.needler.core.data.background.DataStoreBackgroundStateStore
+import app.needler.core.data.background.NeedlerNotifier
+import app.needler.core.data.background.PullPoller
+import app.needler.core.data.background.SubsonicTrackByteSource
+import app.needler.core.data.background.SyncTriggerResolver
+import app.needler.core.data.background.TrackByteSource
+import app.needler.core.data.background.WorkManagerScheduler
 import app.needler.core.data.local.NeedlerDatabase
 import app.needler.core.data.local.cache.AudioCacheStoreWriter
+import app.needler.core.data.local.cache.AudioDownloadStore
 import app.needler.core.data.local.cache.CacheIndex
 import app.needler.core.data.local.cache.DeviceFreeSpace
 import app.needler.core.data.local.cache.StatFsDeviceFreeSpace
@@ -52,6 +66,7 @@ import app.needler.core.domain.repository.SyncRepository
 import app.needler.core.network.CredentialProvider
 import app.needler.core.network.NeedlerHttpClient
 import app.needler.core.network.capability.CapabilityProbe
+import app.needler.core.network.media.RangeDownloader
 import app.needler.core.network.subsonic.DefaultSubsonicApi
 import app.needler.core.network.subsonic.SubsonicApi
 import app.needler.core.network.tls.CertificatePinStore
@@ -64,6 +79,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import java.io.File
@@ -185,17 +201,32 @@ public object DataModule {
     public fun provideArtworkCacheSize(@ApplicationContext context: Context): ArtworkCacheSize =
         DirectoryArtworkCacheSize(File(context.cacheDir, ARTWORK_DIRECTORY_NAME))
 
+    /**
+     * The one audio store, provided as itself so both of its entry points are the same object.
+     *
+     * Streaming writes and downloads share the file naming, the free-space policy and the row
+     * format; two instances would be two caches disagreeing about which `.part` file belongs to
+     * whom.
+     */
     @Provides
     @Singleton
-    public fun provideAudioCacheWriter(
+    public fun provideAudioCacheStoreWriter(
         audioCacheDao: AudioCacheDao,
         cacheIndex: CacheIndex,
         @AudioDirectory directory: File,
-    ): AudioCacheWriter = AudioCacheStoreWriter(
+    ): AudioCacheStoreWriter = AudioCacheStoreWriter(
         audioCacheDao = audioCacheDao,
         cacheIndex = cacheIndex,
         audioDirectory = directory,
     )
+
+    @Provides
+    @Singleton
+    public fun provideAudioCacheWriter(store: AudioCacheStoreWriter): AudioCacheWriter = store
+
+    @Provides
+    @Singleton
+    public fun provideAudioDownloadStore(store: AudioCacheStoreWriter): AudioDownloadStore = store
 
     // ---------------------------------------------------------------- transport
 
@@ -371,6 +402,7 @@ public object DataModule {
         writeQueue: WriteQueue,
         networkMonitor: NetworkMonitor,
         v1: V1Api,
+        workScheduler: BackgroundWorkScheduler,
     ): PullRepository = DefaultPullRepository(
         pullDao = pullDao,
         albumDao = albumDao,
@@ -378,6 +410,7 @@ public object DataModule {
         writeQueue = writeQueue,
         networkMonitor = networkMonitor,
         v1 = v1,
+        workScheduler = workScheduler,
     )
 
     @Provides
@@ -426,6 +459,7 @@ public object DataModule {
         deviceFreeSpace: DeviceFreeSpace,
         settingsStore: NeedlerSettingsStore,
         artworkCacheSize: ArtworkCacheSize,
+        workScheduler: BackgroundWorkScheduler,
     ): PinRepository = DefaultPinRepository(
         database = database,
         pinDao = pinDao,
@@ -436,6 +470,7 @@ public object DataModule {
         deviceFreeSpace = deviceFreeSpace,
         settingsStore = settingsStore,
         artworkCacheSize = artworkCacheSize,
+        workScheduler = workScheduler,
     )
 
     @Provides
@@ -492,6 +527,125 @@ public object DataModule {
         writeQueueFlusher = writeQueueFlusher,
         playlistRepository = playlistRepository,
         favouriteRepository = favouriteRepository,
+    )
+
+    // -------------------------------------------------------------- background
+
+    /**
+     * `WorkManager`, resolved on demand.
+     *
+     * `getInstance` is what triggers on-demand initialisation, which reads the `Configuration` that
+     * `NeedlerApplication` supplies with the `HiltWorkerFactory` in it. That is why the default
+     * initializer is removed from the manifest: with it still present, `WorkManager` would have
+     * initialised itself at content-provider time with a factory that cannot build these workers,
+     * and every job would fail to start with nothing in the app saying why.
+     */
+    @Provides
+    @Singleton
+    public fun provideWorkManager(@ApplicationContext context: Context): WorkManager =
+        WorkManager.getInstance(context)
+
+    @Provides
+    @Singleton
+    public fun provideBackgroundWorkScheduler(
+        workManager: WorkManager,
+        settingsStore: NeedlerSettingsStore,
+    ): BackgroundWorkScheduler = WorkManagerScheduler(
+        workManager = workManager,
+        settingsStore = settingsStore,
+    )
+
+    @Provides
+    @Singleton
+    public fun provideBackgroundStateStore(
+        @ApplicationContext context: Context,
+        @DataScope scope: CoroutineScope,
+    ): BackgroundStateStore = DataStoreBackgroundStateStore.create(context, scope)
+
+    @Provides
+    @Singleton
+    public fun provideNeedlerNotifier(@ApplicationContext context: Context): NeedlerNotifier =
+        AndroidNeedlerNotifier(context)
+
+    /**
+     * The resumable byte fetch behind "Pull local".
+     *
+     * `download?id=` per track, with a `Range` header, exactly as REQUIREMENTS.md requires. The
+     * album-zip endpoint is deliberately unused: it cannot resume, gives no per-track progress and
+     * makes the server build an archive it then throws away.
+     */
+    @Provides
+    @Singleton
+    public fun provideRangeDownloader(
+        http: NeedlerHttpClient,
+        credentials: CredentialProvider,
+    ): RangeDownloader = RangeDownloader(http = http, credentials = credentials)
+
+    @Provides
+    @Singleton
+    public fun provideTrackByteSource(
+        downloader: RangeDownloader,
+        subsonic: SubsonicApi,
+    ): TrackByteSource = SubsonicTrackByteSource(
+        downloader = downloader,
+        mediaUrls = subsonic.mediaUrls,
+    )
+
+    @Provides
+    @Singleton
+    public fun provideAlbumDownloader(
+        pinDao: PinDao,
+        trackDao: TrackDao,
+        audioCacheDao: AudioCacheDao,
+        albumDao: AlbumDao,
+        store: AudioDownloadStore,
+        byteSource: TrackByteSource,
+    ): AlbumDownloader = AlbumDownloader(
+        pinDao = pinDao,
+        trackDao = trackDao,
+        audioCacheDao = audioCacheDao,
+        albumDao = albumDao,
+        store = store,
+        byteSource = byteSource,
+    )
+
+    @Provides
+    @Singleton
+    public fun provideAlbumDownloadEngine(downloader: AlbumDownloader): AlbumDownloadEngine =
+        downloader
+
+    @Provides
+    @Singleton
+    public fun providePullPoller(
+        pullRepository: PullRepository,
+        syncRepository: SyncRepository,
+        pinRepository: PinRepository,
+        settingsStore: NeedlerSettingsStore,
+        backgroundState: BackgroundStateStore,
+        notifier: NeedlerNotifier,
+        albumDao: AlbumDao,
+        v1: V1Api,
+        scheduler: BackgroundWorkScheduler,
+    ): PullPoller = PullPoller(
+        pullRepository = pullRepository,
+        syncRepository = syncRepository,
+        pinRepository = pinRepository,
+        settings = { settingsStore.settings.first() },
+        backgroundState = backgroundState,
+        notifier = notifier,
+        albumDao = albumDao,
+        v1 = v1,
+        scheduler = scheduler,
+    )
+
+    @Provides
+    @Singleton
+    public fun provideSyncTriggerResolver(
+        syncStateDao: SyncStateDao,
+        credentials: CredentialProvider,
+    ): SyncTriggerResolver = SyncTriggerResolver(
+        syncStateDao = syncStateDao,
+        credentials = credentials,
     )
 
     private const val AUDIO_DIRECTORY_NAME: String = "audio"

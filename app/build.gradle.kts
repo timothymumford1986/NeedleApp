@@ -41,8 +41,15 @@ android {
 
     defaultConfig {
         applicationId = "app.needler"
-        versionCode = 1
-        versionName = "0.1.0"
+        // Android decides what counts as an update by comparing versionCode, so a
+        // constant here means no release can ever install over another: the system
+        // sees the same version and refuses. The release workflow derives both from
+        // the git tag and passes them in; a local build keeps the defaults, which is
+        // what you want for something you are only ever installing over itself.
+        //
+        // v1.2.3 becomes 10203, so the number always sorts the way the tag reads.
+        versionCode = providers.gradleProperty("needler.versionCode").orNull?.toIntOrNull() ?: 1
+        versionName = providers.gradleProperty("needler.versionName").orNull ?: "0.0.0-dev"
     }
 }
 
