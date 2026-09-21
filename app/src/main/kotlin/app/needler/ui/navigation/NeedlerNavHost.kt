@@ -9,8 +9,14 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.NavType
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import app.needler.connect.ConnectRoute
+import app.needler.feature.library.album.AlbumRoute
+import app.needler.feature.library.artist.ArtistRoute
+import app.needler.feature.library.library.LibraryRoute
+import app.needler.feature.player.crate.CrateRoute
 import app.needler.ui.placeholder.DestinationPlaceholder
 
 /** Onboarding. Screens 01 and 16. Owned by `:app`. */
@@ -18,6 +24,23 @@ private const val ROUTE_CONNECT = "connect"
 
 /** Everything after onboarding: the four destinations inside the navigation chrome. */
 private const val ROUTE_HOME = "home"
+
+/**
+ * Detail destinations, which live inside the scaffold alongside the four tabs.
+ *
+ * The argument names match what :feature:library reads from its SavedStateHandle
+ * (AlbumViewModel.ALBUM_ID_ARG and ArtistViewModel.ARTIST_ID_ARG). Values are bare
+ * MBIDs; the `al-` and `ar-` Subsonic prefixes never appear in a route.
+ */
+private const val ARG_ALBUM_ID = "albumId"
+private const val ARG_ARTIST_ID = "artistId"
+private const val ROUTE_ALBUM = "album/{$ARG_ALBUM_ID}"
+private const val ROUTE_ARTIST = "artist/{$ARG_ARTIST_ID}"
+private const val ROUTE_CRATE = "crate"
+
+private fun albumRoute(mbid: String): String = "album/$mbid"
+
+private fun artistRoute(mbid: String): String = "artist/$mbid"
 
 /**
  * The app's navigation graph.
@@ -109,12 +132,57 @@ private fun NeedlerHome(
             navController = navController,
             startDestination = NeedlerDestination.Start.route,
         ) {
-            // Library, Search and Pulls belong to their feature modules and
-            // Settings to :app; none of the four is built yet. Each renders the
-            // same labelled placeholder, which names the module that replaces
-            // it - see DestinationPlaceholder. Swapping one in is a one-line
-            // change here.
-            NeedlerDestination.entries.forEach { destination ->
+            composable(NeedlerDestination.Library.route) {
+                LibraryRoute(
+                    widthSizeClass = widthSizeClass,
+                    onOpenAlbum = { navController.navigate(albumRoute(it.value)) },
+                    onOpenArtist = { navController.navigate(artistRoute(it.value)) },
+                    onOpenSearch = { navController.navigate(NeedlerDestination.Search.route) },
+                )
+            }
+
+            // Album and artist detail sit inside the scaffold rather than above
+            // it: the pack keeps the bottom bar and the nav rail visible on
+            // screens 04, 05 and 11, so opening an album is a change of content,
+            // not a change of context.
+            //
+            // The arguments are bare MBIDs, never the `al-` / `ar-` prefixed
+            // Subsonic ids. The prefixes are a wire detail owned by :core:data.
+            composable(
+                route = ROUTE_ALBUM,
+                arguments = listOf(navArgument(ARG_ALBUM_ID) { type = NavType.StringType }),
+            ) {
+                AlbumRoute(
+                    widthSizeClass = widthSizeClass,
+                    onBack = { navController.popBackStack() },
+                    onOpenArtist = { navController.navigate(artistRoute(it.value)) },
+                )
+            }
+
+            composable(
+                route = ROUTE_ARTIST,
+                arguments = listOf(navArgument(ARG_ARTIST_ID) { type = NavType.StringType }),
+            ) {
+                ArtistRoute(
+                    widthSizeClass = widthSizeClass,
+                    onBack = { navController.popBackStack() },
+                    onOpenAlbum = { navController.navigate(albumRoute(it.value)) },
+                )
+            }
+
+            // The crate is a destination of its own so the back gesture leaves
+            // it without stopping playback.
+            composable(ROUTE_CRATE) {
+                CrateRoute(onBack = { navController.popBackStack() })
+            }
+
+            // Search, Pulls and Settings are still placeholders. Each names the
+            // module that will replace it - see DestinationPlaceholder.
+            listOf(
+                NeedlerDestination.Search,
+                NeedlerDestination.Pulls,
+                NeedlerDestination.Settings,
+            ).forEach { destination ->
                 composable(destination.route) { DestinationPlaceholder(destination) }
             }
         }
