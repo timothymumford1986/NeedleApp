@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Needler mark: a record, seen face on.
+
+  Taken from the wordmark the design pack draws on screens 01, 16 and the tablet
+  nav rail - a ring with a filled centre - and given the grooves from the launch
+  animation's record so it reads as a record rather than a generic circle.
+
+  Adaptive-icon geometry: the canvas is 108x108, but only the centre 66x66 circle
+  is guaranteed to survive whatever mask a launcher applies. Everything here sits
+  inside a 62 diameter, so no launcher shape can clip it. That is also why the
+  tonearm from the splash is not here: its pivot sits out near a corner, exactly
+  where a circular mask cuts.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- The record's outer edge. -->
+    <path
+        android:strokeColor="#F2F5EE"
+        android:strokeWidth="5.5"
+        android:pathData="M23,54 a31,31 0 1,0 62,0 a31,31 0 1,0 -62,0" />
+
+    <!-- Grooves. Faint on purpose: at 48dp on a home screen these read as
+         texture, not as separate rings. -->
+    <path
+        android:strokeColor="#F2F5EE"
+        android:strokeAlpha="0.22"
+        android:strokeWidth="1.3"
+        android:pathData="M30,54 a24,24 0 1,0 48,0 a24,24 0 1,0 -48,0" />
+    <path
+        android:strokeColor="#F2F5EE"
+        android:strokeAlpha="0.22"
+        android:strokeWidth="1.3"
+        android:pathData="M35.5,54 a18.5,18.5 0 1,0 37,0 a18.5,18.5 0 1,0 -37,0" />
+    <path
+        android:strokeColor="#F2F5EE"
+        android:strokeAlpha="0.22"
+        android:strokeWidth="1.3"
+        android:pathData="M41,54 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" />
+
+    <!-- The label. -->
+    <path
+        android:fillColor="#F2F5EE"
+        android:pathData="M45.5,54 a8.5,8.5 0 1,0 17,0 a8.5,8.5 0 1,0 -17,0" />
+
+    <!-- The spindle hole, punched back through to the background colour. -->
+    <path
+        android:fillColor="#0D120A"
+        android:pathData="M51.8,54 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
+</vector>

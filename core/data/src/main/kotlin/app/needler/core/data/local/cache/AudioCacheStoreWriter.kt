@@ -58,7 +58,7 @@ public class AudioCacheStoreWriter(
     private val deleteFile: (String) -> Boolean = { path -> File(path).delete() },
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-) : AudioCacheWriter {
+) : AudioCacheWriter, AudioDownloadStore {
 
     override suspend fun openWrite(source: PlayableSource.Stream): AudioCacheWriteHandle? {
         // 1. Transcoded bytes are never retained. The resolver set this flag from the format it
@@ -117,6 +117,86 @@ public class AudioCacheStoreWriter(
             partFile = partFile,
             targetFile = fileFor(source.key),
             stream = stream,
+            existing = existing,
+        )
+    }
+
+    /**
+     * Opens, or re-opens, a deliberate download of one track: the "Pull local" write path.
+     *
+     * Everything the streaming path decides is decided here too, by the same code: whether the
+     * bytes are already on the device, and whether keeping them leaves the device above its
+     * free-space floor. Two things are different, and both are consequences of this being a
+     * download rather than a stream.
+     *
+     * **The part file is not deleted.** [openWrite] deletes any `.part` before it starts, because a
+     * stream always begins at byte zero and a leftover partial would be prefixed to it. A download
+     * resumes: the bytes on disk are exactly what the `Range` header asks the server to continue
+     * from, and throwing them away would make every interruption cost the whole track again. This
+     * is the difference that makes a second entry point necessary rather than a flag.
+     *
+     * **Only the outstanding bytes are planned for.** Room is made for what is still to arrive, not
+     * for the whole track: the partial file is already occupying its share of the disk, and
+     * counting it twice would evict music to make room for bytes that are already there.
+     *
+     * There is no transcode check because there is nothing to check. Downloads fetch `download?id=`,
+     * which serves original bytes only; a transcode can only come from `stream?id=` with a format
+     * parameter, and this path never builds one.
+     */
+    override suspend fun openDownload(
+        key: TrackKey,
+        fetchHandle: TrackFetchHandle,
+        expectedSizeBytes: Long?,
+    ): AudioDownloadSlot {
+        val existing: AudioCacheEntity? = audioCacheDao.get(
+            releaseGroupMbid = key.releaseGroupMbid.value,
+            discNo = key.discNumber,
+            trackNo = key.trackNumber,
+        )
+        // Complete bytes from the same server-side file: nothing to fetch. This is what makes
+        // pinning an album you have been streaming nearly free - the rows are promoted, not
+        // re-downloaded.
+        if (existing != null &&
+            existing.complete &&
+            existing.sourceFileId == fetchHandle.fileId.value
+        ) {
+            return AudioDownloadSlot.AlreadyOnDevice
+        }
+
+        val partFile: File = partFileFor(key)
+        val onDisk: Long = withContext(ioDispatcher) {
+            if (partFile.isFile) partFile.length() else 0L
+        }
+        val outstanding: Long = expectedSizeBytes
+            ?.let { declared -> (declared - onDisk).coerceAtLeast(0L) }
+            ?: 0L
+
+        val (plan: EvictionPlan, _: EvictionResult) = cacheIndex.evictToFit(
+            incomingBytes = outstanding,
+            deleteFile = deleteFile,
+        )
+        // The cached-while-listening tier has given up everything it can and the write still would
+        // not fit. The caller records why and stops; it must not evict downloads to make room,
+        // because the user chose those and nothing in this app takes one away.
+        if (plan.skipsIncoming) return AudioDownloadSlot.NoRoom
+
+        val ready: Boolean = withContext(ioDispatcher) {
+            try {
+                audioDirectory.mkdirs()
+                audioDirectory.isDirectory
+            } catch (error: SecurityException) {
+                false
+            }
+        }
+        if (!ready) return AudioDownloadSlot.Unwritable
+
+        return FileDownloadSlot(
+            key = key,
+            fetchHandle = fetchHandle,
+            partFile = partFile,
+            targetFile = fileFor(key),
+            bytesOnDisk = onDisk,
+            expectedSizeBytes = expectedSizeBytes,
             existing = existing,
         )
     }
@@ -209,45 +289,18 @@ public class AudioCacheStoreWriter(
                 )
             }
 
-            val at: Long = nowMillis()
-            val row: AudioCacheEntity = AudioCacheEntity(
-                releaseGroupMbid = key.releaseGroupMbid.value,
-                discNo = key.discNumber,
-                trackNo = key.trackNumber,
-                recordingMbid = existing?.recordingMbid,
-                filePath = targetFile.path,
-                sizeBytes = written,
-                complete = true,
+            val row: CachedAudio = publishRow(
+                key = key,
+                fetchHandle = fetchHandle,
+                targetFile = targetFile,
+                writtenBytes = written,
+                existing = existing,
                 // A streamed write never changes the tier. Pinning is the user's decision and is
                 // made elsewhere; a row that was pinned before keeps its exemption from eviction.
                 pinned = existing?.pinned ?: false,
-                lastPlayedAt = existing?.lastPlayedAt ?: at,
-                playCount = existing?.playCount ?: 0,
-                downloadedAt = at,
-                // The fingerprint of the file *as it was fetched*, which is what makes the staleness
-                // check possible: sync overwrites the mirror, so a comparison against the mirror
-                // would only ever compare it with itself.
-                sourceFileId = fetchHandle.fileId.value,
-                sourceSizeBytes = fetchHandle.sizeBytes,
-                sourceDurationMs = fetchHandle.durationMs,
-                sourceFormat = formatToken(fetchHandle.format),
-                sourceBitrateKbps = fetchHandle.bitrateKbps,
             )
-            audioCacheDao.upsert(row)
             finished = true
-
-            return Outcome.Success(
-                CachedAudio(
-                    key = key,
-                    filePath = row.filePath,
-                    sizeOnDiskBytes = row.sizeBytes,
-                    isComplete = true,
-                    lastPlayedAt = Instant.fromEpochMilliseconds(row.lastPlayedAt),
-                    pinned = row.pinned,
-                    sourceHandle = fetchHandle,
-                    downloadedAt = Instant.fromEpochMilliseconds(at),
-                ),
-            )
+            return Outcome.Success(row)
         }
 
         override suspend fun abandon() {
@@ -272,6 +325,142 @@ public class AudioCacheStoreWriter(
             } catch (error: IOException) {
                 failed = true
             }
+        }
+    }
+
+    /**
+     * Writes the row that turns a file on disk into a track the app can find, and returns it.
+     *
+     * Shared by the streaming and the download paths on purpose. The fingerprint columns are the
+     * reason: they are the record of the file **as it was fetched**, and they are what every later
+     * staleness check compares against. Two call sites building that row independently is exactly
+     * how one of them ends up writing the mirror's current values instead of the fetched ones, at
+     * which point the check compares the mirror with itself and silently reports "unchanged" for
+     * ever.
+     *
+     * Called only after the bytes are already at [targetFile], so a crash here leaves a file no row
+     * names - which the next attempt at the same track overwrites, because the name is derived from
+     * the key.
+     */
+    private suspend fun publishRow(
+        key: TrackKey,
+        fetchHandle: TrackFetchHandle,
+        targetFile: File,
+        writtenBytes: Long,
+        existing: AudioCacheEntity?,
+        pinned: Boolean,
+    ): CachedAudio {
+        val at: Long = nowMillis()
+        val row = AudioCacheEntity(
+            releaseGroupMbid = key.releaseGroupMbid.value,
+            discNo = key.discNumber,
+            trackNo = key.trackNumber,
+            recordingMbid = existing?.recordingMbid,
+            filePath = targetFile.path,
+            sizeBytes = writtenBytes,
+            complete = true,
+            pinned = pinned,
+            lastPlayedAt = existing?.lastPlayedAt ?: at,
+            playCount = existing?.playCount ?: 0,
+            downloadedAt = at,
+            // The fingerprint of the file *as it was fetched*, which is what makes the staleness
+            // check possible: sync overwrites the mirror, so a comparison against the mirror would
+            // only ever compare it with itself.
+            sourceFileId = fetchHandle.fileId.value,
+            sourceSizeBytes = fetchHandle.sizeBytes,
+            sourceDurationMs = fetchHandle.durationMs,
+            sourceFormat = formatToken(fetchHandle.format),
+            sourceBitrateKbps = fetchHandle.bitrateKbps,
+        )
+        audioCacheDao.upsert(row)
+        return CachedAudio(
+            key = key,
+            filePath = row.filePath,
+            sizeOnDiskBytes = row.sizeBytes,
+            isComplete = true,
+            lastPlayedAt = Instant.fromEpochMilliseconds(row.lastPlayedAt),
+            pinned = row.pinned,
+            sourceHandle = fetchHandle,
+            downloadedAt = Instant.fromEpochMilliseconds(at),
+        )
+    }
+
+    /**
+     * One track's download, resumable across process death.
+     *
+     * Unlike the streaming handle this holds no open stream: the bytes are written by
+     * `RangeDownloader` straight into [partFile], which is what lets a `Range` GET pick up where a
+     * killed process left off. All this owns is the decision about when those bytes become a track.
+     */
+    private inner class FileDownloadSlot(
+        override val key: TrackKey,
+        private val fetchHandle: TrackFetchHandle,
+        override val partFile: File,
+        private val targetFile: File,
+        override val bytesOnDisk: Long,
+        override val expectedSizeBytes: Long?,
+        private val existing: AudioCacheEntity?,
+    ) : AudioDownloadSlot.Open {
+
+        private val mutex: Mutex = Mutex()
+        private var finished: Boolean = false
+
+        override suspend fun commit(completeLengthBytes: Long?): Outcome<CachedAudio> =
+            mutex.withLock {
+                if (finished) return Outcome.Failure(NeedlerError.Cancelled)
+
+                val written: Long = withContext(ioDispatcher) {
+                    if (partFile.isFile) partFile.length() else 0L
+                }
+                // The transfer's own view of the file's length wins over the mirror's. The mirror
+                // can legitimately be stale after a server-side quality upgrade, and failing a
+                // download whose bytes are complete because a cached number disagrees would leave
+                // the album permanently un-downloadable.
+                val expected: Long? = completeLengthBytes ?: expectedSizeBytes
+                if (written <= 0L || (expected != null && written < expected)) {
+                    discardLocked()
+                    return Outcome.Failure(
+                        NeedlerError.ProtocolViolation(
+                            "downloaded audio truncated for " + key.canonicalString +
+                                ": wrote " + written + " of " + expected,
+                        ),
+                    )
+                }
+
+                val moved: Boolean = withContext(ioDispatcher) {
+                    targetFile.delete()
+                    partFile.renameTo(targetFile)
+                }
+                if (!moved) {
+                    discardLocked()
+                    return Outcome.Failure(
+                        NeedlerError.Unexpected(
+                            "could not publish downloaded audio for " + key.canonicalString,
+                        ),
+                    )
+                }
+
+                val row: CachedAudio = publishRow(
+                    key = key,
+                    fetchHandle = fetchHandle,
+                    targetFile = targetFile,
+                    writtenBytes = written,
+                    existing = existing,
+                    // These bytes were asked for, so they join the downloaded tier and are exempt
+                    // from eviction from this moment on.
+                    pinned = true,
+                )
+                finished = true
+                Outcome.Success(row)
+            }
+
+        override suspend fun discard() {
+            mutex.withLock { discardLocked() }
+        }
+
+        private fun discardLocked() {
+            deleteFile(partFile.path)
+            finished = true
         }
     }
 

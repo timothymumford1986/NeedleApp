@@ -12,16 +12,11 @@
   Declaring an element that names a class which does not exist yet merges fine
   but fails lint's MissingClass check, so each one lands with its class.
 
-  Also not done here: removing WorkManager's default initializer. That is only
-  correct once NeedlerApplication implements Configuration.Provider and supplies
-  a HiltWorkerFactory; doing it first would leave WorkManager uninitialised at
-  runtime. When that arrives, add the InitializationProvider/tools:node="remove"
-  block for androidx.work.WorkManagerInitializer.
-
   android:label is a literal rather than @string/app_name so this file does not
   depend on a strings.xml that does not exist yet.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Talking to the DroppedNeedle server at all. -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -50,6 +45,8 @@
     <application
         android:name=".NeedlerApplication"
         android:label="Needler"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:allowBackup="false"
         android:theme="@style/Theme.Needler"
@@ -84,6 +81,33 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          WorkManager's default initializer is removed, and this is the half of
+          that change that lives in a manifest. The other half is
+          NeedlerApplication implementing Configuration.Provider with the
+          injected HiltWorkerFactory; neither is correct without the other.
+
+          Without the removal, androidx.startup initialises WorkManager at
+          content-provider time with its default worker factory, which cannot
+          construct a @HiltWorker: every job would then fail at start, on a
+          background thread, with nothing in the app reporting it. With the
+          removal, WorkManager initialises on demand the first time
+          WorkManager.getInstance is called and reads the configuration above.
+
+          Only the WorkManagerInitializer meta-data is removed, not the provider
+          itself: androidx.startup is shared, and tools:node="remove" on the
+          <provider> would take every other library's initializer with it.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
     </application>
 

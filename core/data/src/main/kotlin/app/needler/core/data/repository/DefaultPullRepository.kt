@@ -1,5 +1,6 @@
 package app.needler.core.data.repository
 
+import app.needler.core.data.background.BackgroundWorkScheduler
 import app.needler.core.data.local.dao.AlbumDao
 import app.needler.core.data.local.dao.PullDao
 import app.needler.core.data.local.entity.AlbumEntity
@@ -62,6 +63,15 @@ public class DefaultPullRepository(
     private val networkMonitor: NetworkMonitor,
     private val v1: V1Api,
     private val nowMillis: () -> Long = System::currentTimeMillis,
+    /**
+     * Arms the expedited check that runs a minute after a pull is placed.
+     *
+     * REQUIREMENTS.md schedules it because fifteen minutes is `WorkManager`'s floor for periodic
+     * work, so without it a small album that finishes two minutes after a poll would sit
+     * unannounced for a quarter of an hour - which is exactly when a user is watching. Defaults to
+     * [BackgroundWorkScheduler.None] so the repository tests need no `WorkManager`.
+     */
+    private val workScheduler: BackgroundWorkScheduler = BackgroundWorkScheduler.None,
 ) : PullRepository {
 
     private val activitySummaryState: MutableStateFlow<PullActivitySummary?> = MutableStateFlow(null)
@@ -170,6 +180,7 @@ public class DefaultPullRepository(
             is Outcome.Success -> {
                 val receipt: RequestReceipt = CatalogueMappers.receipt(call.value)
                 applyReceipt(request, receipt)
+                workScheduler.schedulePollAfterPull()
                 Outcome.Success(receipt)
             }
         }
@@ -251,6 +262,7 @@ public class DefaultPullRepository(
                         accepted.add(receipt)
                         applyReceipt(request, receipt)
                     }
+                    if (call.value.requested > 0) workScheduler.schedulePollAfterPull()
                     skippedCount += call.value.skipped
                 }
             }

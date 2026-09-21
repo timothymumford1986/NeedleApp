@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Themed-icon layer, Android 13+. The system tints this a single colour from the
+  user's wallpaper, so it carries no colours of its own and no punched spindle
+  hole - a hole would simply fill with the same tint and read as a solid dot.
+  The grooves are dropped too: at themed-icon contrast they turn to mush.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:pathData="M23,54 a31,31 0 1,0 62,0 a31,31 0 1,0 -62,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45.5,54 a8.5,8.5 0 1,0 17,0 a8.5,8.5 0 1,0 -17,0" />
+</vector>

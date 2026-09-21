@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The status-bar icon for every notification this app posts.
+
+  A notification small icon is drawn as a silhouette: Android takes the alpha
+  channel and discards the colours, so this is white-on-transparent and the
+  shape has to read with no fill variation at all. That is why it is the record
+  mark reduced further than the splash version - a ring, a spindle dot, and
+  nothing else. Anything with an interior detail turns into a blob at 24dp.
+
+  It lives in :core:data rather than :app because the workers that post are
+  here, and a notification whose icon resource lives in another module is one
+  module-boundary away from a missing-resource crash on a background thread.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="1.8"
+        android:fillColor="#00000000"
+        android:pathData="M 12,2.9 A 9.1,9.1 0 1 1 11.99,2.9 Z" />
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 12,9.7 A 2.3,2.3 0 1 1 11.99,9.7 Z" />
+
+</vector>
