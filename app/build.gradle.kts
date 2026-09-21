@@ -77,6 +77,12 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.hilt.navigation.compose)
 
+    // Artwork. :app owns the ImageLoader because turning a domain ArtworkRef into a URL needs the
+    // saved server address and the session, which no feature module may reach.
+    implementation(libs.coil.core)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+
     // REQUIREMENTS.md "Motion"/"Performance budgets": the 2.1 s record spin-up
     // has to overlay a screen that is already loaded and be skippable by a tap.
     implementation(libs.androidx.core.splashscreen)

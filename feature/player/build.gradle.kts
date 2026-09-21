@@ -16,6 +16,13 @@
 plugins {
     id("needler.android.library.compose")
     id("needler.hilt")
+    // Renders every screen in this module to a PNG under screenshots/ at the
+    // repository root, on the JVM, with no emulator:
+    //
+    //     ./gradlew :feature:player:recordScreenshots
+    //
+    // The plugin is documented in build-logic/.../ScreenshotConventionPlugin.kt.
+    id("needler.screenshots")
 }
 
 android {
@@ -29,4 +36,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.hilt.navigation.compose)
+
+    // The screenshot tests render the real screens, so they need the same
+    // Material 3 and Compose artifacts main compiles against. Material 3
+    // arrives transitively through :core:design's `api`, but the test source
+    // set names what it uses.
+    testImplementation(libs.compose.material3)
 }
