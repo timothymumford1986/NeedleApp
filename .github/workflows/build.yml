@@ -1,16 +1,12 @@
 name: build
 
-# JDK 17 is both AGP 9's minimum and the source/target level the project
-# compiles against (see build-logic/convention).
+# The project compiles to Java 17 bytecode but must be BUILT on JDK 21: Gradle
+# 9.6 runs on it, and Robolectric's screenshot renders need JVM flags the
+# screenshot convention plugin passes (--add-exports java.base/jdk.internal.access),
+# which behave correctly only on a modern JDK.
 #
-# WRAPPER CAVEAT: gradle/wrapper/gradle-wrapper.jar is a binary and is not in
-# the repository — it cannot be generated without a local Gradle install, and
-# fabricating one would be worse than not having it. Until someone runs
-# `gradle wrapper --gradle-version 9.6.1` locally and commits gradlew,
-# gradlew.bat and gradle-wrapper.jar, `./gradlew` does not exist. This workflow
-# therefore installs Gradle 9.6.1 itself and generates the wrapper if it is
-# missing, so CI is green either way. Once the wrapper is committed the generate
-# step is a no-op and can be deleted along with the `gradle-version` input.
+# compileSdk is 37 (packages are named android-37.x, not plain android-37):
+# okhttp-android 5.5.0 and the androidx libraries all declare minCompileSdk=37.
 
 on:
   push:
@@ -34,40 +30,36 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
-      # Also provides the Gradle build cache and dependency cache, keyed on the
-      # build files and gradle/libs.versions.toml.
+      # v3's default `packages` input is "tools platform-tools", and the `tools`
+      # package was removed from Google's SDK repository years ago, so every run
+      # died here. Pin v4 and name exactly what this project needs.
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-37.2 build-tools;37.0.0'
+
+      # Gradle itself comes from the committed wrapper. This step is only here
+      # for the build and dependency caches.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '9.6.1'
-          # Only the default branch writes to the shared cache.
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
-
-      # compileSdk 37 and build-tools may not be preinstalled on the runner;
-      # this accepts the SDK licences so AGP can fetch what it needs.
-      - name: Set up the Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Generate the Gradle wrapper if it is missing
-        run: |
-          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "gradle-wrapper.jar absent - generating the wrapper with Gradle $(gradle --version | awk '/^Gradle/ {print $2}')"
-            gradle wrapper --gradle-version 9.6.1
-          else
-            echo "gradle-wrapper.jar present - using the committed wrapper"
-          fi
 
       - name: Assemble debug
         run: ./gradlew assembleDebug --stacktrace
 
-      - name: Unit tests
-        run: ./gradlew test --stacktrace
+      # `needler.screenshots.verify` puts Roborazzi in compare-and-fail mode
+      # instead of overwrite, so the committed PNGs act as regression tests: a
+      # screen that changes unintentionally fails here rather than drifting
+      # silently. Without the flag the test task would simply rewrite them.
+      - name: Unit tests, and verify the committed screenshots
+        run: ./gradlew test -Pneedler.screenshots.verify --stacktrace
 
       - name: Upload debug APKs
         if: success()
@@ -79,12 +71,12 @@ jobs:
             wear/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
-      - name: Upload test reports
+      - name: Upload reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports
+          name: reports
           path: |
             **/build/reports/tests/
-            **/build/reports/problems/
+            **/build/outputs/roborazzi/
           if-no-files-found: ignore

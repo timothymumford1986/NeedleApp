@@ -209,14 +209,29 @@ public data class TrackFetchHandle(
 
     /**
      * True when bytes fetched with *this* handle must be treated as stale given [current], the handle
-     * the server reports now. Any difference in file id, size, duration, format or bitrate counts.
+     * the server reports now.
+     *
+     * A field counts as changed **only when both sides carry a value**. A null means "the server did
+     * not say", never "it changed" — and that distinction is the whole safety of this function. It is
+     * called on every play, so treating an absent value as a difference would evict and re-download a
+     * track each time it was played: one server release that stopped reporting durations would pull a
+     * user's entire offline library back down, quite possibly over mobile data, with no visible cause.
+     *
+     * The file id is the exception and is compared directly. It is never null, and a changed id is the
+     * server telling us plainly that these are different bytes.
      */
     public fun isStaleComparedTo(current: TrackFetchHandle): Boolean =
         fileId != current.fileId ||
-            sizeBytes != current.sizeBytes ||
-            durationMs != current.durationMs ||
-            format != current.format ||
-            bitrateKbps != current.bitrateKbps
+            differs(sizeBytes, current.sizeBytes) ||
+            differs(durationMs, current.durationMs) ||
+            differs(format, current.format) ||
+            differs(bitrateKbps, current.bitrateKbps)
+
+    private companion object {
+        /** Two values differ only when both are present and unequal. */
+        private fun differs(cached: Any?, current: Any?): Boolean =
+            cached != null && current != null && cached != current
+    }
 }
 
 /**
