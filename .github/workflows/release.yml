@@ -5,22 +5,20 @@ name: release
 #
 #     git tag v0.1.0 && git push origin v0.1.0
 #
-# SIGNING, and why this currently ships a debug-signed build.
+# SIGNING
 #
-# Android will not install an unsigned APK, so a release needs a key. A proper
-# release key has to live in GitHub Secrets, and it carries a permanent
-# commitment: Android identifies an app by its signing key, so if that key is
-# ever lost, no future build can be installed over an existing one -- users have
-# to uninstall first, losing their settings and downloaded music.
+# The release is signed with a key held in repository secrets: KEYSTORE_BASE64,
+# KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD. The keystore is decoded to a
+# file under RUNNER_TEMP, never into the workspace, so it cannot be picked up by
+# a later step or an artefact upload.
 #
-# Until that key exists, this publishes the debug-signed APK. It installs and
-# runs perfectly well on a phone. It is larger, unoptimised, debuggable, and
-# must never be the basis of a public distribution -- but for putting builds on
-# your own devices it is exactly right.
+# Android identifies an app by its signing key for the life of the install. This
+# key therefore cannot be rotated: if it is lost, no future build can install
+# over an existing one and every user has to uninstall first, losing their
+# settings and their downloaded music. A copy lives outside GitHub as well.
 #
-# To upgrade later: create a keystore, add KEYSTORE_BASE64, KEYSTORE_PASSWORD,
-# KEY_ALIAS and KEY_PASSWORD as repository secrets, give :app a release signing
-# config that reads them, and swap assembleDebug for assembleRelease below.
+# Signing also unlocks the size difference: the debug build is ~25 MB, the
+# minified and resource-shrunk release is ~3.8 MB.
 
 on:
   push:
@@ -63,8 +61,33 @@ jobs:
       - name: Unit tests
         run: ./gradlew test -Pneedler.screenshots.verify --stacktrace
 
+      - name: Decode the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::KEYSTORE_BASE64 is not set; refusing to publish an unsigned release."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/needler-release.jks"
+          echo "Decoded $(stat -c%s "$RUNNER_TEMP/needler-release.jks") bytes"
+
       - name: Assemble
-        run: ./gradlew assembleDebug --stacktrace
+        env:
+          NEEDLER_KEYSTORE: ${{ runner.temp }}/needler-release.jks
+          NEEDLER_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          NEEDLER_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          NEEDLER_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew assembleRelease --stacktrace
+
+      - name: Verify the APK is actually signed
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk
+
+      - name: Shred the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/needler-release.jks"
 
       - name: Name the artefacts after the tag
         id: rename
@@ -72,9 +95,9 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/needler-$TAG.apk"
-          if [ -f wear/build/outputs/apk/debug/wear-debug.apk ]; then
-            cp wear/build/outputs/apk/debug/wear-debug.apk "dist/needler-wear-$TAG.apk"
+          cp app/build/outputs/apk/release/app-release.apk "dist/needler-$TAG.apk"
+          if [ -f wear/build/outputs/apk/release/wear-release.apk ]; then
+            cp wear/build/outputs/apk/release/wear-release.apk "dist/needler-wear-$TAG.apk"
           fi
           ls -la dist
 
@@ -91,8 +114,5 @@ jobs:
             Your phone will warn you about installing from an unknown source — that
             is expected for an app distributed outside the Play Store, and you will
             need to allow it for whichever app you download with.
-
-            **This is a debug-signed build.** It installs and runs, but it is
-            unoptimised and debuggable. It is intended for your own devices.
 
             Requires Android 8.0 or later, and a DroppedNeedle server you can reach.

@@ -51,6 +51,36 @@ class AndroidApplicationConventionPlugin : Plugin<Project> {
                     compose = true
                 }
 
+                // Release signing comes entirely from the environment, never from a file in the
+                // repository. CI decodes the keystore from a secret into a path it passes here;
+                // locally you would export the same four variables. When they are absent the
+                // release build is simply unsigned, which is the correct behaviour for anyone who
+                // clones this: they get a build, not a key.
+                //
+                // Android identifies an app by its signing key for the life of the install, so
+                // this key cannot be rotated or regenerated. Losing it means no future build can
+                // install over an existing one -- users must uninstall first, losing their
+                // settings and their downloaded music.
+                val keystorePath: String? = providers.environmentVariable("NEEDLER_KEYSTORE").orNull
+                val keystorePassword: String? =
+                    providers.environmentVariable("NEEDLER_KEYSTORE_PASSWORD").orNull
+                val keyAlias: String? = providers.environmentVariable("NEEDLER_KEY_ALIAS").orNull
+                val keyPassword: String? =
+                    providers.environmentVariable("NEEDLER_KEY_PASSWORD").orNull
+                val canSign: Boolean = !keystorePath.isNullOrBlank() &&
+                    !keystorePassword.isNullOrBlank() &&
+                    !keyAlias.isNullOrBlank() &&
+                    !keyPassword.isNullOrBlank()
+
+                if (canSign) {
+                    signingConfigs.create("release") {
+                        storeFile = file(keystorePath!!)
+                        storePassword = keystorePassword
+                        this.keyAlias = keyAlias
+                        this.keyPassword = keyPassword
+                    }
+                }
+
                 buildTypes {
                     getByName("debug") {
                         isMinifyEnabled = false
@@ -62,6 +92,9 @@ class AndroidApplicationConventionPlugin : Plugin<Project> {
                             getDefaultProguardFile("proguard-android-optimize.txt"),
                             "proguard-rules.pro",
                         )
+                        if (canSign) {
+                            signingConfig = signingConfigs.getByName("release")
+                        }
                     }
                 }
 
