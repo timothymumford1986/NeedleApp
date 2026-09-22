@@ -263,6 +263,9 @@ public class DefaultSubsonicApi(
     private suspend fun envelope(url: HttpUrl): SubsonicEnvelope {
         engine.execute(request(url)).use { response ->
             val body = response.body.string()
+            // Before the envelope is parsed: a proxy login page is an HTTP 200 with an HTML body,
+            // and SubsonicEnvelopeParser would report it as a malformed envelope.
+            engine.requireNotIntercepted(response, body, ApiLane.Subsonic)
             if (!response.isSuccessful && body.isBlank()) {
                 // A non-200 with no envelope can only be an infrastructure answer (a proxy, or a
                 // 404 from the wrong base path); the v1 mapping covers those statuses correctly.

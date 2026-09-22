@@ -94,6 +94,21 @@ public object ErrorMapper {
         }
 
         is NetworkError.Serialisation -> NeedlerError.ProtocolViolation(error.message.orEmpty())
+
+        // The domain has no case for an authenticating proxy, and `:core:domain` is not this
+        // module's to change, so it travels as `Unexpected` with the transport error itself as the
+        // cause. That is not a fudge: `Unexpected.cause` is typed `Throwable`, `NetworkError` *is*
+        // a `Throwable`, and the Connect screen reads the structured
+        // `NetworkError.AuthenticatingProxy` back out of it to render the host and the vendor. A
+        // `NeedlerError.AuthenticatingProxy(host, vendor)` is the right home for this and is
+        // reported as a follow-up; everything below the UI already behaves correctly, because a
+        // proxy standing in the way is genuinely not retryable and not offline.
+        is NetworkError.AuthenticatingProxy -> NeedlerError.Unexpected(
+            // Host and vendor only. `ProxyInterception.requestedUrl` is redacted, and no header
+            // value ever reaches this object.
+            detail = error.interception.summary,
+            cause = error,
+        )
     }
 
     /** Anything that escaped the clients unclassified. Never let a raw throwable reach the UI. */

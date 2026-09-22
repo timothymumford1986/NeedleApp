@@ -42,5 +42,13 @@ fun ConnectRoute(
         onConnect = viewModel::connect,
         onTrustCertificate = viewModel::trustCertificate,
         modifier = modifier,
+        onCancelConnect = viewModel::cancelConnect,
+        proxyCallbacks = ConnectProxyCallbacks(
+            onExpandedChange = viewModel::onProxyExpandedChange,
+            onPresetChange = viewModel::onProxyPresetChange,
+            onFieldChange = viewModel::onProxyFieldChange,
+            onCustomHeaderChange = viewModel::onCustomHeaderChange,
+            onAddCustomHeader = viewModel::onAddCustomHeader,
+        ),
     )
 }

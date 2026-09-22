@@ -2,10 +2,12 @@ package app.needler.connect
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
@@ -33,15 +37,35 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import app.needler.core.design.component.NeedlerChevronDownIcon
+import app.needler.core.design.component.NeedlerChevronRightIcon
 import app.needler.core.design.component.NeedlerLabelledTextField
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerSecondaryButton
+import app.needler.core.design.component.NeedlerSegmentedTabs
 import app.needler.core.design.component.NeedlerStrokeIcon
+import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.NeedlerWordmark
 import app.needler.core.design.motion.NeedlerSpinningRecord
 import app.needler.core.design.motion.needlerRise
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.CertificateInfo
+import app.needler.core.network.ProxyCredentials
+
+/**
+ * The optional proxy section's callbacks, bundled.
+ *
+ * Five more lambdas threaded through three layout functions would be five more parameters on a
+ * signature that is already long, for a section most users never open. Defaults are no-ops so a
+ * preview or a screenshot can render any state without wiring any of them.
+ */
+data class ConnectProxyCallbacks(
+    val onExpandedChange: (Boolean) -> Unit = {},
+    val onPresetChange: (ProxyPreset) -> Unit = {},
+    val onFieldChange: (ProxyField, String) -> Unit = { _, _ -> },
+    val onCustomHeaderChange: (Int, String, String) -> Unit = { _, _, _ -> },
+    val onAddCustomHeader: () -> Unit = {},
+)
 
 /**
  * Connect - screens 01 (phone) and 16 (tablet).
@@ -87,6 +111,8 @@ fun ConnectScreen(
     onConnect: () -> Unit,
     onTrustCertificate: (CertificateInfo) -> Unit,
     modifier: Modifier = Modifier,
+    onCancelConnect: () -> Unit = {},
+    proxyCallbacks: ConnectProxyCallbacks = ConnectProxyCallbacks(),
 ) {
     if (widthSizeClass == WindowWidthSizeClass.Expanded) {
         TabletConnect(
@@ -95,7 +121,9 @@ fun ConnectScreen(
             onUsernameChange = onUsernameChange,
             onPasswordChange = onPasswordChange,
             onConnect = onConnect,
+            onCancelConnect = onCancelConnect,
             onTrustCertificate = onTrustCertificate,
+            proxyCallbacks = proxyCallbacks,
             modifier = modifier,
         )
     } else {
@@ -105,7 +133,9 @@ fun ConnectScreen(
             onUsernameChange = onUsernameChange,
             onPasswordChange = onPasswordChange,
             onConnect = onConnect,
+            onCancelConnect = onCancelConnect,
             onTrustCertificate = onTrustCertificate,
+            proxyCallbacks = proxyCallbacks,
             modifier = modifier,
         )
     }
@@ -128,7 +158,9 @@ private fun PhoneConnect(
     onUsernameChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onConnect: () -> Unit,
+    onCancelConnect: () -> Unit,
     onTrustCertificate: (CertificateInfo) -> Unit,
+    proxyCallbacks: ConnectProxyCallbacks,
     modifier: Modifier = Modifier,
 ) {
     val colors = NeedlerTheme.colors
@@ -185,13 +217,20 @@ private fun PhoneConnect(
                 onConnect = onConnect,
                 modifier = Modifier.needlerRise(stagger = 2),
             )
+
+            ProxySection(
+                proxy = state.proxy,
+                callbacks = proxyCallbacks,
+                enabled = !state.connecting,
+            )
         }
 
         Spacer(modifier = Modifier.height(spacing.step8))
 
-        ConnectButton(
+        ConnectActions(
             state = state,
             onConnect = onConnect,
+            onCancelConnect = onCancelConnect,
             modifier = Modifier.needlerRise(stagger = 3),
         )
     }
@@ -212,7 +251,9 @@ private fun TabletConnect(
     onUsernameChange: (String) -> Unit,
     onPasswordChange: (String) -> Unit,
     onConnect: () -> Unit,
+    onCancelConnect: () -> Unit,
     onTrustCertificate: (CertificateInfo) -> Unit,
+    proxyCallbacks: ConnectProxyCallbacks,
     modifier: Modifier = Modifier,
 ) {
     val colors = NeedlerTheme.colors
@@ -284,7 +325,16 @@ private fun TabletConnect(
                     onPasswordChange = onPasswordChange,
                     onConnect = onConnect,
                 )
-                ConnectButton(state = state, onConnect = onConnect)
+                ProxySection(
+                    proxy = state.proxy,
+                    callbacks = proxyCallbacks,
+                    enabled = !state.connecting,
+                )
+                ConnectActions(
+                    state = state,
+                    onConnect = onConnect,
+                    onCancelConnect = onCancelConnect,
+                )
             }
         }
     }
@@ -349,31 +399,256 @@ private fun ConnectForm(
     }
 }
 
-/** The pack's 56dp accent button, with its tonearm-and-record glyph. */
+/**
+ * The pack's 56dp accent button, with its tonearm-and-record glyph - plus the two things an attempt
+ * in flight has to offer.
+ *
+ * The bug this replaces: a real Cloudflare Access server left this screen reading "Connecting…" for
+ * forty-five seconds, with the button disabled, nothing moving and no way out. So an attempt now
+ * always has a way to stop it, and after a few seconds it says out loud that it is still trying.
+ * That is the floor for any attempt, whatever the cause - a slow VPN handshake produces the same
+ * dead screen as an interception.
+ *
+ * The notice is a polite live region rather than an assertive one: it is reassurance, and it must
+ * not interrupt a screen reader that is reading the form.
+ */
 @Composable
-private fun ConnectButton(
+private fun ConnectActions(
     state: ConnectUiState,
     onConnect: () -> Unit,
+    onCancelConnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    NeedlerPrimaryButton(
-        text = if (state.connecting) "Connecting…" else "Connect",
-        onClick = onConnect,
-        modifier = modifier.fillMaxWidth(),
-        enabled = state.canConnect,
-        leadingIcon = { tint ->
-            NeedlerStrokeIcon(
-                pathData = "M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4",
-                tint = tint,
-                size = 20.dp,
+    val colors = NeedlerTheme.colors
+    val typography = NeedlerTheme.typography
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step4),
+    ) {
+        if (state.connecting && state.attemptIsSlow) {
+            Text(
+                text = STILL_TRYING,
+                style = typography.caption,
+                color = colors.textMuted,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
-        },
-        contentDescription = if (state.connecting) {
-            "Connecting to the server"
-        } else {
-            "Connect to the server"
-        },
-    )
+        }
+
+        NeedlerPrimaryButton(
+            text = if (state.connecting) "Connecting…" else "Connect",
+            onClick = onConnect,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = state.canConnect,
+            leadingIcon = { tint ->
+                NeedlerStrokeIcon(
+                    pathData = "M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4",
+                    tint = tint,
+                    size = 20.dp,
+                )
+            },
+            contentDescription = if (state.connecting) {
+                "Connecting to the server"
+            } else {
+                "Connect to the server"
+            },
+        )
+
+        if (state.connecting) {
+            NeedlerSecondaryButton(
+                text = "Stop",
+                onClick = onCancelConnect,
+                modifier = Modifier.fillMaxWidth(),
+                filledSurface = false,
+                contentDescription = "Stop trying to connect",
+            )
+        }
+    }
+}
+
+/**
+ * The optional fields for a server behind an authenticating proxy, behind a disclosure.
+ *
+ * Collapsed by default, and the label is vendor-neutral. Almost nobody has a proxy in front of
+ * their server, and a form that asks about one up front teaches every user that this app is
+ * complicated to set up. The people who do have one arrive here from the failure notice above,
+ * which opens this section for them.
+ *
+ * Inside, the presets exist because the mechanism is not what a user knows: a Cloudflare user made
+ * a *service token*, a user behind `nginx` set up a password. Both are headers underneath, and the
+ * transport knows nothing about either - see `ProxyCredentials`.
+ */
+@Composable
+private fun ProxySection(
+    proxy: ProxyFormState,
+    callbacks: ConnectProxyCallbacks,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val colors = NeedlerTheme.colors
+    val typography = NeedlerTheme.typography
+    val spacing = NeedlerTheme.spacing
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(spacing.step9),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = NeedlerTheme.sizes.minTouchTarget)
+                .clickable(
+                    enabled = enabled,
+                    role = Role.Button,
+                    onClick = { callbacks.onExpandedChange(!proxy.expanded) },
+                )
+                .semantics {
+                    contentDescription = if (proxy.expanded) {
+                        "Hide proxy credentials"
+                    } else {
+                        "Show proxy credentials"
+                    }
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (proxy.expanded) {
+                NeedlerChevronDownIcon(tint = colors.accent)
+            } else {
+                NeedlerChevronRightIcon(tint = colors.accent)
+            }
+            Text(text = PROXY_DISCLOSURE, style = typography.body, color = colors.accent)
+        }
+
+        if (!proxy.expanded) return@Column
+
+        Text(
+            text = PROXY_EXPLANATION,
+            style = typography.caption,
+            color = colors.textMuted,
+        )
+
+        NeedlerSegmentedTabs(
+            options = ProxyPreset.entries.map { it.label },
+            selectedIndex = ProxyPreset.entries.indexOf(proxy.preset),
+            onSelect = { index -> callbacks.onPresetChange(ProxyPreset.entries[index]) },
+            label = "Kind of proxy credential",
+            enabled = enabled,
+        )
+
+        when (proxy.preset) {
+            ProxyPreset.CloudflareAccess -> {
+                NeedlerLabelledTextField(
+                    label = "CF-ACCESS-CLIENT-ID",
+                    value = proxy.cloudflareClientId,
+                    onValueChange = { callbacks.onFieldChange(ProxyField.CloudflareClientId, it) },
+                    placeholder = "0123abc….access",
+                    helperText = "From a Cloudflare Access service token.",
+                    enabled = enabled,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        imeAction = ImeAction.Next,
+                        autoCorrectEnabled = false,
+                    ),
+                )
+                NeedlerLabelledTextField(
+                    label = "CF-ACCESS-CLIENT-SECRET",
+                    value = proxy.cloudflareClientSecret,
+                    onValueChange = {
+                        callbacks.onFieldChange(ProxyField.CloudflareClientSecret, it)
+                    },
+                    placeholder = PASSWORD_PLACEHOLDER,
+                    helperText = "Kept on this device only, with your other credentials.",
+                    enabled = enabled,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Next,
+                        autoCorrectEnabled = false,
+                    ),
+                )
+            }
+
+            ProxyPreset.BasicAuth -> {
+                NeedlerLabelledTextField(
+                    label = "PROXY USERNAME",
+                    value = proxy.basicUsername,
+                    onValueChange = { callbacks.onFieldChange(ProxyField.BasicUsername, it) },
+                    placeholder = "yourname",
+                    helperText = "Sent as Proxy-Authorization, not as your server login.",
+                    enabled = enabled,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        imeAction = ImeAction.Next,
+                        autoCorrectEnabled = false,
+                    ),
+                )
+                NeedlerLabelledTextField(
+                    label = "PROXY PASSWORD",
+                    value = proxy.basicPassword,
+                    onValueChange = { callbacks.onFieldChange(ProxyField.BasicPassword, it) },
+                    placeholder = PASSWORD_PLACEHOLDER,
+                    enabled = enabled,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Next,
+                        autoCorrectEnabled = false,
+                    ),
+                )
+            }
+
+            ProxyPreset.Custom -> {
+                proxy.customHeaders.forEachIndexed { index, draft ->
+                    NeedlerLabelledTextField(
+                        label = "HEADER " + (index + 1) + " NAME",
+                        value = draft.name,
+                        onValueChange = {
+                            callbacks.onCustomHeaderChange(index, it, draft.value)
+                        },
+                        placeholder = "X-Api-Key",
+                        enabled = enabled,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Text,
+                            imeAction = ImeAction.Next,
+                            autoCorrectEnabled = false,
+                        ),
+                    )
+                    NeedlerLabelledTextField(
+                        label = "HEADER " + (index + 1) + " VALUE",
+                        value = draft.value,
+                        onValueChange = {
+                            callbacks.onCustomHeaderChange(index, draft.name, it)
+                        },
+                        placeholder = PASSWORD_PLACEHOLDER,
+                        enabled = enabled,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Next,
+                            autoCorrectEnabled = false,
+                        ),
+                    )
+                }
+                if (proxy.customHeaders.size < ProxyCredentials.MAX_HEADERS) {
+                    NeedlerTextButton(
+                        text = "Add another header",
+                        onClick = callbacks.onAddCustomHeader,
+                        enabled = enabled,
+                    )
+                }
+            }
+        }
+
+        if (proxy.problem != null) {
+            Text(
+                text = proxy.problem,
+                style = typography.caption,
+                color = colors.accent,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
+            )
+        }
+    }
 }
 
 /**
@@ -444,7 +719,12 @@ private fun ConnectFailureNotice(
                 )
             }
 
-            ConnectFailure.SubsonicDisabled -> {
+            // Three failures whose answer is "change something outside this screen, then retry":
+            // an admin setting, a proxy rule or credential, and an attempt the user stopped.
+            ConnectFailure.SubsonicDisabled,
+            is ConnectFailure.ProxyIntercepted,
+            ConnectFailure.Cancelled,
+            -> {
                 NeedlerSecondaryButton(
                     text = "Try again",
                     onClick = onRetry,
@@ -505,3 +785,17 @@ private const val HEADLINE = "Point me at your Dropped Needle."
 
 /** The pack draws sixteen bullets in the password field. */
 private const val PASSWORD_PLACEHOLDER = "••••••••••••••••"
+
+/**
+ * Vendor-neutral on purpose. Cloudflare Access is the common case, but Authelia, authentik,
+ * `oauth2-proxy` and a plain basic-auth reverse proxy are the same wall, and a label naming one
+ * vendor reads as "not for me" to everyone behind another.
+ */
+private const val PROXY_DISCLOSURE = "My server is behind a proxy that needs its own credentials"
+
+private const val PROXY_EXPLANATION =
+    "Needler will send these with every request, including artwork and audio. They are kept on " +
+        "this device with your other credentials and never shown again."
+
+private const val STILL_TRYING = "Still trying to reach the server…"
+

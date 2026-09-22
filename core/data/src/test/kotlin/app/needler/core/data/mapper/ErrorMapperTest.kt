@@ -4,6 +4,9 @@ import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineCause
 import app.needler.core.network.ApiLane
 import app.needler.core.network.NetworkError
+import app.needler.core.network.ProxyInterception
+import app.needler.core.network.ProxySignal
+import app.needler.core.network.ProxyVendor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -182,6 +185,34 @@ public class ErrorMapperTest {
         )
 
         assertTrue(error is NeedlerError.ProtocolViolation)
+    }
+
+    @Test
+    public fun `an authenticating proxy keeps its host and vendor all the way to the UI`() {
+        val transport = NetworkError.AuthenticatingProxy(
+            ProxyInterception(
+                proxyHost = "team.cloudflareaccess.com",
+                vendor = ProxyVendor.CloudflareAccess,
+                signal = ProxySignal.CrossHostRedirect,
+                requestedHost = "music.example.net",
+                requestedUrl = "https://music.example.net/api/v1/auth/providers",
+                statusCode = 302,
+                proxyCredentialsSent = true,
+            ),
+            ApiLane.V1,
+        )
+
+        val error: NeedlerError = ErrorMapper.toNeedlerError(transport)
+
+        // `:core:domain` has no case for this, so the structured error travels as the cause. The
+        // Connect screen reads it back out; nothing else has to care.
+        assertTrue(error is NeedlerError.Unexpected)
+        assertEquals(transport, (error as NeedlerError.Unexpected).cause)
+        assertTrue(error.diagnostic.contains("team.cloudflareaccess.com"))
+        assertTrue(error.diagnostic.contains("Cloudflare Access"))
+        // Not retryable: the proxy will refuse the next request identically.
+        assertFalse(error.isRetryable)
+        assertFalse(transport.isTransient)
     }
 
     @Test

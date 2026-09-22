@@ -6,8 +6,13 @@ import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.repository.SessionRepository
+import app.needler.core.network.ProxyCredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,13 +52,29 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class ConnectViewModel @Inject constructor(
     private val sessions: SessionRepository,
+    private val proxyCredentials: ProxyCredentialStore,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(ConnectUiState())
+    private val _state = MutableStateFlow(
+        // Whatever proxy headers are already saved come back into the form, so re-onboarding
+        // against a server that needs them does not quietly drop the thing making it reachable.
+        ConnectUiState(proxy = ProxyFormState.from(proxyCredentials.proxyCredentials())),
+    )
     val state: StateFlow<ConnectUiState> = _state.asStateFlow()
 
     /** The name this device's companion session is registered under. */
     private val deviceName: String = DeviceSessionName.current()
+
+    /** The attempt in flight, so the user can stop it. */
+    private var attempt: Job? = null
+
+    /**
+     * How long an attempt runs before the screen admits it is still trying.
+     *
+     * Five seconds is well inside the 10-second connect timeout, so a genuinely slow server shows
+     * the notice while it is still working rather than only after it has failed.
+     */
+    internal var slowNoticeAfterMillis: Long = SLOW_NOTICE_MILLIS
 
     fun onServerChange(value: String) = _state.update { it.copy(server = value, failure = null) }
 
@@ -63,11 +84,92 @@ class ConnectViewModel @Inject constructor(
     fun onPasswordChange(value: String) =
         _state.update { it.copy(password = value, failure = null) }
 
+    // ---- the optional proxy form --------------------------------------------
+
+    fun onProxyExpandedChange(expanded: Boolean) =
+        _state.update { it.copy(proxy = it.proxy.copy(expanded = expanded, problem = null)) }
+
+    fun onProxyPresetChange(preset: ProxyPreset) = _state.update {
+        it.copy(proxy = it.proxy.copy(preset = preset, problem = null), failure = null)
+    }
+
+    fun onProxyFieldChange(field: ProxyField, value: String) = _state.update { state ->
+        val proxy = when (field) {
+            ProxyField.CloudflareClientId -> state.proxy.copy(cloudflareClientId = value)
+            ProxyField.CloudflareClientSecret -> state.proxy.copy(cloudflareClientSecret = value)
+            ProxyField.BasicUsername -> state.proxy.copy(basicUsername = value)
+            ProxyField.BasicPassword -> state.proxy.copy(basicPassword = value)
+        }
+        state.copy(proxy = proxy.copy(problem = null), failure = null)
+    }
+
+    fun onCustomHeaderChange(index: Int, name: String, value: String) = _state.update {
+        it.copy(proxy = it.proxy.withCustomHeader(index, name, value), failure = null)
+    }
+
+    fun onAddCustomHeader() = _state.update { it.copy(proxy = it.proxy.withExtraCustomHeader()) }
+
+    // ---- the attempt --------------------------------------------------------
+
     fun connect() {
         val current = _state.value
         if (!current.canConnect) return
-        _state.update { it.copy(connecting = true, failure = null) }
-        viewModelScope.launch { runConnect(current) }
+
+        // Refused before a single packet leaves: a bad header name produces a proxy 401 that reads
+        // exactly like a wrong password, and a control character in a value is a request Needler
+        // must not make at all.
+        val problem: String? = current.proxy.validationProblem()
+        if (problem != null) {
+            _state.update { it.copy(proxy = it.proxy.copy(problem = problem, expanded = true)) }
+            return
+        }
+
+        // Saved before the first request rather than after a successful sign-in: the public probe
+        // goes through the same proxy as everything else, so it has to carry the headers too.
+        if (!proxyCredentials.saveProxyCredentials(current.proxy.credentials())) {
+            _state.update {
+                it.copy(
+                    proxy = it.proxy.copy(
+                        problem = "Those headers could not be saved to this device.",
+                        expanded = true,
+                    ),
+                )
+            }
+            return
+        }
+
+        _state.update { it.copy(connecting = true, attemptIsSlow = false, failure = null) }
+        attempt = viewModelScope.launch {
+            val notice = launch {
+                delay(slowNoticeAfterMillis)
+                _state.update { it.copy(attemptIsSlow = true) }
+            }
+            try {
+                runConnect(current)
+            } finally {
+                notice.cancel()
+            }
+        }
+    }
+
+    /**
+     * Stops the attempt in flight.
+     *
+     * Cancelling the coroutine cancels the OkHttp call underneath it - `:core:network` runs every
+     * call through `suspendCancellableCoroutine` and calls `call.cancel()` on cancellation - so this
+     * releases the socket rather than leaving it to time out in the background.
+     */
+    fun cancelConnect() {
+        // Guarded on the state, not only on the job: an attempt that has already finished leaves a
+        // completed Job behind, and cancelling that would replace a successful connect with a
+        // "stopped" notice.
+        if (!_state.value.connecting) return
+        val running: Job = attempt ?: return
+        attempt = null
+        running.cancel()
+        _state.update {
+            it.copy(connecting = false, attemptIsSlow = false, failure = ConnectFailure.Cancelled)
+        }
     }
 
     /**
@@ -92,7 +194,9 @@ class ConnectViewModel @Inject constructor(
     private suspend fun runConnect(form: ConnectUiState) {
         val typedUrl = form.server.trim()
 
+        currentCoroutineContext().ensureActive()
         val probe = sessions.probeServer(typedUrl)
+        currentCoroutineContext().ensureActive()
         val serverUrl = when (probe) {
             is Outcome.Failure -> return fail(probe.error, typedUrl)
             is Outcome.Success -> probe.value.identity.baseUrl
@@ -104,6 +208,7 @@ class ConnectViewModel @Inject constructor(
             password = form.password,
             deviceName = deviceName,
         )
+        currentCoroutineContext().ensureActive()
         if (connected is Outcome.Failure) return fail(connected.error, typedUrl)
 
         when (val capabilities = sessions.negotiateCapabilities()) {
@@ -118,9 +223,12 @@ class ConnectViewModel @Inject constructor(
             }
         }
 
+        currentCoroutineContext().ensureActive()
+        attempt = null
         _state.update {
             it.copy(
                 connecting = false,
+                attemptIsSlow = false,
                 failure = null,
                 connected = true,
                 // The account password is never needed again: the two secrets
@@ -134,8 +242,26 @@ class ConnectViewModel @Inject constructor(
     }
 
     private fun fail(error: NeedlerError, typedUrl: String) {
+        attempt = null
         _state.update {
-            it.copy(connecting = false, failure = ConnectFailure.from(error, typedUrl))
+            val failure: ConnectFailure = ConnectFailure.from(error, typedUrl)
+            it.copy(
+                connecting = false,
+                attemptIsSlow = false,
+                failure = failure,
+                // A proxy in the way with no credential set is the one failure whose fix is a field
+                // the user cannot see. Open the disclosure for them rather than describing where it
+                // is.
+                proxy = if (failure is ConnectFailure.ProxyIntercepted && !it.proxy.isConfigured) {
+                    it.proxy.copy(expanded = true)
+                } else {
+                    it.proxy
+                },
+            )
         }
+    }
+
+    private companion object {
+        const val SLOW_NOTICE_MILLIS: Long = 5_000
     }
 }

@@ -92,6 +92,9 @@ public class RangeDownloader(
         if (existingBytes > 0) builder.header("Range", "bytes=$existingBytes-")
 
         engine.execute(builder.build(), media = true, policy = retryPolicy).use { response ->
+            // Audio goes through the same edge proxy as the JSON lanes. Without this an
+            // intercepted download writes a login page into the cache as though it were music.
+            engine.requireNotInterceptedBinary(response, ApiLane.Subsonic)
             when {
                 response.code == 416 -> throw NetworkError.RangeNotSatisfiable(
                     HttpEngine.completeLengthOf(response),
@@ -171,6 +174,7 @@ public class RangeDownloader(
             .tag(ApiLane::class, ApiLane.Subsonic)
             .build()
         engine.execute(request, media = true, policy = retryPolicy).use { response ->
+            engine.requireNotInterceptedBinary(response, ApiLane.Subsonic)
             if (!response.isSuccessful) throw engine.mapHttpFailure(response, null, ApiLane.Subsonic)
             response.header("Content-Length")?.trim()?.toLongOrNull()
         }

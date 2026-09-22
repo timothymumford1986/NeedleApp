@@ -144,6 +144,36 @@ public sealed class NetworkError(
         public override val cause: Throwable,
     ) : NetworkError("Could not parse the ${lane.name} response: ${cause.javaClass.simpleName}", cause)
 
+    /**
+     * Something in front of the server answered instead of it: a forward-auth proxy asking whoever
+     * is calling to sign in with a browser.
+     *
+     * This is the one failure that used to have no case at all, and its absence is what produced
+     * the bug this class was extended for: a Cloudflare Access 302 was followed to a login page,
+     * the HTML was parsed as JSON somewhere down the line, and the Connect screen sat on
+     * "Connecting…" for the whole 45-second call budget with nothing to show for it. Detecting it
+     * costs one round trip and the message can name the host that intercepted the call, so it is
+     * raised here rather than left to become a timeout or a parse error.
+     *
+     * Never retried: a proxy that refused this request will refuse the next one identically, and
+     * the fix is a credential or a bypass rule, not patience. See [isTransient].
+     *
+     * The message carries the proxy's host and the vendor when it could be identified, and nothing
+     * else - [ProxyInterception.requestedUrl] is already redacted.
+     */
+    public data class AuthenticatingProxy(
+        public val interception: ProxyInterception,
+        /** The lane that was intercepted, or null for a media or artwork request. */
+        public val lane: ApiLane? = null,
+    ) : NetworkError(interception.summary) {
+
+        /** Convenience for the UI: the host to name on screen. */
+        public val host: String get() = interception.describedHost
+
+        /** True when the proxy is one Needler can name in its guidance. */
+        public val isIdentified: Boolean get() = interception.vendor != ProxyVendor.Unknown
+    }
+
     /** True for failures where retrying the same request later is sensible. */
     public val isTransient: Boolean
         get() = when (this) {

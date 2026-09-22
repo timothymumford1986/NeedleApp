@@ -12,6 +12,7 @@ import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.model.User
 import app.needler.core.domain.model.UserRole
 import app.needler.core.domain.repository.SessionRepository
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
@@ -57,8 +58,17 @@ internal class FakeSessionRepository(
         val deviceName: String,
     )
 
+    /**
+     * When set, [probeServer] waits on it before answering.
+     *
+     * That is what lets a test observe an attempt *while it is running* - the state the Connect
+     * screen used to have no answer for, and where its cancel affordance lives.
+     */
+    var probeGate: CompletableDeferred<Unit>? = null
+
     override suspend fun probeServer(rawUrl: String): Outcome<ServerProbe> {
         calls += "probeServer($rawUrl)"
+        probeGate?.await()
         return probeOutcome
     }
 

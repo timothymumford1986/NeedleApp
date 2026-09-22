@@ -11,6 +11,9 @@ import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import app.needler.connect.ConnectFailure
 import app.needler.connect.ConnectScreen
 import app.needler.connect.ConnectUiState
+import app.needler.connect.CustomHeaderDraft
+import app.needler.connect.ProxyFormState
+import app.needler.connect.ProxyPreset
 import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.OfflineCause
 import java.io.File
@@ -121,6 +124,82 @@ class ConnectScreenshotTest {
             "connect-subsonic-disabled",
             NeedlerDevice.Phone,
             FILLED.copy(failure = ConnectFailure.SubsonicDisabled),
+        )
+    }
+
+    // ---- the proxy states ---------------------------------------------------
+
+    @Test
+    fun `a proxy intercepted the connection`() {
+        capture(
+            "connect-proxy-intercepted",
+            NeedlerDevice.Phone,
+            FILLED.copy(
+                failure = ConnectFailure.ProxyIntercepted(
+                    host = "yourteam.cloudflareaccess.com",
+                    vendorName = "Cloudflare Access",
+                    credentialsSent = false,
+                ),
+                // The failure opens the fields whose absence caused it.
+                proxy = ProxyFormState(expanded = true),
+            ),
+        )
+    }
+
+    @Test
+    fun `a proxy intercepted the connection on a tablet`() {
+        capture(
+            "connect-proxy-intercepted",
+            NeedlerDevice.Tablet,
+            FILLED.copy(
+                failure = ConnectFailure.ProxyIntercepted(
+                    host = "sso.yourhome.net",
+                    vendorName = null,
+                    credentialsSent = true,
+                ),
+                proxy = ProxyFormState(expanded = true),
+            ),
+        )
+    }
+
+    @Test
+    fun `the proxy fields filled in`() {
+        capture(
+            "connect-proxy-fields",
+            NeedlerDevice.Phone,
+            FILLED.copy(
+                proxy = ProxyFormState(
+                    expanded = true,
+                    preset = ProxyPreset.CloudflareAccess,
+                    cloudflareClientId = "8f3c1d2e4b5a6978.access",
+                    cloudflareClientSecret = "0123456789abcdef",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `the custom header editor`() {
+        capture(
+            "connect-proxy-custom",
+            NeedlerDevice.Phone,
+            FILLED.copy(
+                proxy = ProxyFormState(
+                    expanded = true,
+                    preset = ProxyPreset.Custom,
+                    customHeaders = listOf(CustomHeaderDraft("X-Api-Key", "0123456789abcdef")),
+                    problem = "Needler sends that header itself. Choose another name.",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `an attempt that is taking too long can be stopped`() {
+        capture(
+            "connect-still-trying",
+            NeedlerDevice.Phone,
+            FILLED.copy(connecting = true, attemptIsSlow = true),
         )
     }
 

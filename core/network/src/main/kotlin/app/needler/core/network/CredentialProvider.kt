@@ -35,6 +35,21 @@ public interface CredentialProvider {
     public fun appPassword(): String?
 
     /**
+     * Fixed headers to attach to every request, when the server sits behind an edge proxy that
+     * wants its own credential - Cloudflare Access, Authelia, authentik, a basic-auth reverse
+     * proxy, an API gateway with a key header.
+     *
+     * Defaulted to [ProxyCredentials.None] because the overwhelming majority of servers have no
+     * proxy in front of them and no implementation should have to say so. When headers are present
+     * they go on **every** request to the saved server - both API lanes, audio and artwork -
+     * because the proxy sits in front of all of them and challenges all of them identically.
+     *
+     * Every value is a credential: never log it, never show it, never put it in a query string
+     * where [redactUrl] would have to catch it.
+     */
+    public fun proxyCredentials(): ProxyCredentials = ProxyCredentials.None
+
+    /**
      * Called by the module when the `/api/v1` lane answers `401`, so the data layer can mark the
      * companion session stale and prompt for re-authentication while playback keeps working
      * (REQUIREMENTS.md §"Expiry, and why playback survives it").
