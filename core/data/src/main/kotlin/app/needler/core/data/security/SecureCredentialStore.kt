@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import app.needler.core.network.CredentialProvider
+import app.needler.core.network.ProxyCredentialStore
+import app.needler.core.network.ProxyCredentials
 import app.needler.core.network.ServerUrl
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,7 +53,7 @@ import java.security.GeneralSecurityException
  */
 public class SecureCredentialStore private constructor(
     private val preferences: SharedPreferences,
-) : CredentialProvider {
+) : CredentialProvider, ProxyCredentialStore {
 
     // In-memory cache. Volatile: interceptors read these from OkHttp's dispatcher threads while the
     // onboarding flow writes them from a coroutine.
@@ -69,6 +71,17 @@ public class SecureCredentialStore private constructor(
 
     @Volatile
     private var parsedServerUrl: ServerUrl? = null
+
+    /**
+     * Fixed headers for an edge proxy in front of the server - a Cloudflare Access service token,
+     * a basic-auth pair, an API gateway key.
+     *
+     * Every value is a credential and lives here for the same reason the other two do: the file is
+     * encrypted under a Keystore master key, nothing in this class logs, and nothing returns a
+     * value that would render in a stack trace.
+     */
+    @Volatile
+    private var cachedProxyCredentials: ProxyCredentials = ProxyCredentials.None
 
     private val sessionStaleState: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
@@ -99,6 +112,7 @@ public class SecureCredentialStore private constructor(
         cachedBearer = preferences.getString(KEY_COMPANION_BEARER, null)
         cachedAppPassword = preferences.getString(KEY_APP_PASSWORD, null)
         cachedFingerprint = preferences.getString(KEY_CERT_FINGERPRINT, null)
+        cachedProxyCredentials = ProxyCredentials.decode(preferences.getString(KEY_PROXY_HEADERS, null))
         parsedServerUrl = ServerUrl.parseOrNull(cachedServerUrl)
         sessionStaleState.value = cachedBearer == null && cachedAppPassword != null
         // A process that died mid-repair comes back with a bearer and no app-password. The repair is
@@ -113,6 +127,27 @@ public class SecureCredentialStore private constructor(
     override fun bearerToken(): String? = cachedBearer
 
     override fun appPassword(): String? = cachedAppPassword
+
+    override fun proxyCredentials(): ProxyCredentials = cachedProxyCredentials
+
+    /**
+     * Saves or clears the proxy headers.
+     *
+     * Committed rather than applied, like the other secrets: onboarding sends the very first probe
+     * with these attached, and a write that silently failed would produce a connect attempt that
+     * is intercepted for no visible reason.
+     */
+    override fun saveProxyCredentials(credentials: ProxyCredentials): Boolean {
+        val committed: Boolean = commit {
+            if (credentials.isEmpty) {
+                it.remove(KEY_PROXY_HEADERS)
+            } else {
+                it.putString(KEY_PROXY_HEADERS, credentials.encode())
+            }
+        }
+        if (committed) cachedProxyCredentials = credentials
+        return committed
+    }
 
     /**
      * The `/api/v1` lane answered `401`.
@@ -304,6 +339,7 @@ public class SecureCredentialStore private constructor(
             cachedBearer = null
             cachedAppPassword = null
             cachedFingerprint = null
+            cachedProxyCredentials = ProxyCredentials.None
             parsedServerUrl = null
             sessionStaleState.value = false
             appPasswordRepairNeededState.value = false
@@ -342,6 +378,7 @@ public class SecureCredentialStore private constructor(
         private const val KEY_BEARER_ISSUED_AT: String = "companion_bearer_issued_at"
         private const val KEY_APP_PASSWORD: String = "app_password"
         private const val KEY_CERT_FINGERPRINT: String = "pinned_certificate_sha256"
+        private const val KEY_PROXY_HEADERS: String = "proxy_headers"
 
         /**
          * Opens the store, creating the Keystore master key if needed.

@@ -1,6 +1,8 @@
 package app.needler.core.data.security
 
 import android.content.SharedPreferences
+import app.needler.core.network.ProxyCredentials
+import app.needler.core.network.ProxyPresets
 import app.needler.core.network.ServerUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -108,6 +110,55 @@ public class SecureCredentialStoreRepairTest {
         assertTrue(credentials.canPlay())
         assertFalse(credentials.isReonboardingRequired())
         assertFalse(credentials.appPasswordRepairNeeded.value)
+    }
+
+    @Test
+    public fun `proxy headers live with the other secrets and survive a process death`(): Unit {
+        val credentials: SecureCredentialStore = provisionedStore()
+
+        assertTrue(
+            credentials.saveProxyCredentials(
+                ProxyPresets.cloudflareAccess("0123.access", "service-token-secret"),
+            ),
+        )
+
+        assertEquals(2, credentials.proxyCredentials().headers.size)
+        // A fresh store over the same file is what an interceptor sees after the process is
+        // restarted: the headers have to come back, or a server behind a proxy becomes unreachable
+        // on the next cold start.
+        val reopened: SecureCredentialStore = store()
+        assertEquals("0123.access", reopened.proxyCredentials().headers[0].value)
+        assertEquals("service-token-secret", reopened.proxyCredentials().headers[1].value)
+        // And nothing about the store renders a value.
+        assertFalse(reopened.toString().contains("service-token-secret"))
+        assertFalse(reopened.proxyCredentials().toString().contains("service-token-secret"))
+    }
+
+    @Test
+    public fun `clearing the proxy headers removes them from disk`(): Unit {
+        val credentials: SecureCredentialStore = provisionedStore()
+        assertTrue(credentials.saveProxyCredentials(ProxyCredentials.of("X-Api-Key" to "k")))
+
+        assertTrue(credentials.saveProxyCredentials(ProxyCredentials.None))
+
+        assertTrue(credentials.proxyCredentials().isEmpty)
+        assertTrue(store().proxyCredentials().isEmpty)
+    }
+
+    @Test
+    public fun `signing out takes the proxy headers with everything else`(): Unit {
+        val credentials: SecureCredentialStore = provisionedStore()
+        assertTrue(credentials.saveProxyCredentials(ProxyCredentials.of("X-Api-Key" to "k")))
+
+        assertTrue(credentials.clear())
+
+        assertTrue(credentials.proxyCredentials().isEmpty)
+    }
+
+    @Test
+    public fun `a server with no proxy in front of it stores nothing extra`(): Unit {
+        assertTrue(provisionedStore().proxyCredentials().isEmpty)
+        assertNull(preferences.getString("proxy_headers", null))
     }
 
     @Test

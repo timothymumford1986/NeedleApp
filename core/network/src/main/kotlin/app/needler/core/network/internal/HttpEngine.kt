@@ -1,6 +1,7 @@
 package app.needler.core.network.internal
 
 import app.needler.core.network.ApiLane
+import app.needler.core.network.AuthenticatingProxyDetector
 import app.needler.core.network.CredentialProvider
 import app.needler.core.network.NeedlerHttpClient
 import app.needler.core.network.NetworkError
@@ -84,7 +85,12 @@ internal class HttpEngine(
             val response = try {
                 singleAttempt(client, request)
             } catch (failure: IOException) {
-                if (retryable && attemptIndex < policy.maxRetries) {
+                // An authenticating proxy is never retried: it will refuse the next attempt
+                // identically, and three refusals take three times as long to tell the user the
+                // one thing they need to hear.
+                if (failure !is NetworkError.AuthenticatingProxy &&
+                    retryable && attemptIndex < policy.maxRetries
+                ) {
                     attemptIndex++
                     delay(backoffMillis(policy, attemptIndex))
                     continue
@@ -117,6 +123,7 @@ internal class HttpEngine(
     suspend fun <T> v1Json(request: Request, deserializer: DeserializationStrategy<T>): T {
         execute(request).use { response ->
             val body = response.body.string()
+            requireNotIntercepted(response, body, ApiLane.V1)
             if (!response.isSuccessful) throw mapHttpFailure(response, body, ApiLane.V1)
             return decode(deserializer, body, ApiLane.V1)
         }
@@ -125,8 +132,31 @@ internal class HttpEngine(
     /** Execute a `/api/v1` call whose body is irrelevant (204 No Content, or an ignored payload). */
     suspend fun v1Unit(request: Request) {
         execute(request).use { response ->
-            if (!response.isSuccessful) throw mapHttpFailure(response, response.body.string(), ApiLane.V1)
+            val body = response.body.string()
+            requireNotIntercepted(response, body, ApiLane.V1)
+            if (!response.isSuccessful) throw mapHttpFailure(response, body, ApiLane.V1)
         }
+    }
+
+    /**
+     * Fails fast when the answer came from a proxy rather than from DroppedNeedle.
+     *
+     * Checked **before** the status code is looked at and before the body is parsed, because the
+     * interesting cases carry an innocent status: a Cloudflare Access login page is an HTTP 200,
+     * and parsing it as JSON produces [NetworkError.Serialisation], whose message ("could not
+     * parse") sends the user to look for a fault in their server that is not there.
+     *
+     * Does nothing at all for a JSON body, which is every response a healthy server sends on
+     * either lane, success or failure. See [app.needler.core.network.AuthenticatingProxyDetector]
+     * for why the rule cannot fire on an ordinary HTML error page.
+     */
+    fun requireNotIntercepted(response: Response, body: String?, lane: ApiLane) {
+        val interception = AuthenticatingProxyDetector.fromResponse(
+            response = response,
+            bodyPrefix = body,
+            proxyCredentialsSent = credentials.proxyCredentials().isNotEmpty,
+        ) ?: return
+        throw NetworkError.AuthenticatingProxy(interception, lane)
     }
 
     fun <T> decode(deserializer: DeserializationStrategy<T>, body: String, lane: ApiLane): T =
@@ -168,6 +198,28 @@ internal class HttpEngine(
             in 500..599 -> NetworkError.Server(status, lane, retryAfterSeconds(response), message)
             else -> NetworkError.InvalidRequest(lane, status, code, message)
         }
+    }
+
+    /**
+     * The same check for a binary endpoint, where the body is audio or artwork and must not be
+     * read into memory.
+     *
+     * Artwork and audio go through the same proxy as the JSON lanes and are challenged the same
+     * way, so skipping this would leave a user with a working catalogue and silent playback. Only
+     * a text or HTML content type is peeked at; a real audio body is never touched.
+     */
+    fun requireNotInterceptedBinary(response: Response, lane: ApiLane) {
+        val contentType = response.body.contentType()
+        val textual = contentType?.type?.lowercase() == "text" ||
+            contentType?.subtype?.lowercase() == "html"
+        val prefix = if (textual) {
+            runCatching {
+                response.peekBody(AuthenticatingProxyDetector.BODY_SNIFF_CHARS.toLong()).string()
+            }.getOrNull()
+        } else {
+            null
+        }
+        requireNotIntercepted(response, prefix, lane)
     }
 
     /** Transport-level failure to [NetworkError]. Cancellation is never swallowed. */

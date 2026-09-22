@@ -5,6 +5,7 @@ class TestCredentials(
     private var server: ServerUrl? = ServerUrl.parseOrNull("https://music.example.net"),
     private var bearer: String? = "test-bearer",
     private var appPassword: String? = "test-app-password",
+    private var proxy: ProxyCredentials = ProxyCredentials.None,
 ) : CredentialProvider {
 
     var bearerRejections: Int = 0
@@ -25,6 +26,12 @@ class TestCredentials(
 
     override fun onAppPasswordRejected() {
         appPasswordRejections++
+    }
+
+    override fun proxyCredentials(): ProxyCredentials = proxy
+
+    fun withProxyCredentials(credentials: ProxyCredentials): TestCredentials = apply {
+        proxy = credentials
     }
 
     fun withServer(raw: String): TestCredentials = apply {

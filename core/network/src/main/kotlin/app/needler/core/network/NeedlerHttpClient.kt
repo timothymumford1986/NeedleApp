@@ -8,6 +8,7 @@ import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import java.net.ProtocolException
 import java.util.concurrent.TimeUnit
 
 /** Marker tag: this request must go out without credentials (login, public probes). */
@@ -92,8 +93,12 @@ public class NeedlerHttpClient(
             // OkHttp's own retry only covers route/connection failures; response-level retries
             // are this module's job (see RetryPolicy) so they can honour Retry-After.
             .retryOnConnectionFailure(true)
-            .followRedirects(true)
+            // Redirects are followed by RedirectGuardInterceptor instead, which refuses to follow
+            // one that leaves the host the user named. See that class.
+            .followRedirects(false)
             .followSslRedirects(false)
+            .addInterceptor(RedirectGuardInterceptor(credentials))
+            .addInterceptor(ProxyHeaderInterceptor(credentials))
             .addInterceptor(CredentialInterceptor(credentials))
             .addInterceptor(RedactingLogInterceptor(logSink, loggingEnabled))
 
@@ -169,25 +174,175 @@ internal class CredentialInterceptor(
         null -> request
     }
 
-    /**
-     * The request's lane: its tag when this module built it, otherwise inferred from the path.
-     *
-     * Path inference exists for the clients we hand to Media3 and Coil, which build their own
-     * requests and cannot carry a tag. A `/api/v1/covers/...` artwork request therefore still gets
-     * the bearer, and a `/subsonic/rest/...` request still gets `apiKey` if its URL lacks one.
-     */
-    private fun laneOf(request: Request): ApiLane? {
-        request.tag(ApiLane::class)?.let { return it }
-        val path = request.url.encodedPath
-        return when {
-            path.contains(ServerUrl.SUBSONIC_REST_PREFIX) -> ApiLane.Subsonic
-            path.contains("${ServerUrl.API_V1_PREFIX}/") -> ApiLane.V1
-            else -> null
-        }
-    }
-
     private companion object {
         const val HEADER_AUTHORIZATION = "Authorization"
         const val QUERY_API_KEY = "apiKey"
+    }
+}
+
+/**
+ * The request's lane: its tag when this module built it, otherwise inferred from the path.
+ *
+ * Path inference exists for the clients we hand to Media3 and Coil, which build their own
+ * requests and cannot carry a tag. A `/api/v1/covers/...` artwork request therefore still gets
+ * the bearer, and a `/subsonic/rest/...` request still gets `apiKey` if its URL lacks one.
+ */
+internal fun laneOf(request: Request): ApiLane? {
+    request.tag(ApiLane::class)?.let { return it }
+    val path = request.url.encodedPath
+    return when {
+        path.contains(ServerUrl.SUBSONIC_REST_PREFIX) -> ApiLane.Subsonic
+        path.contains("${ServerUrl.API_V1_PREFIX}/") -> ApiLane.V1
+        else -> null
+    }
+}
+
+/**
+ * Attaches the user's fixed proxy headers, so an edge proxy in front of the server lets the call
+ * through.
+ *
+ * Runs on **every** request both clients make - both API lanes, audio, artwork, and the requests
+ * Media3 and Coil build for themselves - because the proxy sits in front of all of them and
+ * challenges all of them identically. A `getCoverArt` that is answered with a login page is the
+ * same failure as a `ping` that is, and fixing only the JSON lanes would leave artwork and
+ * playback broken on exactly the servers this exists for.
+ *
+ * Unlike the bearer and the `apiKey`, these are sent even on a request tagged [SkipAuth]: the
+ * public probe is intercepted by the proxy just like everything else, and it is the first request
+ * onboarding makes.
+ *
+ * The headers only ever go to the host the user saved. A redirect can never carry them somewhere
+ * else, because [RedirectGuardInterceptor] refuses to follow a cross-host redirect at all; this
+ * check is the second lock on the same door.
+ */
+internal class ProxyHeaderInterceptor(
+    private val credentials: CredentialProvider,
+) : Interceptor {
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        val proxy = credentials.proxyCredentials()
+        if (proxy.isEmpty) return chain.proceed(request)
+
+        val saved = credentials.serverUrl()
+        if (saved != null && !request.url.host.equals(saved.host, ignoreCase = true)) {
+            return chain.proceed(request)
+        }
+
+        val builder = request.newBuilder()
+        for (header in proxy.headers) {
+            builder.header(header.name, header.value)
+        }
+        return chain.proceed(builder.build())
+    }
+}
+
+/**
+ * Follows redirects by hand, and refuses to follow one that leaves the host the user named.
+ *
+ * OkHttp's own redirect following happens below every application interceptor, so with it enabled
+ * this module never saw the `302` at all: it saw whatever the login page returned, minutes of
+ * connect timeout later, and had no way to say what had happened. Worse, following a cross-host
+ * redirect **sends the request, and any header on it, to a host the user never typed** - the exact
+ * thing a credential must never do.
+ *
+ * So redirects are off on the client and re-implemented here:
+ *
+ *  * a redirect to the same host is followed, up to [MAX_HOPS] - that is a base-path or trailing
+ *    slash fix-up and is perfectly ordinary;
+ *  * a redirect to a different host is [NetworkError.AuthenticatingProxy], thrown on the spot,
+ *    which is why the Connect screen now fails in one round trip instead of hanging;
+ *  * an `https` to `http` downgrade is not followed, and the redirect is returned as-is.
+ *
+ * `301`, `302` and `303` turn a non-`GET` into a `GET` without a body, as every browser does;
+ * `307` and `308` keep the method and the body, which is what they are for.
+ */
+internal class RedirectGuardInterceptor(
+    private val credentials: CredentialProvider,
+) : Interceptor {
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        var response = proceed(chain, chain.request())
+        var hops = 0
+
+        while (response.isRedirect) {
+            val sent = response.request
+            val location = response.header("Location")?.trim()
+            if (location.isNullOrEmpty()) return response
+            val target = sent.url.resolve(location) ?: return response
+
+            val interception = AuthenticatingProxyDetector.fromRedirect(
+                response = response,
+                target = target,
+                proxyCredentialsSent = credentials.proxyCredentials().isNotEmpty,
+            )
+            if (interception != null) {
+                response.close()
+                throw NetworkError.AuthenticatingProxy(interception, laneOf(sent))
+            }
+
+            // Same host, but a downgrade out of TLS. Not followed, and not an interception either:
+            // the caller sees the redirect and reports it as a server that is not DroppedNeedle.
+            if (sent.url.isHttps && !target.isHttps) return response
+
+            if (hops >= MAX_HOPS) {
+                response.close()
+                throw NetworkError.Offline(
+                    ProtocolException("Too many redirects from " + redactUrl(sent.url)),
+                    NetworkError.Offline.Kind.Io,
+                )
+            }
+
+            val builder = sent.newBuilder().url(target)
+            val keepsMethod = response.code == 307 || response.code == 308
+            if (!keepsMethod && sent.method != "GET" && sent.method != "HEAD") {
+                builder.method("GET", null)
+                    .removeHeader("Content-Type")
+                    .removeHeader("Content-Length")
+                    .removeHeader("Transfer-Encoding")
+            }
+            response.close()
+            response = proceed(chain, builder.build())
+            hops++
+        }
+        return response
+    }
+
+    /**
+     * `chain.proceed`, with one translation.
+     *
+     * A `407 Proxy Authentication Required` from the address the user typed never reaches an
+     * application interceptor: OkHttp's own retry-and-follow-up stage turns it into a
+     * `ProtocolException` first, because a `407` is only meaningful from a configured HTTP proxy.
+     * That is the one status whose whole meaning is "a proxy wants a credential", so it is
+     * translated here rather than left to surface as a generic unreachable-server error.
+     *
+     * Deliberately conservative: anything that does not look like that specific case is rethrown
+     * untouched, and the fallback is exactly the behaviour there was before.
+     */
+    private fun proceed(chain: Interceptor.Chain, request: Request): Response = try {
+        chain.proceed(request)
+    } catch (failure: ProtocolException) {
+        val proxyAuth = failure.message?.contains(
+            AuthenticatingProxyDetector.HTTP_PROXY_AUTH_REQUIRED.toString(),
+        ) == true
+        if (!proxyAuth) throw failure
+        throw NetworkError.AuthenticatingProxy(
+            ProxyInterception(
+                proxyHost = null,
+                vendor = ProxyVendor.Unknown,
+                signal = ProxySignal.ProxyAuthRequired,
+                requestedHost = request.url.host,
+                requestedUrl = redactUrl(request.url),
+                statusCode = AuthenticatingProxyDetector.HTTP_PROXY_AUTH_REQUIRED,
+                proxyCredentialsSent = credentials.proxyCredentials().isNotEmpty,
+            ),
+            laneOf(request),
+        )
+    }
+
+    private companion object {
+        /** OkHttp's own ceiling is 20; a self-hosted server needing more than a handful is broken. */
+        const val MAX_HOPS = 5
     }
 }

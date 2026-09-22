@@ -3,6 +3,8 @@ package app.needler.connect
 import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineCause
+import app.needler.core.network.NetworkError
+import app.needler.core.network.ProxyVendor
 import kotlin.time.Duration
 
 /**
@@ -24,10 +26,21 @@ data class ConnectUiState(
     val password: String = "",
     /** A connection attempt is in flight. The form is disabled and the button reads Connecting. */
     val connecting: Boolean = false,
+    /**
+     * The attempt has been running long enough to look stuck.
+     *
+     * The bug this exists for was a 45-second dead button: the whole-call timeout is 45s, three
+     * lanes of it back to back is longer, and nothing on screen changed for any of it. After a few
+     * seconds the screen says it is still trying and offers to stop, which is the difference
+     * between a slow server and a broken app.
+     */
+    val attemptIsSlow: Boolean = false,
     /** What went wrong last time, or null. */
     val failure: ConnectFailure? = null,
     /** Set once onboarding has completed, so the host can navigate away. */
     val connected: Boolean = false,
+    /** The optional extra headers for a server behind an authenticating proxy. */
+    val proxy: ProxyFormState = ProxyFormState(),
 ) {
     /**
      * Whether Connect may be pressed.
@@ -162,6 +175,68 @@ sealed interface ConnectFailure {
                 "either way, so try again once they have."
     }
 
+    /**
+     * Something in front of the server answered instead of it: a forward-auth proxy - Cloudflare
+     * Access, Authelia, authentik, a basic-auth reverse proxy - wanting a browser sign-in.
+     *
+     * Its own state because nothing else on this screen leads anywhere near the fix. The address is
+     * right, the credentials are right, the certificate is fine and the server may be perfectly
+     * healthy; what is wrong is one layer in front of it, and the three ways out (a credential the
+     * app can send, a bypass rule for this path, or reaching the server over a VPN or its LAN
+     * address) are things the user does elsewhere. Folding this into "could not connect" is what
+     * produced a 45-second hang with no explanation.
+     *
+     * @param host the host that answered - the login host when the proxy named one, so the user can
+     *   recognise it.
+     * @param vendorName the product's name when it identified itself, else null.
+     * @param credentialsSent true when Needler did send the configured headers and was refused
+     *   anyway, which is a different instruction from having sent none.
+     */
+    data class ProxyIntercepted(
+        val host: String,
+        val vendorName: String?,
+        val credentialsSent: Boolean,
+    ) : ConnectFailure {
+        override val title: String
+            get() = if (vendorName != null) {
+                vendorName + " is asking for a sign-in first"
+            } else {
+                "Something is intercepting the connection"
+            }
+
+        override val detail: String
+            get() = buildString {
+                append(host)
+                append(" answered instead of your server, and sent a sign-in page where Needler ")
+                append("asked for data. Needler cannot complete a sign-in meant for a browser.")
+                if (credentialsSent) {
+                    append(" The extra headers you set were sent and refused, so check they are ")
+                    append("still valid.")
+                } else {
+                    append(" Open \"My server is behind a proxy that needs its own credentials\" ")
+                    if (vendorName == "Cloudflare Access") {
+                        append("below and add a service token's Client ID and Secret.")
+                    } else {
+                        append("below and add the credential your proxy expects.")
+                    }
+                }
+                append(" Or add a bypass rule for this path on the proxy, or reach the server ")
+                append("over a VPN or its LAN address instead.")
+            }
+    }
+
+    /**
+     * The user stopped the attempt.
+     *
+     * Not really a failure, but it belongs in the same slot: something has to replace "Connecting…"
+     * and say that nothing was changed, or a cancelled attempt looks like a crash.
+     */
+    data object Cancelled : ConnectFailure {
+        override val title: String get() = "Stopped"
+        override val detail: String
+            get() = "The connection attempt was cancelled. Nothing on this device was changed."
+    }
+
     /** The server answered, but with a 5xx or a rate limit. Retrying is the right move. */
     data class ServerProblem(val detail0: String) : ConnectFailure {
         override val title: String get() = "The server had a problem"
@@ -201,7 +276,25 @@ sealed interface ConnectFailure {
             // session to degrade yet, so it can only mean the credentials were
             // refused.
             NeedlerError.SessionExpired -> WrongCredentials
+            NeedlerError.Cancelled -> Cancelled
+            // `:core:domain` has no case for an authenticating proxy and is not this change's to
+            // edit, so `:core:data` passes the transport error through as the cause of
+            // `Unexpected`. Reading it back here keeps the screen's state typed rather than parsing
+            // a diagnostic string - and if a `NeedlerError.AuthenticatingProxy` ever lands, this is
+            // the one place that changes.
+            is NeedlerError.Unexpected -> proxyInterception(error) ?: Unexpected(error.diagnostic)
             else -> Unexpected(error.diagnostic)
+        }
+
+        private fun proxyInterception(error: NeedlerError.Unexpected): ProxyIntercepted? {
+            val proxy = error.cause as? NetworkError.AuthenticatingProxy ?: return null
+            return ProxyIntercepted(
+                host = proxy.interception.describedHost,
+                vendorName = proxy.interception.vendor
+                    .takeIf { it != ProxyVendor.Unknown }
+                    ?.displayName,
+                credentialsSent = proxy.interception.proxyCredentialsSent,
+            )
         }
 
         private fun rateLimitDetail(retryAfter: Duration?): String = when (retryAfter) {

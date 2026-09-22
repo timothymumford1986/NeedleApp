@@ -65,6 +65,7 @@ import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.domain.repository.SyncRepository
 import app.needler.core.network.CredentialProvider
 import app.needler.core.network.NeedlerHttpClient
+import app.needler.core.network.ProxyCredentialStore
 import app.needler.core.network.capability.CapabilityProbe
 import app.needler.core.network.media.RangeDownloader
 import app.needler.core.network.subsonic.DefaultSubsonicApi
@@ -237,6 +238,16 @@ public object DataModule {
 
     @Provides
     public fun provideCredentialProvider(store: SecureCredentialStore): CredentialProvider = store
+
+    /**
+     * Write access to the proxy headers, for the Connect screen.
+     *
+     * `CredentialProvider` is read-only by design - it exists for the OkHttp interceptors - and
+     * `SessionRepository` has no parameter for a proxy credential, so the one screen that collects
+     * them injects this narrow interface instead. It is the same object either way.
+     */
+    @Provides
+    public fun provideProxyCredentialStore(store: SecureCredentialStore): ProxyCredentialStore = store
 
     /**
      * The certificate pin store.
