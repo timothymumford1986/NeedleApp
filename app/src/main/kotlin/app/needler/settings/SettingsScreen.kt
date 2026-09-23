@@ -73,6 +73,7 @@ data class SettingsCallbacks(
     val onWifiOnlyDownloadsChange: (Boolean) -> Unit,
     val onRemoveDownload: (DownloadedAlbum) -> Unit,
     val onClearCachedMusic: () -> Unit,
+    val onCheckForUpdates: () -> Unit,
     val onArmDestructiveAction: (DestructiveSettingsAction) -> Unit,
     val onCancelDestructiveAction: () -> Unit,
     val onConfirmDestructiveAction: () -> Unit,
@@ -211,7 +212,11 @@ fun SettingsScreen(
             }
 
             item(key = "about") {
-                AboutSection(state = state.about, onOpenLicences = callbacks.onOpenLicences)
+                AboutSection(
+                    state = state.about,
+                    onCheckForUpdates = callbacks.onCheckForUpdates,
+                    onOpenLicences = callbacks.onOpenLicences,
+                )
             }
 
             item(key = "sign-out") {
@@ -546,13 +551,33 @@ private fun DownloadedAlbumRow(
  * the build number too, which is the only thing that distinguishes two builds of the same release.
  */
 @Composable
-private fun AboutSection(state: AboutSectionState, onOpenLicences: (() -> Unit)?) {
+private fun AboutSection(
+    state: AboutSectionState,
+    onCheckForUpdates: () -> Unit,
+    onOpenLicences: (() -> Unit)?,
+) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     val spacing = NeedlerTheme.spacing
 
     SettingsSection(title = "About") {
-        NeedlerSettingsRow(label = "Version", value = state.versionLabel, showDivider = false)
+        NeedlerSettingsRow(label = "Version", value = state.versionLabel, showDivider = true)
+
+        NeedlerSettingsRow(
+            label = "Check for updates",
+            onClick = onCheckForUpdates,
+            showChevron = false,
+            showDivider = false,
+            enabled = state.updateCheck != UpdateCheckStatus.Checking,
+        )
+        state.updateCheck.message?.let { message ->
+            Text(
+                text = message,
+                style = typography.caption,
+                color = colors.textMuted,
+                modifier = Modifier.padding(top = spacing.step2, bottom = spacing.step4),
+            )
+        }
 
         Column(
             modifier = Modifier
