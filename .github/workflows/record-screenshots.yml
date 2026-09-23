@@ -1,0 +1,75 @@
+name: record screenshots
+
+# Regenerates the committed screenshot baselines and hands them back as an
+# artifact, for when the machine you are sitting at has no Android SDK.
+#
+# `build.yml` always passes `-Pneedler.screenshots.verify`, which puts Roborazzi
+# in compare-and-fail mode. That is what makes the committed PNGs regression
+# tests, and it is the right default -- but it also means a NEW screenshot test
+# fails there until its baseline exists, and a baseline can only be produced by
+# running the test with the toolchain present. Without this workflow the only
+# way to add a screen test is to already have the SDK installed.
+#
+# So: run the same task in record mode, upload what it wrote, and let a human
+# download the PNGs and commit them. It deliberately does not push anything
+# back into the repository -- a baseline is a thing you look at before you
+# accept it, not something CI should quietly decide is correct.
+#
+# Manual only. Nothing about this should run on a push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: 'Gradle test task to run, e.g. :feature:library:test. Leave blank for all modules.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-37.2 build-tools;37.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      # No verify flag, so the screenshot convention plugin sets
+      # roborazzi.test.record and the task overwrites the PNGs in screenshots/
+      # rather than comparing against them.
+      - name: Record the screenshots
+        run: ./gradlew ${{ github.event.inputs.module || 'test' }} --stacktrace
+
+      # screenshots/ is a committed folder at the repository root, not build
+      # output, because the convention plugin points roborazzi at it. That is
+      # why this uploads from there rather than from build/.
+      - name: Upload the recorded screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: screenshots/**
+          if-no-files-found: error
+
+      - name: Show what changed
+        if: always()
+        run: git --no-pager diff --stat -- screenshots/ || true
