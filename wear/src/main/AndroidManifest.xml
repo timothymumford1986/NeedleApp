@@ -2,11 +2,28 @@
 <!--
   Wear OS companion manifest.
 
-  The launcher <activity> is not declared yet; it lands with the class.
-
   standalone=false because v1 plays on-device audio synced from the phone over
   the data layer and has no server connection of its own — the watch app is not
-  usable without the phone app.
+  usable without the phone app. That flag is the machine-readable form of
+  REQUIREMENTS.md's "Surfaces beyond the app" constraint for Wear, and Play uses
+  it to decide whether the watch app may be installed on its own. It must stay
+  false for as long as the transport is the data layer.
+
+  The theme is the platform's own Theme.DeviceDefault rather than a Needler
+  style, because this module has no res/ directory at all: every colour it uses
+  is a Compose token in NeedlerWearTheme, and a one-line styles.xml existing
+  solely to paint the window behind a full-bleed Compose surface would be a
+  second place for the palette to drift.
+
+  taskAffinity is cleared as the Wear Compose template does, so the watch app
+  never shares a task with anything else declaring app.needler — which :app
+  does, since the two APKs must share an applicationId to pair.
+
+  No WearableListenerService is declared. The watch has nothing to do with a
+  playback snapshot while its screen is off, and a manifest-declared listener
+  would be woken for every track change on the phone all day. See
+  DataLayerPlaybackClient for the full argument; a tile or complication would
+  change it.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
@@ -15,11 +32,24 @@
     <application
         android:label="Needler"
         android:supportsRtl="true"
-        android:allowBackup="false">
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.DeviceDefault">
 
         <meta-data
             android:name="com.google.android.wearable.standalone"
             android:value="false" />
+
+        <activity
+            android:name=".NeedlerWearActivity"
+            android:label="Needler"
+            android:exported="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
     </application>
 
