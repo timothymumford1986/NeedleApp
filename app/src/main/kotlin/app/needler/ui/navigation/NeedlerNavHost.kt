@@ -32,7 +32,10 @@ import app.needler.feature.player.nowplaying.NowPlayingRoute
 import app.needler.feature.player.output.OutputSheet
 import app.needler.feature.player.output.OutputUiState
 import app.needler.feature.player.output.OutputViewModel
+import app.needler.feature.player.settings.CrossfadeRoute
+import app.needler.feature.player.settings.EqualiserRoute
 import app.needler.feature.player.sidebar.PlayerSidebarRoute
+import app.needler.settings.SettingsRoute
 import app.needler.ui.placeholder.DestinationPlaceholder
 
 /** Onboarding. Screens 01 and 16. Owned by `:app`. */
@@ -70,6 +73,30 @@ private const val ARG_ALBUM_ID = "albumId"
 private const val ARG_ARTIST_ID = "artistId"
 private const val ROUTE_ALBUM = "album/{$ARG_ALBUM_ID}"
 private const val ROUTE_ARTIST = "artist/{$ARG_ARTIST_ID}"
+
+/**
+ * Screens 19 and 20, the two sub-screens Settings links to.
+ *
+ * Inside the scaffold, unlike Now Playing and the crate: the pack draws the bottom bar on both
+ * of them, exactly as it does on album and artist detail, so they are a change of content and
+ * not a layer over the app.
+ */
+private const val ROUTE_EQUALISER = "equaliser"
+private const val ROUTE_CROSSFADE = "crossfade"
+
+/**
+ * Back to Connect, with Home taken off the stack behind it.
+ *
+ * Settings offers two ways here and both mean the same thing: whatever the tabs are showing is
+ * about to stop being true. Leaving Home on the stack would let the back gesture return to a
+ * library read from a server the app is no longer signed in to.
+ */
+private fun returnToConnect(navController: NavHostController) {
+    navController.navigate(ROUTE_CONNECT) {
+        popUpTo(ROUTE_HOME) { inclusive = true }
+        launchSingleTop = true
+    }
+}
 
 private fun albumRoute(mbid: String): String = "album/$mbid"
 
@@ -363,12 +390,37 @@ private fun NeedlerHome(
                 )
             }
 
-            // Search, Pulls and Settings are still placeholders. Each names the
-            // module that will replace it - see DestinationPlaceholder.
+            composable(NeedlerDestination.Settings.route) {
+                SettingsRoute(
+                    widthSizeClass = widthSizeClass,
+                    onOpenEqualiser = {
+                        navController.navigate(ROUTE_EQUALISER) { launchSingleTop = true }
+                    },
+                    onOpenCrossfade = {
+                        navController.navigate(ROUTE_CROSSFADE) { launchSingleTop = true }
+                    },
+                    // Both of these end at Connect, and both have to clear Home
+                    // behind them: signing out leaves no session for the tabs to
+                    // read, and changing server invalidates everything they are
+                    // showing. Same shape as onConnected's pop in reverse.
+                    onChangeServer = { returnToConnect(navController) },
+                    onSignedOut = { returnToConnect(navController) },
+                )
+            }
+
+            composable(ROUTE_EQUALISER) {
+                EqualiserRoute(onBack = { navController.popBackStack() })
+            }
+
+            composable(ROUTE_CROSSFADE) {
+                CrossfadeRoute(onBack = { navController.popBackStack() })
+            }
+
+            // Search and Pulls are still placeholders. Each names the module
+            // that will replace it - see DestinationPlaceholder.
             listOf(
                 NeedlerDestination.Search,
                 NeedlerDestination.Pulls,
-                NeedlerDestination.Settings,
             ).forEach { destination ->
                 composable(destination.route) { DestinationPlaceholder(destination) }
             }
