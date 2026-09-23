@@ -215,16 +215,25 @@ private fun NeedlerHome(
         onNotificationDestinationHandled()
     }
 
+    // Switching to a tab, wherever the switch comes from.
+    //
+    // The bar is not the only way in. Screen 02 wraps the library's search
+    // field in a link to screen 03, so the field opens Search as well, and both
+    // routes have to leave the same back stack behind. A bare navigate() from
+    // the field pushed an entry the bar's popUpTo could not account for, and
+    // Library then ignored every tap until the listener pressed back.
+    val selectTab: (NeedlerDestination) -> Unit = { destination ->
+        navController.navigate(destination.route) {
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
     NeedlerNavigationScaffold(
         widthSizeClass = widthSizeClass,
         selected = selected,
-        onSelect = { destination ->
-            navController.navigate(destination.route) {
-                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                launchSingleTop = true
-                restoreState = true
-            }
-        },
+        onSelect = selectTab,
         modifier = modifier,
         pullsBadgeCount = pullsBadgeCount,
         // The mini player is composed here rather than inside the inner NavHost
@@ -280,7 +289,7 @@ private fun NeedlerHome(
                     widthSizeClass = widthSizeClass,
                     onOpenAlbum = { navController.navigate(albumRoute(it.value)) },
                     onOpenArtist = { navController.navigate(artistRoute(it.value)) },
-                    onOpenSearch = { navController.navigate(NeedlerDestination.Search.route) },
+                    onOpenSearch = { selectTab(NeedlerDestination.Search) },
                 )
             }
 
