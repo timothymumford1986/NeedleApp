@@ -162,9 +162,7 @@ class ArtistViewModel @Inject constructor(
         const val ARTIST_ID_ARG: String = "artistId"
 
         private const val SUBSCRIPTION_TIMEOUT_MS: Long = 5_000L
-    }
 
-    private companion object {
         private const val TAG: String = "ArtistViewModel"
     }
 }
