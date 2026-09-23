@@ -30,6 +30,14 @@ import org.robolectric.annotation.GraphicsMode
  * `NeedlerNavHost`, so the images show a chosen destination rather than
  * whatever the graph happens to start on, and so no `ViewModel`, Hilt graph or
  * navigation back stack is involved in producing them.
+ *
+ * That last part is why the sidebar is [PlayerSidebarPlaceholder] and not the
+ * real `PlayerSidebarRoute` the app is given: the route resolves two Hilt view
+ * models and binds them to a live session, neither of which exists in here. The
+ * placeholder holds the pack's 400dp, so the content pane beside it is the
+ * width a destination really gets, and these images stay a test of the chrome -
+ * the rail, the bar, the badge and the measurements - rather than of playback,
+ * which `:feature:player` screenshots for itself.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -61,6 +69,11 @@ class NavigationScreenshotTest {
                 selected = destination,
                 onSelect = {},
                 pullsBadgeCount = PULLS_BADGE,
+                // Composed at both widths, and drawn at neither unless the
+                // scaffold asks for it: the Compact branch never calls the
+                // slot. Passing it unconditionally is what keeps the two
+                // captures one call.
+                sidebar = { PlayerSidebarPlaceholder() },
             ) {
                 DestinationPlaceholder(destination)
             }
