@@ -308,7 +308,7 @@ fun NeedlerSwitch(
 }
 
 /**
- * An album or artist row: artwork, title, subtitle, and whatever the state needs on the right.
+ * An album, artist or song row: artwork, title, subtitle, and what the state needs on the right.
  *
  * Ported from the search results (03, 10), the Pulls list (06) and the library list view (13). The
  * pack varies the height and the artwork size between those screens, so both are parameters; the
@@ -317,6 +317,29 @@ fun NeedlerSwitch(
  * The [trailing] slot is where a [NeedlerStateBadge], a [NeedlerPullButton] or a Retry pill goes.
  * Anything interactive placed there stays a separate accessibility target.
  *
+ * ## The playing row
+ *
+ * [isPlaying] draws this row the way the pack draws a playing track everywhere else it appears: the
+ * title in the accent colour with the record glyph beside it, as on the crate's Playing row (08)
+ * and the album track list (04, 11). The library's Songs tab is the row that needed it - without
+ * it, the track the app is playing is the only one on screen with no sign that it is.
+ *
+ * Unlike [NeedlerQueueRow], which draws the glyph only when its [trailing] slot is empty, this row
+ * draws the glyph *and* [trailing], the glyph first so the trailing column still lines up down the
+ * list. The crate has nothing in that slot, so there the two can never collide; the Songs tab puts
+ * the track's duration there, and a row that dropped its duration only while playing would lose
+ * information and make the list twitch as playback moves. The glyph is 18dp and the title column
+ * carries the weight, so both fit at 200% text.
+ *
+ * Drawing it is the point, not decoration. The accent title alone would make colour the only visual
+ * channel for this state, which is no signal at all to a reader who cannot separate the accent blue
+ * from the primary off-white. The glyph is the second channel; the ", playing" in the spoken
+ * description is the third.
+ *
+ * @param contentDescription replaces the default "title, subtitle" reading outright, for rows that
+ *   carry more than their two lines - a format badge, an on-device check. The ", playing" suffix is
+ *   appended by *this row* to whichever reading is in use, default or replacement, so callers must
+ *   never append it themselves: TalkBack would then say it twice.
  * @param artwork the artwork slot. Pass [AsyncAlbumArt] with `contentDescription = null`, since the
  *   row already names the album.
  */
@@ -325,6 +348,7 @@ fun NeedlerAlbumRow(
     title: String,
     subtitle: String,
     modifier: Modifier = Modifier,
+    isPlaying: Boolean = false,
     minHeight: Dp = NeedlerTheme.sizes.albumRowMinHeight,
     onClick: (() -> Unit)? = null,
     showDivider: Boolean = false,
@@ -334,6 +358,12 @@ fun NeedlerAlbumRow(
 ) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
+    // Resolved out here rather than inside `semantics`, so that the parameter and the
+    // `SemanticsPropertyReceiver` extension of the same name cannot be confused for one another.
+    val spoken = buildString {
+        append(contentDescription ?: "$title, $subtitle")
+        if (isPlaying) append(", playing")
+    }
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -346,9 +376,7 @@ fun NeedlerAlbumRow(
                         Modifier
                     },
                 )
-                .semantics(mergeDescendants = true) {
-                    this.contentDescription = contentDescription ?: "$title, $subtitle"
-                }
+                .semantics(mergeDescendants = true) { this.contentDescription = spoken }
                 .padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -361,7 +389,7 @@ fun NeedlerAlbumRow(
                 Text(
                     text = title,
                     style = typography.rowTitle,
-                    color = colors.textPrimary,
+                    color = if (isPlaying) colors.accent else colors.textPrimary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -372,6 +400,9 @@ fun NeedlerAlbumRow(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            if (isPlaying) {
+                NeedlerNowPlayingIcon(tint = colors.accent)
             }
             trailing?.invoke(this)
         }
