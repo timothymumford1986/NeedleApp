@@ -469,7 +469,7 @@ So the settings toggle governs whether Needler reports plays at all; the destina
 
 The whole UI works with no network. Metadata is fully mirrored, so browsing, search and queueing never wait on the server; only streaming un-cached audio and pulling new music need a connection.
 
-**Known gap: downloads do not appear to be retained.** Pull local starts real work — a `.part` file appears under `files/audio` and grows steadily — but on a device watched for a quarter of an hour, four tracks each downloaded several megabytes and were replaced by the next, and no completed file was left behind. A sweep of the app's whole storage found only whichever `.part` was in flight. The download half works; the step that finalises a file does not, or something removes it afterwards. Until this is fixed the audio tier is effectively empty however long a pull runs, and the tier table below describes an intent rather than observed behaviour. Nothing is written to logcat for any of it, which is why the cause is still open.
+**Known gap: downloads are not retained.** Pull local does start: a `.part` file appears under `files/audio` and grows. But over fifteen minutes on a device, four tracks each reached several megabytes and were replaced by the next, and none of them was left behind. A sweep of the app's whole storage found only whichever `.part` was in flight. Downloading works; whatever finalises a file does not, or something removes it afterwards. Until this is fixed the audio tier is effectively empty however long a pull runs, and the tier table below describes an intent rather than observed behaviour. Nothing is written to logcat for any of it, which is why the cause is still open.
 
 ### Three tiers
 
