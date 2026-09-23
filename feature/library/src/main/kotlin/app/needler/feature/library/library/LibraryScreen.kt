@@ -602,6 +602,16 @@ private fun ArtistList(
     }
 }
 
+/**
+ * The Songs tab: every track in the library as a row, with its duration on the
+ * right.
+ *
+ * [nowPlayingTrackKey] is what marks the row the player is on — accent title,
+ * record glyph, and ", playing" in the spoken description, the same three
+ * signals the album screen gives the same track. The key comes from the
+ * playback state rather than from anything this screen holds, so the marker
+ * follows playback started anywhere in the app.
+ */
 @Composable
 private fun SongList(
     songs: List<Track>,
@@ -622,8 +632,12 @@ private fun SongList(
             NeedlerAlbumRow(
                 title = track.title,
                 subtitle = LibraryFormat.songRowSubtitle(track),
+                isPlaying = track.key == nowPlayingTrackKey,
                 onClick = if (playable) ({ onSongPlay(track) }) else null,
                 showDivider = true,
+                // No ", playing" here: `NeedlerAlbumRow` appends that to whatever
+                // description it is given, so adding it as well would have TalkBack
+                // say it twice.
                 contentDescription = buildString {
                     append(track.title)
                     append(", ")
@@ -632,7 +646,6 @@ private fun SongList(
                         append(", ")
                         append(it)
                     }
-                    if (track.key == nowPlayingTrackKey) append(", playing")
                     if (!playable) append(", not in your library")
                 },
                 trailing = {

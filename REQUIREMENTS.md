@@ -14,23 +14,23 @@ The `design/` folder is the UI source of truth: 21 screens as HTML and PNG, plus
 
 ### Where the build has reached
 
-Five modules exist: `:core:domain`, `:core:data`, `:core:network`, `:core:design`, and the `:app` shell that currently holds nothing but an `Application` class. Together they are roughly 18,500 lines of production Kotlin with 1,500 lines of tests behind them; 101 tests pass. `app-debug.apk` and `wear-debug.apk` both assemble.
+Eight modules carry code: `:core:domain`, `:core:data`, `:core:network`, `:core:design`, `:feature:library`, `:feature:player`, `:player:service` and `:app`. Together they are roughly 45,500 lines of production Kotlin with 18,000 lines of tests behind them; 781 tests pass, and 81 screenshots are committed as regression baselines. `app-debug.apk` and `wear-debug.apk` both assemble.
 
-**There is no user interface yet.** Nothing in `design/` has been built. What exists is the foundation the screens will stand on: the domain model and its repository interfaces, the Room schema with its DAOs, the eviction and staleness policies, both HTTP clients with their DTOs and error mapping, and the design system's palette, type, shape and shared components.
+**The app plays music.** Connect it to a server and you get the library in three tabs, album and artist detail, a mini-player, a full now-playing screen with its crate, the tablet and landscape sidebar, lock-screen and notification transport, and playback that survives backgrounding, rotation and relaunch. The library reads from the local mirror, so it renders in full with no network.
 
-What remains is therefore the whole of the product a user can see, plus the layers beneath it that hold state rather than describe it.
+What remains is search, pulls, the settings screen, and the two extra surfaces.
 
 | Remaining | Module |
 | --- | --- |
-| Repository implementations, sync, the write queue | `:core:data` |
-| Library, artist and album screens | `:feature:library` |
 | Unified search | `:feature:search` |
 | Request and queue screens | `:feature:pulls` |
-| Now playing, crate, EQ, crossfade, output | `:feature:player` |
-| `MediaLibraryService`, audio processors, cache wiring, the Auto browse tree | `:player:service` |
-| Navigation, DI wiring, Connect and Settings | `:app` |
+| Settings screen | `:app` |
 | Glance widgets | `:widget` |
 | Wear companion | `:wear` |
+
+Three screens in `:feature:player` are built but registered nowhere, because each needs a host decision first: the output picker (21), the equaliser and crossfade. `OutputPickerRoute` takes no dismiss callback and the pack draws it as a sheet over the dimmed player rather than a destination, so registering it as one would strand the listener on it. Until that is settled the output chip on both Now Playing and the sidebar does nothing.
+
+Two behaviours are known to be incomplete rather than absent. The offline store downloads but does not appear to keep what it downloads — see the Offline section. The Songs tab is a stand-in that flattens the tracks of the first few albums under the current album sort, because `LibraryRepository` has no all-library track query; it is therefore not the whole library, and its Title sort orders by album rather than by song.
 
 ### Decisions already fixed
 
@@ -468,6 +468,8 @@ So the settings toggle governs whether Needler reports plays at all; the destina
 ## Offline and caching
 
 The whole UI works with no network. Metadata is fully mirrored, so browsing, search and queueing never wait on the server; only streaming un-cached audio and pulling new music need a connection.
+
+**Known gap: downloads do not appear to be retained.** Pull local starts real work — a `.part` file appears under `files/audio` and grows steadily — but on a device watched for a quarter of an hour, four tracks each downloaded several megabytes and were replaced by the next, and no completed file was left behind. A sweep of the app's whole storage found only whichever `.part` was in flight. The download half works; the step that finalises a file does not, or something removes it afterwards. Until this is fixed the audio tier is effectively empty however long a pull runs, and the tier table below describes an intent rather than observed behaviour. Nothing is written to logcat for any of it, which is why the cause is still open.
 
 ### Three tiers
 
