@@ -90,6 +90,7 @@ fun SettingsRoute(
             onWifiOnlyDownloadsChange = viewModel::onWifiOnlyDownloadsChange,
             onRemoveDownload = viewModel::onRemoveDownload,
             onClearCachedMusic = viewModel::onClearCachedMusic,
+            onCheckForUpdates = viewModel::onCheckForUpdates,
             onArmDestructiveAction = viewModel::onArmDestructiveAction,
             onCancelDestructiveAction = viewModel::onCancelDestructiveAction,
             onConfirmDestructiveAction = viewModel::onConfirmDestructiveAction,

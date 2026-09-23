@@ -153,6 +153,7 @@ class SettingsScreenshotTest {
             onWifiOnlyDownloadsChange = {},
             onRemoveDownload = {},
             onClearCachedMusic = {},
+            onCheckForUpdates = {},
             onArmDestructiveAction = {},
             onCancelDestructiveAction = {},
             onConfirmDestructiveAction = {},

@@ -4,6 +4,8 @@
 
 package app.needler.settings
 
+import app.needler.update.UpdateRepository
+import app.needler.update.ManualUpdateCheck
 import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -94,6 +96,7 @@ class SettingsViewModel @Inject constructor(
     private val playbackSettings: PlaybackSettingsRepository,
     private val pins: PinRepository,
     private val settingsStore: NeedlerSettingsStore,
+    private val updates: UpdateRepository,
 ) : ViewModel() {
 
     /**
@@ -186,7 +189,7 @@ class SettingsViewModel @Inject constructor(
             playing = playing,
             notifications = notifications,
             storage = storage.copy(working = pending.working, notice = pending.storageNotice),
-            about = about,
+            about = about.copy(updateCheck = pending.updateCheck),
             armedAction = pending.armedAction,
             signedOut = pending.signedOut,
             signOutNotice = pending.signOutNotice,
@@ -205,6 +208,29 @@ class SettingsViewModel @Inject constructor(
     }
 
     // ---- Playing -------------------------------------------------------------
+
+    /**
+     * The "Check for updates" row.
+     *
+     * The updater is otherwise silent unless a newer release exists, so this is the only place a
+     * person can prove it works and get an answer. [UpdateRepository.checkNow] bypasses the daily
+     * cadence deliberately - a manual ask is always honoured - and lights the banner itself if it
+     * finds something, so all this has to do is report which of the outcomes happened.
+     */
+    fun onCheckForUpdates() {
+        if (transient.value.updateCheck == UpdateCheckStatus.Checking) return
+        transient.value = transient.value.copy(updateCheck = UpdateCheckStatus.Checking)
+        viewModelScope.launch {
+            val status = when (updates.checkNow()) {
+                ManualUpdateCheck.UP_TO_DATE -> UpdateCheckStatus.UpToDate
+                ManualUpdateCheck.UPDATE_AVAILABLE -> UpdateCheckStatus.UpdateAvailable
+                ManualUpdateCheck.OFFLINE -> UpdateCheckStatus.Offline
+                ManualUpdateCheck.RATE_LIMITED -> UpdateCheckStatus.RateLimited
+                ManualUpdateCheck.BUSY -> UpdateCheckStatus.Busy
+            }
+            transient.value = transient.value.copy(updateCheck = status)
+        }
+    }
 
     fun onGaplessChange(enabled: Boolean) {
         viewModelScope.launch { playbackSettings.setGaplessEnabled(enabled) }
@@ -517,6 +543,7 @@ class SettingsViewModel @Inject constructor(
         val storageNotice: String? = null,
         val signOutNotice: String? = null,
         val signedOut: Boolean = false,
+        val updateCheck: UpdateCheckStatus = UpdateCheckStatus.Idle,
     )
 
     private companion object {
