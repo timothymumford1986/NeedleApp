@@ -4,8 +4,11 @@ import app.needler.core.network.ApiLane
 import app.needler.core.network.CredentialProvider
 import app.needler.core.network.NeedlerHttpClient
 import app.needler.core.network.NetworkError
+import app.needler.core.network.describeForLog
 import app.needler.core.network.internal.HttpEngine
 import app.needler.core.network.media.SubsonicMediaUrls
+import app.needler.core.network.redactParseMessage
+import app.needler.core.network.redactUrl
 import app.needler.core.network.subsonic.dto.AlbumId3Dto
 import app.needler.core.network.subsonic.dto.AlbumList2Dto
 import app.needler.core.network.subsonic.dto.ArtistId3Dto
@@ -271,8 +274,31 @@ public class DefaultSubsonicApi(
                 // 404 from the wrong base path); the v1 mapping covers those statuses correctly.
                 throw engine.mapHttpFailure(response, null, ApiLane.Subsonic)
             }
-            val envelope = SubsonicEnvelopeParser.parse(engine.json, body)
-            if (envelope.isFailed) throw failure(envelope, response)
+            // The parse is wrapped rather than left to throw on its own so the log line can name
+            // the method that failed. This lane answers everything with HTTP 200, so without the
+            // URL a malformed envelope is an anonymous "could not parse the Subsonic response"
+            // and there is no way to tell `ping` from `getArtists`.
+            val envelope = try {
+                SubsonicEnvelopeParser.parse(engine.json, body)
+            } catch (failure: NetworkError.Serialisation) {
+                engine.log.error {
+                    "Subsonic could not parse " + redactUrl(url) + " (HTTP " + response.code +
+                        "): " + failure.cause.javaClass.simpleName + ": " +
+                        redactParseMessage(failure.cause.message)
+                }
+                throw failure
+            }
+            if (envelope.isFailed) {
+                val error = failure(envelope, response)
+                // This lane reports authentication failures as HTTP 200 with `status=failed`, so
+                // the interceptor's own line says "200" and looks like a success. Without this
+                // line a dead app-password is invisible in the log.
+                engine.log.warn {
+                    "Subsonic " + redactUrl(url) + " -> status=failed code=" +
+                        (envelope.error?.code?.toString() ?: "?") + " mapped to " + error.describeForLog()
+                }
+                throw error
+            }
             return envelope
         }
     }
@@ -287,7 +313,7 @@ public class DefaultSubsonicApi(
         return try {
             engine.json.decodeFromJsonElement(deserializer, element)
         } catch (failure: Exception) {
-            throw NetworkError.Serialisation(ApiLane.Subsonic, failure)
+            throw engine.serialisation(ApiLane.Subsonic, failure, url)
         }
     }
 
@@ -296,9 +322,10 @@ public class DefaultSubsonicApi(
         url: HttpUrl,
         key: String,
         deserializer: DeserializationStrategy<T>,
-    ): T = payload(url, key, deserializer) ?: throw NetworkError.Serialisation(
+    ): T = payload(url, key, deserializer) ?: throw engine.serialisation(
         ApiLane.Subsonic,
         IllegalStateException("Envelope has no \"$key\" payload"),
+        url,
     )
 
     private fun failure(envelope: SubsonicEnvelope, response: Response): NetworkError =

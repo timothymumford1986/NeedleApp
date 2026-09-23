@@ -72,11 +72,24 @@ public data class RetryPolicy(
 public class NeedlerHttpClient(
     private val credentials: CredentialProvider,
     public val pinStore: CertificatePinStore = CertificatePinStore.Empty,
-    logSink: NetworkLogSink = NetworkLogSink.None,
+    logSink: NetworkLogSink = NetworkLogSink.Installed,
     loggingEnabled: Boolean = true,
     public val timeouts: NetworkTimeouts = NetworkTimeouts(),
     public val retryPolicy: RetryPolicy = RetryPolicy(),
 ) {
+
+    /**
+     * This client's diagnostic log, shared with everything built on top of it — the HTTP engine,
+     * both lane clients and the range downloader — so that a request and the failure it turned
+     * into appear under the same tag, in order, in one `adb logcat`.
+     *
+     * The default [logSink] is [NetworkLogSink.Installed], which resolves through
+     * [NetworkDiagnostics] on every line. That means this client does not have to be rebuilt, or
+     * even constructed after the application starts, for diagnostics to be switched on; and with
+     * nothing installed — a release build — it is [NetworkLogSink.None] and every log call in this
+     * module compiles down to a volatile read and a return.
+     */
+    public val log: NetworkLog = NetworkLog(logSink, loggingEnabled)
 
     /** JSON client: both lanes' non-binary calls. */
     public val client: OkHttpClient
@@ -97,10 +110,14 @@ public class NeedlerHttpClient(
             // one that leaves the host the user named. See that class.
             .followRedirects(false)
             .followSslRedirects(false)
-            .addInterceptor(RedirectGuardInterceptor(credentials))
+            .addInterceptor(RedirectGuardInterceptor(credentials, log))
             .addInterceptor(ProxyHeaderInterceptor(credentials))
-            .addInterceptor(CredentialInterceptor(credentials))
-            .addInterceptor(RedactingLogInterceptor(logSink, loggingEnabled))
+            .addInterceptor(CredentialInterceptor(credentials, log))
+            // Last, so that it sees the request as it will actually go out: with the bearer
+            // attached, with `apiKey` appended to a Subsonic query, and with the user's proxy
+            // headers on it. Everything it is about to log is therefore credential-bearing, and
+            // redactUrl is the only thing standing between that and logcat.
+            .addInterceptor(RedactingLogInterceptor(log))
 
         val pinned = PinnedHostTrustManager.socketFactory(pinStore)
         if (pinned != null) {
@@ -140,9 +157,17 @@ public class NeedlerHttpClient(
  * appended to the query. Requests tagged [SkipAuth] (login, the pre-sign-in reachability probe)
  * go out bare. A missing credential is not an error here — the server answers `401` or Subsonic
  * code 44 and the engine maps that to [NetworkError.Unauthorised].
+ *
+ * It does, however, log the absence. "There was no bearer to send" and "the server rejected the
+ * bearer we sent" both surface to the user as one re-sign-in prompt, and telling them apart from
+ * outside the process is otherwise impossible: both produce an identical `401` on the wire. The
+ * line names the lane and nothing else — never a credential, never a length, never a prefix,
+ * because the presence or absence of a secret is a fact worth logging and any part of its value
+ * is not.
  */
 internal class CredentialInterceptor(
     private val credentials: CredentialProvider,
+    private val log: NetworkLog = NetworkLog.Disabled,
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
@@ -155,6 +180,12 @@ internal class CredentialInterceptor(
         ApiLane.V1 -> {
             val token = credentials.bearerToken()
             if (token.isNullOrEmpty() || request.header(HEADER_AUTHORIZATION) != null) {
+                if (token.isNullOrEmpty() && request.header(HEADER_AUTHORIZATION) == null) {
+                    log.warn {
+                        "V1 " + request.method + " " + redactUrl(request.url) +
+                            " sent with no bearer: none is stored, so a 401 here is expected"
+                    }
+                }
                 request
             } else {
                 request.newBuilder().header(HEADER_AUTHORIZATION, "Bearer $token").build()
@@ -164,6 +195,12 @@ internal class CredentialInterceptor(
         ApiLane.Subsonic -> {
             val appPassword = credentials.appPassword()
             if (appPassword.isNullOrEmpty() || request.url.queryParameter(QUERY_API_KEY) != null) {
+                if (appPassword.isNullOrEmpty() && request.url.queryParameter(QUERY_API_KEY) == null) {
+                    log.warn {
+                        "Subsonic " + request.method + " " + redactUrl(request.url) +
+                            " sent with no apiKey: none is stored, so error 44 here is expected"
+                    }
+                }
                 request
             } else {
                 val url = request.url.newBuilder().addQueryParameter(QUERY_API_KEY, appPassword).build()
@@ -259,6 +296,7 @@ internal class ProxyHeaderInterceptor(
  */
 internal class RedirectGuardInterceptor(
     private val credentials: CredentialProvider,
+    private val log: NetworkLog = NetworkLog.Disabled,
 ) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
@@ -277,15 +315,28 @@ internal class RedirectGuardInterceptor(
                 proxyCredentialsSent = credentials.proxyCredentials().isNotEmpty,
             )
             if (interception != null) {
+                // Logged here rather than left to the caller: this throw happens above the logging
+                // interceptor, which saw only an unremarkable 302 and would never mention it again.
+                log.error {
+                    "redirect from " + redactUrl(sent.url) + " to " + redactUrl(target) +
+                        " is an authenticating proxy: " + interception.summary
+                }
                 response.close()
                 throw NetworkError.AuthenticatingProxy(interception, laneOf(sent))
             }
 
             // Same host, but a downgrade out of TLS. Not followed, and not an interception either:
             // the caller sees the redirect and reports it as a server that is not DroppedNeedle.
-            if (sent.url.isHttps && !target.isHttps) return response
+            if (sent.url.isHttps && !target.isHttps) {
+                log.warn {
+                    "refusing an https to http redirect from " + redactUrl(sent.url) +
+                        " to " + redactUrl(target)
+                }
+                return response
+            }
 
             if (hops >= MAX_HOPS) {
+                log.error { "too many redirects from " + redactUrl(sent.url) }
                 response.close()
                 throw NetworkError.Offline(
                     ProtocolException("Too many redirects from " + redactUrl(sent.url)),
@@ -327,6 +378,9 @@ internal class RedirectGuardInterceptor(
             AuthenticatingProxyDetector.HTTP_PROXY_AUTH_REQUIRED.toString(),
         ) == true
         if (!proxyAuth) throw failure
+        log.error {
+            "407 from " + redactUrl(request.url) + ": a proxy in front of the server wants a credential"
+        }
         throw NetworkError.AuthenticatingProxy(
             ProxyInterception(
                 proxyHost = null,

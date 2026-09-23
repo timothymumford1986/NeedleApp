@@ -5,7 +5,11 @@ import app.needler.core.network.AuthenticatingProxyDetector
 import app.needler.core.network.CredentialProvider
 import app.needler.core.network.NeedlerHttpClient
 import app.needler.core.network.NetworkError
+import app.needler.core.network.NetworkLog
 import app.needler.core.network.RetryPolicy
+import app.needler.core.network.describeForLog
+import app.needler.core.network.redactParseMessage
+import app.needler.core.network.redactUrl
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -15,6 +19,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -67,6 +72,12 @@ internal class HttpEngine(
     val json: Json get() = NeedlerJson
 
     /**
+     * The shared diagnostic log, so that the lane clients built on this engine write under the
+     * same tag as the interceptor that made the call.
+     */
+    val log: NetworkLog get() = http.log
+
+    /**
      * Run [request], retrying per [policy]. The returned response is open: the caller owns it and
      * must close it (`response.use { }`).
      *
@@ -92,7 +103,16 @@ internal class HttpEngine(
                     retryable && attemptIndex < policy.maxRetries
                 ) {
                     attemptIndex++
-                    delay(backoffMillis(policy, attemptIndex))
+                    val backoff = backoffMillis(policy, attemptIndex)
+                    // Without this line a call that eventually succeeded on its third attempt is
+                    // indistinguishable in the log from one that went straight through, and a
+                    // flaky server looks like a healthy one.
+                    log.debug {
+                        "retry " + attemptIndex + "/" + policy.maxRetries + " of " + request.method +
+                            " " + redactUrl(request.url) + " in " + backoff + "ms after " +
+                            failure.javaClass.simpleName
+                    }
+                    delay(backoff)
                     continue
                 }
                 throw mapTransportFailure(request, failure)
@@ -113,6 +133,10 @@ internal class HttpEngine(
 
                 else -> backoffMillis(policy, attemptIndex + 1)
             }
+            log.debug {
+                "retry " + (attemptIndex + 1) + "/" + policy.maxRetries + " of " + request.method +
+                    " " + redactUrl(request.url) + " in " + waitMillis + "ms after HTTP " + response.code
+            }
             response.close()
             attemptIndex++
             delay(waitMillis)
@@ -125,7 +149,7 @@ internal class HttpEngine(
             val body = response.body.string()
             requireNotIntercepted(response, body, ApiLane.V1)
             if (!response.isSuccessful) throw mapHttpFailure(response, body, ApiLane.V1)
-            return decode(deserializer, body, ApiLane.V1)
+            return decode(deserializer, body, ApiLane.V1, response.request.url)
         }
     }
 
@@ -156,17 +180,46 @@ internal class HttpEngine(
             bodyPrefix = body,
             proxyCredentialsSent = credentials.proxyCredentials().isNotEmpty,
         ) ?: return
+        log.error {
+            lane.name + " " + redactUrl(response.request.url) + " -> " + response.code +
+                " was answered by something else: " + interception.summary
+        }
         throw NetworkError.AuthenticatingProxy(interception, lane)
     }
 
-    fun <T> decode(deserializer: DeserializationStrategy<T>, body: String, lane: ApiLane): T =
+    /**
+     * Decode a body, turning any shape mismatch into [NetworkError.Serialisation].
+     *
+     * [url] is optional only because one caller genuinely has no request to hand; pass it wherever
+     * it exists. A parse failure with no URL in the log line is a parse failure nobody can act on:
+     * "could not parse the V1 response" is true of every endpoint at once.
+     *
+     * The failure's own message is put through [redactParseMessage] rather than logged raw. See
+     * that function for the reason — in short, `kotlinx.serialization` appends the document it
+     * could not read, and one of the documents this module parses is the login response.
+     */
+    fun <T> decode(
+        deserializer: DeserializationStrategy<T>,
+        body: String,
+        lane: ApiLane,
+        url: HttpUrl? = null,
+    ): T =
         try {
             json.decodeFromString(deserializer, body)
         } catch (failure: SerializationException) {
-            throw NetworkError.Serialisation(lane, failure)
+            throw serialisation(lane, failure, url)
         } catch (failure: IllegalArgumentException) {
-            throw NetworkError.Serialisation(lane, failure)
+            throw serialisation(lane, failure, url)
         }
+
+    /** Build [NetworkError.Serialisation] and say, once, what could not be read and from where. */
+    fun serialisation(lane: ApiLane, failure: Throwable, url: HttpUrl?): NetworkError {
+        log.error {
+            lane.name + " could not parse " + (url?.let { redactUrl(it) } ?: "the response") +
+                ": " + failure.javaClass.simpleName + ": " + redactParseMessage(failure.message)
+        }
+        return NetworkError.Serialisation(lane, failure)
+    }
 
     /**
      * HTTP status to [NetworkError].
@@ -182,6 +235,27 @@ internal class HttpEngine(
         }
         val code = envelope?.error?.code
         val message = envelope?.error?.message
+        val error = mapStatus(response, lane, code, message)
+        // The line the second of the two reported bugs needed and did not have. A failing
+        // `GET /api/v1/artists/{mbid}/releases` now says which lane it was on, which status came
+        // back, which error envelope code the server used and which NetworkError the app will act
+        // on - so SessionExpired, a 404 from the wrong base path and a 500 stop looking identical
+        // from outside the process. The body itself is never logged; `message` here is the
+        // server's own `error.message`, which is what the UI would have shown anyway.
+        log.warn {
+            lane.name + " " + response.request.method + " " + redactUrl(response.request.url) +
+                " -> " + response.code + (code?.let { " code=" + it } ?: "") +
+                " mapped to " + error.describeForLog()
+        }
+        return error
+    }
+
+    private fun mapStatus(
+        response: Response,
+        lane: ApiLane,
+        code: String?,
+        message: String?,
+    ): NetworkError {
         return when (val status = response.code) {
             // The v1 lane's 401s come in two shapes: AuthMiddleware emits code UNAUTHORIZED,
             // while a route-raised 401 (bad login) is mislabelled INTERNAL_ERROR upstream, so the
@@ -222,15 +296,30 @@ internal class HttpEngine(
         requireNotIntercepted(response, prefix, lane)
     }
 
-    /** Transport-level failure to [NetworkError]. Cancellation is never swallowed. */
-    fun mapTransportFailure(request: Request, failure: IOException): NetworkError = when (failure) {
-        is NetworkError -> failure
-        is SSLException -> NetworkError.TlsNotTrusted(request.url.host, failure)
-        is UnknownHostException -> NetworkError.Offline(failure, NetworkError.Offline.Kind.Dns)
-        is SocketTimeoutException -> NetworkError.Offline(failure, NetworkError.Offline.Kind.Timeout)
-        // OkHttp's whole-call timeout surfaces as InterruptedIOException("timeout").
-        is InterruptedIOException -> NetworkError.Offline(failure, NetworkError.Offline.Kind.Timeout)
-        else -> NetworkError.Offline(failure, NetworkError.Offline.Kind.Io)
+    /**
+     * Transport-level failure to [NetworkError]. Cancellation is never swallowed.
+     *
+     * Logged at [app.needler.core.network.NetworkLogLevel.Error] because this is the branch where
+     * the app decides the server is unreachable and falls back to the Room mirror - the decision
+     * that makes an offline app look like a broken one, and the decision hardest to second-guess
+     * afterwards without a record of which exception produced it. An error already of type
+     * [NetworkError] is passed through without a second line: whoever raised it logged it.
+     */
+    fun mapTransportFailure(request: Request, failure: IOException): NetworkError {
+        if (failure is NetworkError) return failure
+        val error = when (failure) {
+            is SSLException -> NetworkError.TlsNotTrusted(request.url.host, failure)
+            is UnknownHostException -> NetworkError.Offline(failure, NetworkError.Offline.Kind.Dns)
+            is SocketTimeoutException -> NetworkError.Offline(failure, NetworkError.Offline.Kind.Timeout)
+            // OkHttp's whole-call timeout surfaces as InterruptedIOException("timeout").
+            is InterruptedIOException -> NetworkError.Offline(failure, NetworkError.Offline.Kind.Timeout)
+            else -> NetworkError.Offline(failure, NetworkError.Offline.Kind.Io)
+        }
+        log.error {
+            request.method + " " + redactUrl(request.url) + " failed in transport: " +
+                failure.javaClass.simpleName + " -> " + error.describeForLog()
+        }
+        return error
     }
 
     private suspend fun singleAttempt(client: OkHttpClient, request: Request): Response =

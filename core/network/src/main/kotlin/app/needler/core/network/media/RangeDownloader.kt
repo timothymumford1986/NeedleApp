@@ -5,7 +5,9 @@ import app.needler.core.network.CredentialProvider
 import app.needler.core.network.NeedlerHttpClient
 import app.needler.core.network.NetworkError
 import app.needler.core.network.RetryPolicy
+import app.needler.core.network.describeForLog
 import app.needler.core.network.internal.HttpEngine
+import app.needler.core.network.redactUrl
 import app.needler.core.network.subsonic.SubsonicEnvelopeParser
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +65,17 @@ public class RangeDownloader(
     private val engine = HttpEngine(http, credentials)
 
     /**
+     * Shared with the rest of the module, and used **only** at the two ends of a download.
+     *
+     * Nothing is logged inside the copy loop. That loop runs once per 64 KiB, which for a FLAC
+     * album is tens of thousands of iterations per track; a line there would cost more than the
+     * download and would push every other line out of logcat's ring buffer, which is precisely the
+     * opposite of what this instrumentation is for. `onProgress` already exists for anyone who
+     * wants byte-by-byte feedback, and it reports to the caller rather than to the log.
+     */
+    private val log = http.log
+
+    /**
      * Fetch [url] into [target], continuing from whatever is already on disk when [resume] is true.
      *
      * @param onProgress called with (bytes on disk, complete length or null) as bytes arrive. It
@@ -84,6 +97,10 @@ public class RangeDownloader(
             IllegalArgumentException("Not a valid HTTP URL"),
         )
         val existingBytes = if (resume && target.isFile) target.length() else 0L
+        log.debug {
+            "download starting " + redactUrl(httpUrl) + " into " + target.name +
+                " from " + existingBytes + "B"
+        }
         val builder = Request.Builder()
             .url(httpUrl)
             .get()
@@ -96,9 +113,16 @@ public class RangeDownloader(
             // intercepted download writes a login page into the cache as though it were music.
             engine.requireNotInterceptedBinary(response, ApiLane.Subsonic)
             when {
-                response.code == 416 -> throw NetworkError.RangeNotSatisfiable(
-                    HttpEngine.completeLengthOf(response),
-                )
+                response.code == 416 -> {
+                    val completeLength = HttpEngine.completeLengthOf(response)
+                    log.warn {
+                        "download range rejected " + redactUrl(httpUrl) + ": asked from " +
+                            existingBytes + "B, server says the file is " +
+                            (completeLength?.toString() ?: "an unknown size") +
+                            " - the partial file must be discarded"
+                    }
+                    throw NetworkError.RangeNotSatisfiable(completeLength)
+                }
 
                 !response.isSuccessful -> throw engine.mapHttpFailure(
                     response,
@@ -113,11 +137,17 @@ public class RangeDownloader(
             if (subtype == "json" || subtype == "xml") {
                 val body = response.body.string()
                 val envelope = SubsonicEnvelopeParser.parse(engine.json, body)
-                throw SubsonicEnvelopeParser.toNetworkError(
+                val error = SubsonicEnvelopeParser.toNetworkError(
                     envelope.error,
                     HttpEngine.retryAfterSeconds(response),
                     credentials,
                 )
+                log.error {
+                    "download refused " + redactUrl(httpUrl) + ": the server sent " + subtype +
+                        " instead of audio, code=" + (envelope.error?.code?.toString() ?: "?") +
+                        " mapped to " + error.describeForLog()
+                }
+                throw error
             }
 
             val partial = response.code == 206
@@ -144,11 +174,18 @@ public class RangeDownloader(
                     output.fd.sync()
                 }
             } catch (failure: IOException) {
+                // Distinct from a transport failure before the first byte: the socket died with a
+                // part-written file on disk, and the size at the moment it died is what tells the
+                // next attempt whether resume will help.
+                log.error {
+                    "download interrupted " + redactUrl(httpUrl) + " after " + written +
+                        "B (" + (startAt + written) + "B on disk): " + failure.javaClass.simpleName
+                }
                 throw engine.mapTransportFailure(builder.build(), failure)
             }
 
             val totalBytes = startAt + written
-            RangeDownloadResult(
+            val result = RangeDownloadResult(
                 bytesWritten = written,
                 totalBytes = totalBytes,
                 completeLength = completeLength,
@@ -156,6 +193,21 @@ public class RangeDownloader(
                 complete = completeLength == null || totalBytes >= completeLength,
                 contentType = response.body.contentType()?.toString(),
             )
+            // The line the first of the two reported bugs needed. "Downloads run but retain
+            // nothing" has two completely different causes - bytes that never arrived, and bytes
+            // that arrived and were then discarded by whatever finalises the file - and this
+            // module can settle which one it is in a single line: how many bytes were written,
+            // how large the file is now, how large the server says it should be, and whether the
+            // download is therefore finished. If this says `complete=true size=41283910` and the
+            // file is gone a minute later, the fault is not here.
+            log.info {
+                "download finished " + redactUrl(httpUrl) + " -> HTTP " + response.code +
+                    " wrote=" + written + "B size=" + totalBytes + "B of " +
+                    (completeLength?.toString() ?: "unknown") + " resumed=" + partial +
+                    " complete=" + result.complete + " type=" + (result.contentType ?: "none") +
+                    " target=" + target.name
+            }
+            result
         }
     }
 

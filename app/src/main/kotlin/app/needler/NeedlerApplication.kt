@@ -1,5 +1,6 @@
 package app.needler
 
+import app.needler.core.network.NetworkDiagnostics
 import android.app.Application
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
@@ -68,6 +69,13 @@ class NeedlerApplication : Application(), SingletonImageLoader.Factory, Configur
 
     override fun onCreate() {
         super.onCreate()
+        // The network layer has always built its redacting log interceptor and
+        // always thrown the output away, because nothing ever installed a sink
+        // and the interceptor short-circuits on NetworkLogSink.None. That is
+        // why a failure on a device left no trace at all. This is the line that
+        // was missing; it checks FLAG_DEBUGGABLE itself, so a release build
+        // stays silent whether or not anyone remembers to guard the call.
+        NetworkDiagnostics.installForApplication(this)
         // Idempotent, and the only thing standing between a posted notification
         // and it being discarded without a trace.
         notifier.ensureChannels()
