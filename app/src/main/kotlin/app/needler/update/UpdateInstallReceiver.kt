@@ -3,8 +3,10 @@ package app.needler.update
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 
 /**
  * The other end of [ApkInstaller]'s [android.content.IntentSender]: where the platform reports what
@@ -23,13 +25,18 @@ import javax.inject.Inject
  * arrives without the receiver being reachable by anyone else. Exporting it, or giving it a public
  * action, would let any app on the device fabricate an install result.
  *
- * ## Hilt
+ * ## Hilt, and why this pulls rather than being injected
  *
- * `@AndroidEntryPoint` on a receiver means the generated superclass performs field injection inside
- * `super.onReceive`, so that call must come first — before [installer] is touched. This is why
- * [ApkInstaller] is a `@Singleton`: the receiver and the view model behind the banner have to be
- * looking at the same `StateFlow`, or the confirmation dialogue would appear while the banner went
- * on claiming the download was still staging.
+ * `@AndroidEntryPoint` is the usual answer and does not work here. Hilt injects a receiver from a
+ * generated superclass inside `super.onReceive`, and the Gradle plugin rewrites the superclass
+ * *after* compilation — so Kotlin still sees `BroadcastReceiver.onReceive`, which is abstract, and
+ * `super.onReceive` will not compile. An `@EntryPoint` pulled from the application graph does the
+ * same job without the transform, and `:widget` already reaches the graph this way for the same
+ * underlying reason: a receiver is only injectable for the length of one `onReceive`.
+ *
+ * [ApkInstaller] is a `@Singleton` so that this receiver and the view model behind the banner are
+ * looking at the same `StateFlow`; otherwise the confirmation dialogue would appear while the
+ * banner went on claiming the download was still staging.
  *
  * ## What this class deliberately does not do
  *
@@ -38,15 +45,21 @@ import javax.inject.Inject
  * install state machine can be read in one file. In particular it does not, and must never, respond
  * to a failure by offering to uninstall: see the rule at the top of [ApkInstaller].
  */
-@AndroidEntryPoint
 class UpdateInstallReceiver : BroadcastReceiver() {
 
-    @Inject
-    lateinit var installer: ApkInstaller
-
     override fun onReceive(context: Context, intent: Intent) {
-        // Must be first: this is what injects `installer`.
-        super.onReceive(context, intent)
-        installer.onStatusBroadcast(context, intent)
+        // Pulled per broadcast rather than held: the process this receiver runs
+        // in may have been created to deliver exactly this one intent.
+        EntryPointAccessors
+            .fromApplication(context.applicationContext, UpdateInstallEntryPoint::class.java)
+            .apkInstaller()
+            .onStatusBroadcast(context, intent)
+    }
+
+    /** How the receiver reaches the one [ApkInstaller] the banner is also watching. */
+    @EntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface UpdateInstallEntryPoint {
+        fun apkInstaller(): ApkInstaller
     }
 }
