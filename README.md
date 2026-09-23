@@ -5,6 +5,8 @@ An Android music player for a self-hosted [DroppedNeedle](https://github.com/Dro
 Browse and play your library, search the MusicBrainz catalogue, ask your server to pull albums you
 don't own yet, and keep what you want playable offline. Phone and tablet.
 
+<img src="docs/screenshots/library.png" width="320" alt="The library screen on a phone">
+
 ## Install
 
 Download the latest `needler-vX.Y.Z.apk` from
