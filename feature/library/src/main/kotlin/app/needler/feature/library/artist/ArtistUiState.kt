@@ -1,5 +1,6 @@
 package app.needler.feature.library.artist
 
+import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
 import app.needler.feature.library.album.AlbumNotice
@@ -40,7 +41,15 @@ data class ArtistUiState(
      * The owned half is unaffected, which is the whole point of splitting them:
      * an offline artist screen still lists everything you own by that artist.
      */
-    val discographyUnavailable: Boolean = false,
+    /**
+     * Why the catalogue half could not be fetched, or `null` when it could.
+     *
+     * This is the error and not a flag because [NeedlerError]'s own KDoc says the distinctions
+     * matter to the UI. A 404 for an artist the catalogue has never heard of, a 500, and a read
+     * timeout are three different things to be told, and collapsing them to one sentence made a
+     * failure that happens on every artist impossible to tell apart from one that happens on one.
+     */
+    val discographyError: NeedlerError? = null,
 
     val offline: Boolean = false,
 
@@ -48,6 +57,8 @@ data class ArtistUiState(
 
     val notice: AlbumNotice? = null,
 ) {
+
+    val discographyUnavailable: Boolean get() = discographyError != null
 
     val notFound: Boolean get() = !loading && artist == null
 
