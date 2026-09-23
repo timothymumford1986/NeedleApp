@@ -42,6 +42,18 @@
     <!-- Keeps playback alive with the screen off. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+      In-app update. REQUIREMENTS.md "Decisions already fixed" ships a signed APK
+      on GitHub releases, so there is no store to hand the update problem to and
+      the app has to install its own successor.
+
+      This only makes Needler eligible to ask. From Android 8 the grant is
+      per-source and belongs to the user, which is why ApkInstaller checks
+      canRequestPackageInstalls() first and sends them to
+      ACTION_MANAGE_UNKNOWN_APP_SOURCES rather than failing at the session.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application
         android:name=".NeedlerApplication"
         android:label="Needler"
@@ -108,6 +120,22 @@
                 android:value="androidx.startup"
                 tools:node="remove" />
         </provider>
+
+
+        <!--
+          Where PackageInstaller reports a session's outcome. Declared here rather
+          than registered at runtime because the app being installed is this one:
+          on success the process is replaced, and a receiver held in memory would
+          not be there to hear it.
+
+          exported="false" with no intent-filter is deliberate. ApkInstaller
+          addresses it with an explicit PendingIntent, which the platform delivers
+          under this app's own identity; exporting it would let anything on the
+          device fabricate an install result for Needler.
+        -->
+        <receiver
+            android:name=".update.UpdateInstallReceiver"
+            android:exported="false" />
 
     </application>
 

@@ -38,6 +38,7 @@ import app.needler.feature.pulls.pulls.PullsRoute
 import app.needler.feature.search.search.SearchRoute
 import app.needler.feature.player.sidebar.PlayerSidebarRoute
 import app.needler.settings.SettingsRoute
+import app.needler.update.UpdateBannerRoute
 
 /** Onboarding. Screens 01 and 16. Owned by `:app`. */
 private const val ROUTE_CONNECT = "connect"
@@ -315,6 +316,10 @@ private fun NeedlerHome(
         // the nearest ViewModelStoreOwner, so the whole of Home shares one
         // PlayerViewModel and switching tab does not rebuild the session
         // connection.
+        // The update bar. No callbacks and no navigation: it checks, downloads
+        // and hands the APK to the platform installer itself, and draws nothing
+        // at all when there is no update, which is almost always.
+        updateBanner = { UpdateBannerRoute() },
         miniPlayer = {
             // Tapping the card opens Now Playing, which is what screens 06 and
             // 13 draw it doing. The target is in the outer graph, so it arrives
