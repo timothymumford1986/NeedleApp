@@ -17,7 +17,6 @@ import app.needler.core.design.component.NeedlerBottomNavBar
 import app.needler.core.design.component.NeedlerNavItem
 import app.needler.core.design.component.NeedlerNavigationRail
 import app.needler.core.design.theme.NeedlerTheme
-import app.needler.ui.player.PlayerSidebar
 
 /**
  * The app's chrome: navigation on one side of the content, and on a tablet the
@@ -68,8 +67,21 @@ import app.needler.ui.player.PlayerSidebar
  *   leave at the default. That default draws nothing, which is also what the
  *   real bar does with an empty crate: the bar is absent rather than empty, so
  *   it never steals 72dp from a list to say nothing.
- * @param sidebar the tablet player sidebar. Defaults to [PlayerSidebar], the
- *   placeholder `:feature:player` replaces.
+ * @param sidebar the tablet's permanent player, drawn to the right of the
+ *   content at expanded width. It is `:feature:player`'s `PlayerSidebarRoute`,
+ *   supplied by the host for the same reason [miniPlayer] is: the scaffold is
+ *   chrome and knows nothing about playback.
+ *
+ *   It has **no default**, which is the one place the two player slots differ.
+ *   An absent [miniPlayer] is a state the real bar also produces - it draws
+ *   nothing with an empty crate - so `{}` is honest there. An absent sidebar is
+ *   not: REQUIREMENTS.md "Tablet layout" makes it permanent, and at expanded
+ *   width it is the *only* player surface, so a window without it has no
+ *   transport, no crate and no route to either. A default here would let a
+ *   caller ship exactly that and still compile, which is what the placeholder
+ *   default this parameter used to carry did - it drew "Nothing playing" over
+ *   real playback on every phone turned to landscape. The compiler now asks the
+ *   question instead.
  */
 @Composable
 fun NeedlerNavigationScaffold(
@@ -79,7 +91,7 @@ fun NeedlerNavigationScaffold(
     modifier: Modifier = Modifier,
     pullsBadgeCount: Int = 0,
     miniPlayer: @Composable () -> Unit = {},
-    sidebar: @Composable () -> Unit = { PlayerSidebar() },
+    sidebar: @Composable () -> Unit,
     content: @Composable () -> Unit,
 ) {
     val items = NeedlerDestination.entries.map { destination ->
@@ -108,6 +120,10 @@ fun NeedlerNavigationScaffold(
             ) {
                 content()
             }
+            // Outside the weighted Box, so the 400dp it takes is taken from the
+            // content pane rather than overlaid on it, and drawing its own
+            // hairline and surface: the panel owns its full width, as screen 09
+            // draws it.
             sidebar()
         }
     } else {

@@ -21,6 +21,7 @@ import app.needler.feature.library.library.LibraryRoute
 import app.needler.feature.player.crate.CrateRoute
 import app.needler.feature.player.nowplaying.MiniPlayerRoute
 import app.needler.feature.player.nowplaying.NowPlayingRoute
+import app.needler.feature.player.sidebar.PlayerSidebarRoute
 import app.needler.ui.placeholder.DestinationPlaceholder
 
 /** Onboarding. Screens 01 and 16. Owned by `:app`. */
@@ -241,6 +242,33 @@ private fun NeedlerHome(
             // 13 draw it doing. The target is in the outer graph, so it arrives
             // as a parameter rather than being navigated from in here.
             MiniPlayerRoute(onExpand = onOpenNowPlaying)
+        },
+        // The tablet's permanent player, screen 09, composed here for the same
+        // reasons the mini player is: it is chrome, it has to survive a tab
+        // switch, and its two view models resolve against the ROUTE_HOME back
+        // stack entry, so the whole of Home shares one session connection
+        // rather than rebuilding one per destination.
+        //
+        // The scaffold only calls this slot at expanded width, so a phone in
+        // portrait composes neither the sidebar nor its view models; turning it
+        // to landscape is what brings them up, and the PlayerViewModel it
+        // resolves is the one the mini player was already using, because both
+        // ask the same store for it.
+        //
+        // No expand and no open-crate callback, because at this width there is
+        // nothing to expand *to*: the panel holds the artwork, the scrubber,
+        // the transport and the crate itself. Now Playing and ROUTE_CRATE are
+        // the phone's way of reaching what the tablet simply has on screen.
+        sidebar = {
+            PlayerSidebarRoute(
+                // Inert, for exactly the reason the chip on Now Playing is -
+                // see ROUTE_NOW_PLAYING above. OutputPickerRoute takes no
+                // dismiss callback and the pack draws screen 21 as a sheet
+                // rather than a destination, so inventing a route for it here
+                // would strand the listener on a screen with no way off it.
+                // Every other control in the panel is live.
+                onChooseOutput = {},
+            )
         },
     ) {
         NavHost(
