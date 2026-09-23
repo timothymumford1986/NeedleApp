@@ -2,6 +2,8 @@ package app.needler.core.network.capability
 
 import app.needler.core.network.ApiLane
 import app.needler.core.network.NetworkError
+import app.needler.core.network.NetworkLog
+import app.needler.core.network.describeForLog
 import app.needler.core.network.subsonic.SubsonicApi
 import app.needler.core.network.v1.V1Api
 
@@ -134,6 +136,16 @@ public class CapabilityProbe(
     private val v1: V1Api,
     private val subsonic: SubsonicApi,
     private val nowMillis: () -> Long = System::currentTimeMillis,
+    /**
+     * Defaults to the process-wide diagnostic log, so this class needs no wiring to be heard.
+     *
+     * The probe is the one place where the difference between [CapabilityProbeResult.SessionExpired],
+     * [CapabilityProbeResult.Unreachable] and [CapabilityProbeResult.Failed] is decided, and that
+     * difference is the whole content of "connecting did not work" as the user experiences it.
+     * The underlying HTTP failure is already logged by the engine; what is added here is which of
+     * the six negotiation steps was in flight, which is what turns a log into a diagnosis.
+     */
+    private val log: NetworkLog = NetworkLog(),
 ) {
 
     public suspend fun probe(): CapabilityProbeResult {
@@ -147,21 +159,21 @@ public class CapabilityProbe(
                 serverBuildDate = version.buildDate,
             )
         } catch (failure: NetworkError) {
-            return failure.toOutcome(capabilities)
+            return failure.toOutcome(capabilities, "GET /api/v1/version")
         }
 
         // 2. Role, which gates the request and download affordances.
         try {
             capabilities = capabilities.copy(role = v1.me().role)
         } catch (failure: NetworkError) {
-            return failure.toOutcome(capabilities)
+            return failure.toOutcome(capabilities, "GET /api/v1/auth/me")
         }
 
         // 3. The Connect Apps gate.
         val settings = try {
             v1.connectAppsSettings()
         } catch (failure: NetworkError) {
-            return failure.toOutcome(capabilities)
+            return failure.toOutcome(capabilities, "GET /api/v1/connect-apps/settings")
         }
         capabilities = capabilities.copy(
             subsonicEnabled = settings.subsonicEnabled,
@@ -172,6 +184,7 @@ public class CapabilityProbe(
             serverName = settings.advertiseServerName,
         )
         if (!settings.subsonicEnabled) {
+            log.warn { "capability probe stopped: subsonic_enabled is off on the server" }
             return CapabilityProbeResult.SubsonicDisabled(capabilities)
         }
 
@@ -183,7 +196,7 @@ public class CapabilityProbe(
                     .associate { it.name to it.versions },
             )
         } catch (failure: NetworkError) {
-            return failure.toOutcome(capabilities)
+            return failure.toOutcome(capabilities, "getOpenSubsonicExtensions")
         }
 
         // 5. Confirm the app-password works, and read the envelope's identity fields.
@@ -195,20 +208,39 @@ public class CapabilityProbe(
                 serverName = info.type ?: capabilities.serverName,
             )
         } catch (failure: NetworkError) {
-            return failure.toOutcome(capabilities)
+            return failure.toOutcome(capabilities, "Subsonic ping")
         }
 
         // 6. The admin gate on library download.
         try {
             capabilities = capabilities.copy(downloadAllowed = v1.downloadAccess().allowed)
         } catch (failure: NetworkError) {
-            return failure.toOutcome(capabilities)
+            return failure.toOutcome(capabilities, "GET /api/v1/download/access")
         }
 
+        log.info {
+            "capability probe ready: server=" + (capabilities.serverVersion ?: "?") +
+                " role=" + (capabilities.role ?: "?") +
+                " openSubsonic=" + capabilities.openSubsonic +
+                " downloadAllowed=" + capabilities.downloadAllowed +
+                " extensions=" + capabilities.extensions.keys.sorted()
+        }
         return CapabilityProbeResult.Ready(capabilities)
     }
 
-    private fun NetworkError.toOutcome(partial: ServerCapabilitiesDto): CapabilityProbeResult =
+    private fun NetworkError.toOutcome(
+        partial: ServerCapabilitiesDto,
+        step: String,
+    ): CapabilityProbeResult {
+        val outcome = outcomeFor(partial)
+        log.warn {
+            "capability probe stopped at " + step + ": " + describeForLog() +
+                " -> " + outcome.javaClass.simpleName
+        }
+        return outcome
+    }
+
+    private fun NetworkError.outcomeFor(partial: ServerCapabilitiesDto): CapabilityProbeResult =
         when (this) {
             is NetworkError.SubsonicProtocolDisabled ->
                 CapabilityProbeResult.SubsonicDisabled(partial.copy(subsonicEnabled = false))
