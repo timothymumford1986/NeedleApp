@@ -67,3 +67,51 @@ public data class CachedAudio(
      */
     public fun isStaleFor(current: TrackFetchHandle): Boolean = sourceHandle.isStaleComparedTo(current)
 }
+
+/**
+ * The orderings the Songs tab offers, which are deliberately **not** [AlbumListKind].
+ *
+ * The two enumerations read alike and mean different things, and conflating them is precisely the
+ * fault this type exists to make impossible. The Songs tab was once assembled by flattening the
+ * tracks of an album list, so picking "Title" sorted by *album* title and produced a single record
+ * in track order rather than an alphabet of songs. An ordering over songs has to be expressed
+ * against the `track` table, and it therefore needs a vocabulary of its own rather than a borrowed
+ * album one.
+ *
+ * REQUIREMENTS.md "Library browse" fixes the album orderings and is silent on a songs ordering
+ * beyond the rule that governs all of them - browsing reads the local mirror, so it behaves
+ * identically online and offline. These five follow the sort control the design pack draws on
+ * screens 02, 09 and 13, and each means the nearest thing the mirror can honestly answer for a
+ * song; where that is nothing,
+ * [app.needler.core.domain.repository.LibraryRepository.observeTracks] says so.
+ */
+public enum class TrackListKind {
+
+    /**
+     * Song title, A to Z, over `track.title_normalised` - the song's own title, never its album's.
+     * That column is lower-cased and article-stripped on write, so "The Rip" files under R.
+     */
+    ALPHABETICAL_BY_TITLE,
+
+    /**
+     * Album artist, then album, then disc and track number, so an artist's records arrive whole and
+     * in running order rather than interleaved by song title.
+     */
+    ALPHABETICAL_BY_ARTIST,
+
+    /**
+     * Recently added first. A track carries no arrival time of its own - it appeared when its album
+     * did - so this is the album's `added_at`, and every track of one record shares a position.
+     */
+    NEWEST,
+
+    /**
+     * Most played. The mirror holds no play count for a track, so this cannot be served exactly;
+     * [app.needler.core.domain.repository.LibraryRepository.observeTracks] documents what it does
+     * instead and why guessing would be worse.
+     */
+    FREQUENT,
+
+    /** Starred songs, recently starred first, read from the `favourite` table's resolved track key. */
+    STARRED,
+}

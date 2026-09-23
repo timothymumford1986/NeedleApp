@@ -7,6 +7,7 @@ import app.needler.core.data.local.entity.AlbumEntity
 import app.needler.core.data.local.entity.DownloadStateDb
 import app.needler.core.data.local.entity.PinSourceDb
 import app.needler.core.data.local.entity.PullStatusDb
+import app.needler.core.data.local.entity.TrackEntity
 
 /*
  * Read-only query projections.
@@ -147,6 +148,27 @@ public data class PlaylistTrackRow(
     @ColumnInfo(name = "format") val format: String?,
     @ColumnInfo(name = "bitrate_kbps") val bitrateKbps: Int?,
     @ColumnInfo(name = "on_device") val onDevice: Boolean,
+)
+
+/**
+ * One row of the Songs tab: a track, plus the two facts about its album that the row draws.
+ *
+ * A song row on that tab reads as a title over `Khruangbin · Mordechai`, and both halves of that
+ * subtitle come off the `album` row rather than the `track` row - the album title always, and the
+ * artist whenever the server sent no per-track artist, which is most of the time, since
+ * DroppedNeedle only reports one where it differs from the album's. Carrying them here is what keeps
+ * the tab a single query: the alternative is one album lookup per song, which on a list of several
+ * hundred is several hundred queries to render one screen.
+ *
+ * [albumArtistName] is a fallback and not the sort key. Ordering by artist uses
+ * `album.artist_normalised`, because that is the column that is lower-cased, article-stripped and
+ * indexed; there is no normalised form of a track artist, so sorting on the raw name would file
+ * "The Beatles" and "Beatles" in two different places.
+ */
+public data class LibrarySongRow(
+    @Embedded val track: TrackEntity,
+    @ColumnInfo(name = "album_title") val albumTitle: String,
+    @ColumnInfo(name = "album_artist_name") val albumArtistName: String,
 )
 
 /**

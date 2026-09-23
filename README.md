@@ -51,8 +51,7 @@ In short: the offline store first, then the logging that would have found it, th
 2. Logging. The app is silent when it fails, which makes everything below it harder to find
 3. Artist discographies coming back empty from the catalogue
 4. Search
-5. The Songs tab, which shows a sample of the library rather than all of it
-6. Pulls, the widget, Wear
+5. Pulls, the widget, Wear
 
 ## Build
 
