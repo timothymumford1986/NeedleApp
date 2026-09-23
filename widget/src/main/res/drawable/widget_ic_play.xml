@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Play, traced from the `aria-label="Play"` button on screens 15 and 18:
+
+      <path d="M7 5v14l11-7z" fill="currentColor" stroke="none"/>
+
+  NeedlerColors.onAccent, because this glyph is only ever drawn on the accent
+  disc (widget_transport_primary.xml).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:fillColor="@color/needler_widget_on_accent"
+        android:pathData="M7,5 v14 l11,-7 z" />
+
+</vector>

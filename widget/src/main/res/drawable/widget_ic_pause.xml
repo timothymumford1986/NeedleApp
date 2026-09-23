@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pause, traced from the `aria-label="Pause"` button on screens 15 and 18:
+
+      <rect x="6"  y="5" width="4" height="14" rx="1" fill="currentColor"/>
+      <rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/>
+
+  A vector drawable has no <rect>, so each bar is written out as its own path:
+  a straight run down each side and a quarter-circle arc of radius 1 at each
+  corner, which is exactly what `rx="1"` means.
+
+  NeedlerColors.onAccent, for the same reason as widget_ic_play.xml.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:fillColor="@color/needler_widget_on_accent"
+        android:pathData="M7,5 L9,5 A1,1,0,0,1,10,6 L10,18 A1,1,0,0,1,9,19 L7,19 A1,1,0,0,1,6,18 L6,6 A1,1,0,0,1,7,5 Z" />
+
+    <path
+        android:fillColor="@color/needler_widget_on_accent"
+        android:pathData="M15,5 L17,5 A1,1,0,0,1,18,6 L18,18 A1,1,0,0,1,17,19 L15,19 A1,1,0,0,1,14,18 L14,6 A1,1,0,0,1,15,5 Z" />
+
+</vector>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The record mark beside the wordmark: a 12px ring with a 1.5px edge and a 4px
+  spindle, in NeedlerColors.textSecondary. Screens 15 and 18 draw it as two
+  nested divs; this is the same two circles as a layer list.
+
+  :core:design has a far richer SpinningRecord — grooves, a rotating sheen, a
+  3.6s linear loop. None of it can come here. RemoteViews has no animator a
+  widget can drive, and REQUIREMENTS.md "Motion" requires every looping
+  animation to be suppressed when ANIMATOR_DURATION_SCALE is zero anyway, which
+  a widget cannot check per frame. The mark is drawn still, deliberately.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The disc edge: `width: 12px; border: 1.5px solid #a8b3a0; border-radius: 50%`. -->
+    <item>
+        <shape android:shape="oval">
+            <size
+                android:width="12dp"
+                android:height="12dp" />
+            <solid android:color="@android:color/transparent" />
+            <stroke
+                android:width="1.5dp"
+                android:color="@color/needler_widget_text_secondary" />
+        </shape>
+    </item>
+
+    <!-- The spindle: `width: 4px; border-radius: 50%; background: #a8b3a0`. -->
+    <item
+        android:width="4dp"
+        android:height="4dp"
+        android:gravity="center">
+        <shape android:shape="oval">
+            <solid android:color="@color/needler_widget_text_secondary" />
+        </shape>
+    </item>
+
+</layer-list>

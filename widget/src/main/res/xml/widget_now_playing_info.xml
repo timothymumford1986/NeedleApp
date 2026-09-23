@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Metadata for the now-playing widget, read by the launcher before any of our
+  code runs.
+
+  ## Sizes
+
+  The design pack draws the same card at two widths: 350dp on the phone
+  (design/html/15-Widget.html, inside a 390dp screen with 20dp gutters) and
+  420dp on the tablet (design/html/18-TabletWidget.html). Its internals are
+  identical at both — 14dp padding, a 64dp cover, the transport, the position
+  row — so one fluid composition serves both artboards and there is no
+  tablet-only layout to maintain. NowPlayingWidget uses SizeMode.Exact and
+  reads the real size from LocalSize, so the card fits whatever cell count the
+  launcher actually gives it rather than snapping to a breakpoint.
+
+  The numbers below are stated in the launcher's own terms. The conventional
+  translation from grid cells to dp is `70 * n - 30`:
+
+    * minWidth 250dp  = 4 columns. The card needs 64 (cover) + 12 + 124
+      (transport) + 28 (padding) = 228dp before a single character of the title
+      fits, so anything narrower cannot draw the design at all.
+    * minHeight 110dp = 2 rows. The drawn card is 14 + 64 + 12 + 14 + 14 = 118dp
+      tall with the position row, and the position row is the part that drops
+      first when it does not fit.
+    * targetCellWidth/Height say the same thing to Android 12 and later, which
+      places by cell count rather than by dp.
+    * maxResizeWidth is generous because a tablet home screen is wide and the
+      card is happy to stretch; maxResizeHeight is not, because nothing in the
+      design grows vertically and a 300dp-tall now-playing card would just be
+      empty space.
+
+  ## updatePeriodMillis is 0, deliberately
+
+  The platform clamps this to 30 minutes and wakes the device to honour it,
+  which would be both far too slow for a transport and a pointless battery cost
+  for a widget whose content only changes when playback does. Updates are
+  pushed instead: while the app's process is alive the Glance session recomposes
+  from PlaybackController's flows, and every transport tap republishes. See
+  NowPlayingWidget's KDoc, "How state reaches the launcher".
+
+  ## initialLayout
+
+  glance_default_loading_layout ships inside glance-appwidget and is what the
+  launcher shows for the few milliseconds between the widget being dropped and
+  the first composition arriving. Writing our own would mean maintaining a
+  second, static copy of the card for a frame nobody reads.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_now_playing_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="110dp"
+    android:maxResizeWidth="640dp"
+    android:maxResizeHeight="170dp"
+    android:previewLayout="@layout/widget_now_playing_preview"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />
