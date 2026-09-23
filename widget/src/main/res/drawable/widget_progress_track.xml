@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The unfilled half of the position bar: `height: 4px; border-radius: 2px;
+  background: #1f271b` (NeedlerColors.progressTrack).
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="2dp" />
+    <solid android:color="@color/needler_widget_surface_raised" />
+</shape>

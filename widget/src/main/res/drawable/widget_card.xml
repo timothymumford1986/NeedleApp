@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The widget card: `border-radius: 22px; background: rgba(22,29,18,0.92);
+  border: 1px solid rgba(242,245,238,0.08)` on both design/html/15-Widget.html
+  and design/html/18-TabletWidget.html.
+
+  It is a drawable rather than GlanceModifier.cornerRadius on purpose.
+  Glance's cornerRadius is implemented with RemoteViews.setViewOutlinePreferredRadius,
+  which the platform only honours from Android 12; this project's minSdk is 26,
+  so on a third of the supported range that modifier silently produces a square
+  card with no border at all. A <shape> is rendered by the launcher from our own
+  resources on every API level, and it carries the hairline stroke that
+  cornerRadius has no equivalent for.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="22dp" />
+    <solid android:color="@color/needler_widget_card" />
+    <stroke
+        android:width="1dp"
+        android:color="@color/needler_widget_hairline" />
+</shape>

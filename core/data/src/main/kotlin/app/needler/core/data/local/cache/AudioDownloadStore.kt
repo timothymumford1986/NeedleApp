@@ -19,11 +19,12 @@ import java.io.File
  *
  * Two things differ from the streaming path, and only two:
  *
- *  1. **The part file survives.** `AudioCacheWriter.openWrite` deletes any `.part` before it starts,
- *     because a stream always begins at byte zero. A download must do the opposite: the bytes
- *     already on disk are what a `Range` GET resumes from, and deleting them would make every
- *     interruption cost the whole track again. That is the entire reason this interface exists
- *     rather than the domain one being reused.
+ *  1. **The part file survives, and it is the download's own.** `AudioCacheWriter.openWrite` deletes
+ *     its partial before it starts, because a stream always begins at byte zero. A download must do
+ *     the opposite: the bytes already on disk are what a `Range` GET resumes from, and deleting them
+ *     would make every interruption cost the whole track again. That is the entire reason this
+ *     interface exists rather than the domain one being reused - and the reason the two paths write
+ *     to different partial files, so that playing a track cannot delete the download of it.
  *  2. **The row lands pinned.** These bytes were asked for, so they belong to the downloaded tier
  *     and are exempt from eviction from the moment they are published.
  *
@@ -49,6 +50,19 @@ public interface AudioDownloadStore {
         fetchHandle: TrackFetchHandle,
         expectedSizeBytes: Long? = fetchHandle.sizeBytes,
     ): AudioDownloadSlot
+
+    /**
+     * Unlinks part files that stand for nothing, and returns how many went.
+     *
+     * A partial is worth keeping for exactly as long as it is the resume point of a track that is
+     * not yet on the device; beyond that it is bytes nothing will read and nothing but an uninstall
+     * would reclaim. A partial for a track that is *not* published is never touched, however old it
+     * looks - the next attempt continues from it, and age is not evidence that it is wrong.
+     *
+     * Called by the downloader at the end of a pass rather than on a timer. A sweep needs to know
+     * which downloads are in flight to be safe, and the only place that knows is the job doing them.
+     */
+    public suspend fun sweepOrphanedParts(keys: Collection<TrackKey>): Int
 }
 
 /** What [AudioDownloadStore.openDownload] found. */
@@ -104,6 +118,17 @@ public sealed interface AudioDownloadSlot {
          * into place. A truncated file published as complete is the silent failure this whole store
          * is built to prevent: a later play finds a local file, plays it, and stops halfway through
          * with nothing reporting an error.
+         *
+         * **A short file keeps its bytes.** Refusing to publish and throwing the partial away are
+         * different decisions, and only the first belongs to a short file: those bytes are a valid
+         * resume point, and deleting them turns one finalise failure into a fresh download of the
+         * whole track - which, on a failure that repeats, is a device that retains nothing however
+         * long the pull runs.
+         *
+         * The partial is unlinked in three cases only: when it is proven wrong, meaning more bytes
+         * on disk than the server says the whole file has; when the move into place fails, because
+         * bytes that cannot be published and cannot be named are not worth keeping; and when the
+         * caller says so through [discard].
          *
          * @param completeLengthBytes the whole file's length as **the transfer** reported it, from
          *   `Content-Range` or `Content-Length`. It takes precedence over [expectedSizeBytes],

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The tinted square that stands in for album art.
+
+  The pack draws every artwork tile over a solid tint taken from the cover
+  itself (#5a1f22 for Submarine, #4a3a1f for Mordechai); those per-album tints
+  are content, not tokens, so this uses NeedlerColors.artworkPlaceholder — the
+  same neutral :core:design's AsyncAlbumArt falls back to.
+
+  This is what the widget shows while a cover is on its way, when the server is
+  unreachable, and in the empty state. REQUIREMENTS.md "Widgets" requires the
+  widgets to render sensibly with no network, and a coloured square with the
+  radius the pack draws is that; a gap in the card is not.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="12dp" />
+    <solid android:color="@color/needler_widget_surface_raised" />
+</shape>

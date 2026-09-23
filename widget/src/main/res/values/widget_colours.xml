@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The palette, restated for the platform's shape drawables.
+
+  :core:design's NeedlerColors is the single source of truth for the app, and
+  this file does not replace it. A Glance widget is rendered as RemoteViews in
+  the launcher's process, so its rounded cards, its circular transport pill and
+  its progress bar are <shape> drawables rather than Compose draw calls, and a
+  <shape> can only reference an XML colour. That is the duplication widget/build.gradle.kts
+  already calls out as "Glance's, not ours to avoid".
+
+  Every value below is the design pack's own, read from the inline styles in
+  design/html/15-Widget.html and design/html/18-TabletWidget.html and named after
+  the NeedlerColors role it mirrors. The CSS uses fractional alpha; the hex here
+  carries it in the top byte, with the conversion shown per line.
+
+  Names are prefixed `needler_widget_` on purpose. Library resources merge into
+  :app's resource table and the application wins every collision silently, so an
+  unprefixed `surface` here would be one careless `<color name="surface">` in
+  :app away from repainting the widgets with no error anywhere.
+-->
+<resources>
+
+    <!-- NeedlerColors.surfaceTranslucent — rgba(22,29,18,0.92); 0.92 * 255 = 234.6 -> 0xEB. -->
+    <color name="needler_widget_card">#EB161D12</color>
+    <!-- NeedlerColors.hairline — rgba(242,245,238,0.08); 0.08 * 255 = 20.4 -> 0x14. -->
+    <color name="needler_widget_hairline">#14F2F5EE</color>
+    <!-- NeedlerColors.artworkPlaceholder / progressTrack — #1f271b, fully opaque. -->
+    <color name="needler_widget_surface_raised">#FF1F271B</color>
+    <!-- NeedlerColors.accent — #aed5f2. The transport pill and the filled progress. -->
+    <color name="needler_widget_accent">#FFAED5F2</color>
+    <!-- NeedlerColors.onAccent — #071520. Glyphs drawn on top of the accent pill. -->
+    <color name="needler_widget_on_accent">#FF071520</color>
+    <!-- NeedlerColors.textPrimary — #f2f5ee. Track title, previous and next glyphs. -->
+    <color name="needler_widget_text_primary">#FFF2F5EE</color>
+    <!-- NeedlerColors.textSecondary — #a8b3a0. Artist line, eyebrow, record mark. -->
+    <color name="needler_widget_text_secondary">#FFA8B3A0</color>
+    <!-- NeedlerColors.textMuted — #6f7a68. The two timecodes, as drawn. -->
+    <color name="needler_widget_text_muted">#FF6F7A68</color>
+
+</resources>
