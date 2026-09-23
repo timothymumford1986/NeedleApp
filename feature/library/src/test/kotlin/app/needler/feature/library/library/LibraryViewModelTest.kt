@@ -3,6 +3,7 @@ package app.needler.feature.library.library
 import app.cash.turbine.test
 import app.needler.core.domain.model.AlbumListKind
 import app.needler.core.domain.model.ConnectivityState
+import app.needler.core.domain.model.TrackListKind
 import app.needler.feature.library.FakeLibraryRepository
 import app.needler.feature.library.FakePlaybackController
 import app.needler.feature.library.FakeSessions
@@ -28,6 +29,7 @@ class LibraryViewModelTest {
     private val library = FakeLibraryRepository(
         albums = SampleLibrary.albums,
         artists = SampleLibrary.artists,
+        songs = SampleLibrary.submarineTracks,
         stats = SampleLibrary.stats,
     )
     private val sync = FakeSyncRepository()
@@ -103,6 +105,77 @@ class LibraryViewModelTest {
             assertTrue("the album list is not carried over", current.albums.isEmpty())
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `the Songs tab asks the repository for songs, not for a list of albums`() = runTest {
+        // The regression this tab shipped with: it had no query of its own, so it subscribed to an
+        // album list and flattened the tracks of the first forty albums. That made it a sample of
+        // the library rather than the library, and it is why the assertion below is about *which*
+        // query was asked rather than about what came back.
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onTabSelect(LibraryTab.SONGS)
+            advanceUntilIdle()
+            var current = awaitItem()
+            while (current.tab != LibraryTab.SONGS || current.songs.isEmpty()) {
+                current = awaitItem()
+            }
+            assertEquals(SampleLibrary.submarineTracks.size, current.songs.size)
+            assertTrue("the album list is not carried over", current.albums.isEmpty())
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf(TrackListKind.NEWEST), library.trackListRequests)
+        // One album query, from the tab the screen opens on. Switching to Songs must not issue
+        // another one.
+        assertEquals(listOf(AlbumListKind.NEWEST), library.albumListRequests)
+    }
+
+    @Test
+    fun `Title on the Songs tab means the song's title, not its album's`() = runTest {
+        // Observed on a device before the repository grew a songs query: selecting Title on the
+        // Songs tab produced a single Oasis record in track order, because the list was an album
+        // list sorted by album title. The sort control is one control with two vocabularies, and
+        // this asserts the Songs tab speaks the second one.
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onTabSelect(LibraryTab.SONGS)
+            advanceUntilIdle()
+            model.onSortSelect(LibrarySort.TITLE)
+            advanceUntilIdle()
+            var current = awaitItem()
+            while (current.sort != LibrarySort.TITLE || current.tab != LibraryTab.SONGS) {
+                current = awaitItem()
+            }
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(
+            listOf(TrackListKind.NEWEST, TrackListKind.ALPHABETICAL_BY_TITLE),
+            library.trackListRequests,
+        )
+        // And nothing asked for an alphabetical *album* list on the way through.
+        assertEquals(listOf(AlbumListKind.NEWEST), library.albumListRequests)
+    }
+
+    @Test
+    fun `every sort option maps to a songs ordering as well as an album one`() {
+        // A guard on the enum rather than on the ViewModel: a sixth option added with only an
+        // album mapping would not compile, and one added with the wrong songs mapping is caught
+        // here rather than on a device.
+        assertEquals(
+            listOf(
+                TrackListKind.NEWEST,
+                TrackListKind.ALPHABETICAL_BY_TITLE,
+                TrackListKind.ALPHABETICAL_BY_ARTIST,
+                TrackListKind.FREQUENT,
+                TrackListKind.STARRED,
+            ),
+            LibrarySort.entries.map { it.trackKind },
+        )
     }
 
     @Test

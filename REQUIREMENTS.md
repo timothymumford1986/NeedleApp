@@ -30,7 +30,9 @@ What remains is search, pulls, the settings screen, and the two extra surfaces.
 
 Three screens in `:feature:player` are built but registered nowhere, because each needs a host decision first: the output picker (21), the equaliser and crossfade. `OutputPickerRoute` takes no dismiss callback and the pack draws it as a sheet over the dimmed player rather than a destination, so registering it as one would strand the listener on it. Until that is settled the output chip on both Now Playing and the sidebar does nothing.
 
-Two behaviours are known to be incomplete rather than absent. The offline store downloads but does not appear to keep what it downloads — see the Offline section. The Songs tab is a stand-in that flattens the tracks of the first few albums under the current album sort, because `LibraryRepository` has no all-library track query; it is therefore not the whole library, and its Title sort orders by album rather than by song.
+One behaviour is known to be incomplete rather than absent: the offline store downloads but does not appear to keep what it downloads — see the Offline section.
+
+The Songs tab was the other, and is no longer. It used to flatten the tracks of the first few albums under the current *album* sort, so it showed a sample of the library rather than the library and its Title sort ordered by album title. `LibraryRepository.observeTracks(kind, limit, offset)` now serves it from a real all-library track query, with an ordering vocabulary of its own (`TrackListKind`) so that a song sort can never again be an album sort wearing a different name. One concession remains and is documented there: "Played" cannot be honoured, because play counts are computed server-side and the mirror holds no column reproducing them, so it falls back to recently-added exactly as the album list does.
 
 ### Decisions already fixed
 

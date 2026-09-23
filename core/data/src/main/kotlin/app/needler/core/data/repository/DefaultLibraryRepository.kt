@@ -13,6 +13,7 @@ import app.needler.core.data.local.entity.PinEntity
 import app.needler.core.data.local.entity.PullEntity
 import app.needler.core.data.local.entity.SyncStateEntity
 import app.needler.core.data.local.entity.TrackEntity
+import app.needler.core.data.local.projection.LibrarySongRow
 import app.needler.core.data.local.projection.LibraryTotalsRow
 import app.needler.core.data.mapper.CatalogueMappers
 import app.needler.core.data.mapper.EntityMappers
@@ -30,6 +31,7 @@ import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.StatsSource
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
+import app.needler.core.domain.model.TrackListKind
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.network.v1.V1Api
 import app.needler.core.network.v1.dto.ArtistReleasesDto
@@ -142,6 +144,62 @@ public class DefaultLibraryRepository(
                 rows.drop(offset).take(limit).map { EntityMappers.album(it, isFavourite = true) }
             }
         }
+
+    /**
+     * The Songs tab: every track in the library under one ordering.
+     *
+     * One query per emission and one row per song. The tab used to be built by flattening the
+     * tracks of the first forty albums of an album list, which meant it showed a sample rather than
+     * the library and sorted "Title" by album title; both were visible on a device. Four DAO
+     * statements replace that, one per ordering the sort control offers, because SQLite cannot
+     * index-serve an `ORDER BY` it only learns at bind time.
+     *
+     * `FREQUENT` falls through to recently-added, which is the same concession
+     * [observeAlbumList] makes and for the same reason: play counts are the server's, and the
+     * mirror carries no column that reproduces them. The cache index does count plays, but it drops
+     * the row when it evicts the bytes, so it is an LRU signal rather than a listening history and
+     * ordering a "most played" list by it would make well-worn songs disappear from it. The
+     * interface documents the fallback rather than leaving it to be found.
+     */
+    override fun observeTracks(kind: TrackListKind, limit: Int, offset: Int): Flow<List<Track>> =
+        when (kind) {
+            TrackListKind.ALPHABETICAL_BY_TITLE ->
+                trackDao.observeLibrarySongsByTitle(limit, offset)
+
+            TrackListKind.ALPHABETICAL_BY_ARTIST ->
+                trackDao.observeLibrarySongsByArtist(limit, offset)
+
+            TrackListKind.NEWEST,
+            TrackListKind.FREQUENT,
+            -> trackDao.observeLibrarySongsByRecentlyAdded(limit, offset)
+
+            TrackListKind.STARRED ->
+                trackDao.observeStarredLibrarySongs(limit, offset)
+        }.map { rows ->
+            rows.map { row -> song(row, isFavourite = kind == TrackListKind.STARRED) }
+        }
+
+    /**
+     * One [LibrarySongRow] as the domain sees it.
+     *
+     * The star is taken from the query rather than joined per row: the only ordering that can
+     * produce a starred song is the starred one, and every row it returns is starred by
+     * construction. The other three do not carry the flag, which is honest - the Songs tab draws no
+     * star - and avoids a second query per song to answer a question nothing on the screen asks.
+     *
+     * The artist falls back to the album's when the mirror has none for the track. DroppedNeedle
+     * sends a per-track artist only where it differs from the album's, so on a normal record the
+     * column is null, and a song row that read "· Submarine" with nothing before the separator would
+     * look like a bug rather than like missing data.
+     */
+    private fun song(row: LibrarySongRow, isFavourite: Boolean): Track {
+        val track: Track = EntityMappers.track(
+            row = row.track,
+            isFavourite = isFavourite,
+            albumTitle = row.albumTitle,
+        )
+        return if (track.artistName.isBlank()) track.copy(artistName = row.albumArtistName) else track
+    }
 
     // --------------------------------------------------------------------- genres
 

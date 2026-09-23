@@ -42,6 +42,7 @@ import app.needler.core.domain.model.SyncState
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackFetchHandle
 import app.needler.core.domain.model.TrackKey
+import app.needler.core.domain.model.TrackListKind
 import app.needler.core.domain.model.TrackRequest
 import app.needler.core.domain.model.User
 import app.needler.core.domain.model.UserRole
@@ -78,11 +79,13 @@ import kotlinx.coroutines.flow.map
 internal class FakeLibraryRepository(
     albums: List<Album> = emptyList(),
     artists: List<Artist> = emptyList(),
+    songs: List<Track> = emptyList(),
     stats: LibraryStats = EMPTY_STATS,
 ) : LibraryRepository {
 
     val albumList = MutableStateFlow(albums)
     val artistList = MutableStateFlow(artists)
+    val songList = MutableStateFlow(songs)
     val statsFlow = MutableStateFlow(stats)
     val albumsByMbid = MutableStateFlow<Map<String, Album>>(emptyMap())
     val tracksByMbid = MutableStateFlow<Map<String, List<Track>>>(emptyMap())
@@ -91,6 +94,15 @@ internal class FakeLibraryRepository(
 
     /** Every `observeAlbumList` subscription, so a test can assert the sort reached the query. */
     val albumListRequests: MutableList<AlbumListKind> = mutableListOf()
+
+    /**
+     * Every `observeTracks` subscription.
+     *
+     * Recorded separately from [albumListRequests] because the distinction is the point: the Songs
+     * tab used to subscribe to an *album* list and flatten it, which is how choosing "Title" on it
+     * came to sort by album title. A test can now assert that the songs query is a songs query.
+     */
+    val trackListRequests: MutableList<TrackListKind> = mutableListOf()
 
     var refreshAlbumOutcome: Outcome<Unit> = Outcome.Ok
     var refreshDiscographyOutcome: Outcome<Unit> = Outcome.Ok
@@ -116,6 +128,11 @@ internal class FakeLibraryRepository(
     override fun observeAlbumList(kind: AlbumListKind, limit: Int, offset: Int): Flow<List<Album>> {
         albumListRequests += kind
         return albumList
+    }
+
+    override fun observeTracks(kind: TrackListKind, limit: Int, offset: Int): Flow<List<Track>> {
+        trackListRequests += kind
+        return songList
     }
 
     override fun observeGenres(): Flow<List<Genre>> = error("not used by :feature:library")

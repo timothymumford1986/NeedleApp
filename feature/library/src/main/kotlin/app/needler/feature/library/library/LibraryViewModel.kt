@@ -46,6 +46,17 @@ import kotlin.time.Instant
  * switching to Artists cancels the album query rather than leaving three lists
  * subscribed. On a five-thousand-album library that is the difference between
  * one Room query and three.
+ *
+ * ## Each tab reads the sort in its own vocabulary
+ *
+ * The sort control is one control, but "Title" means the album's title on the
+ * Albums tab and the song's on the Songs tab, so [LibrarySort] carries both an
+ * `AlbumListKind` and a `TrackListKind` and each tab takes the one it means.
+ * The Songs tab was once built by flattening the tracks of the first forty
+ * albums of the *album* list, which is how it came to sort a page of songs by
+ * album title and show a sample of the library rather than the library; it is
+ * now a query of its own, `LibraryRepository.observeTracks`, and the whole of
+ * this ViewModel's part in it is the one line below.
  */
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
@@ -71,7 +82,8 @@ class LibraryViewModel @Inject constructor(
                         library.observeArtists().map { artists -> Listings(artists = artists) }
 
                     LibraryTab.SONGS ->
-                        observeSongs(sort).map { songs -> Listings(songs = songs) }
+                        library.observeTracks(sort.trackKind, SONG_PAGE_SIZE)
+                            .map { songs -> Listings(songs = songs) }
                 }
             }
 
@@ -163,30 +175,6 @@ class LibraryViewModel @Inject constructor(
 
     // ---- internals ----------------------------------------------------------
 
-    /**
-     * The Songs tab.
-     *
-     * **This is a stand-in.** `LibraryRepository` exposes no "every track in the
-     * library" query — it has `observeAlbumTracks` and `observeTracksByGenre`
-     * and nothing between them — so the songs list is assembled from the tracks
-     * of the first [SONG_SOURCE_ALBUM_LIMIT] albums under the current sort.
-     * That is correct as far as it goes and it is bounded, but it is not the
-     * whole library, and a `observeTracks(kind, limit, offset)` on the
-     * repository would replace this method with one line. It is in the handover
-     * notes.
-     */
-    private fun observeSongs(sort: LibrarySort): Flow<List<Track>> =
-        library.observeAlbumList(sort.kind, SONG_SOURCE_ALBUM_LIMIT)
-            .flatMapLatest { albums ->
-                if (albums.isEmpty()) {
-                    flowOf(emptyList())
-                } else {
-                    combine(
-                        albums.map { album -> library.observeAlbumTracks(album.releaseGroupMbid) },
-                    ) { perAlbum -> perAlbum.toList().flatten() }
-                }
-            }
-
     private fun now(): Instant = Instant.fromEpochMilliseconds(System.currentTimeMillis())
 
     private data class Listings(
@@ -214,8 +202,22 @@ class LibraryViewModel @Inject constructor(
          */
         const val ALBUM_PAGE_SIZE: Int = 500
 
-        /** How many albums the stand-in Songs tab draws its tracks from. */
-        const val SONG_SOURCE_ALBUM_LIMIT: Int = 40
+        /**
+         * How many songs the Songs tab holds at once.
+         *
+         * Larger than [ALBUM_PAGE_SIZE] because a library is roughly eleven
+         * times more songs than records, so the same cap would show a far
+         * thinner slice of the same collection. It is still a cap and not
+         * paging: `LibraryRepository.observeTracks` takes an offset for
+         * whoever wants to grow this screen, and the reason it is a `LIMIT`
+         * rather than a `PagingSource` is written down there.
+         *
+         * A thousand `Track` objects is a few hundred kilobytes, which the
+         * StateFlow can afford to rebuild on a sort change; fifty thousand is
+         * not, and that is the number an uncapped query would return on the
+         * 5,000-album library REQUIREMENTS.md sets the scroll budget against.
+         */
+        const val SONG_PAGE_SIZE: Int = 1_000
 
         /**
          * Keep the queries alive briefly after the last subscriber leaves, so

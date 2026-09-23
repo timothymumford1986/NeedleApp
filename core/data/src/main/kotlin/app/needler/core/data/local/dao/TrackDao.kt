@@ -5,6 +5,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
 import app.needler.core.data.local.entity.TrackEntity
+import app.needler.core.data.local.projection.LibrarySongRow
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -14,6 +15,11 @@ import kotlinx.coroutines.flow.Flow
  * `file_id` becomes a lookup key, a server-side quality upgrade starts silently serving stale bytes.
  * The only `file_id` query is [findTracksWithChangedFileId], and it exists to *detect* that
  * situation rather than to identify a track.
+ *
+ * The listings - the Songs tab's four orderings and the genre bucket - are the exception to
+ * "keyed on the tuple", because they answer a question about the library rather than about one
+ * track. They all join `album` on `in_library = 1`, both to exclude a catalogue row that has no
+ * files behind it and because the album carries the title and artist a song row draws.
  */
 @Dao
 public abstract class TrackDao {
@@ -118,6 +124,146 @@ public abstract class TrackDao {
         """,
     )
     public abstract fun observeTrackSearch(matchExpression: String, limit: Int): Flow<List<TrackEntity>>
+
+    // ---------------------------------------------------------------- the songs tab
+
+    /*
+     * Four queries, one per ordering the sort control offers, all returning [LibrarySongRow].
+     *
+     * They are separate statements rather than one query with a CASE in its ORDER BY because SQLite
+     * will not use an index to satisfy an ordering it cannot see at prepare time: a single
+     * parameterised query would sort the whole library in a temporary B-tree for every one of them,
+     * including the two that are otherwise index-ordered. AlbumDao makes the same trade for the
+     * album grid, and for the same reason.
+     *
+     * Every one of them joins `album` and filters `in_library = 1`. That is not only a filter - it
+     * is where the album title and the fallback artist come from, so the join would be there anyway,
+     * and a track whose album has left the library is not a song in the library.
+     *
+     * All four are bounded by LIMIT/OFFSET. See `LibraryRepository.observeTracks` for why Paging 3
+     * is deliberately absent from this module.
+     */
+
+    /**
+     * Every track in the library ordered by the **song's** title, A to Z.
+     *
+     * `track.title_normalised` is lower-cased and article-stripped on write by
+     * [app.needler.core.data.local.SortKeys], which is exactly what this ordering needs and the
+     * reason the column exists at all; `ORDER BY title COLLATE NOCASE` cannot be index-served and
+     * Room's `@Index` cannot declare a collation.
+     *
+     * **This one does sort.** There is no index on `track.title_normalised` - the only index on
+     * `track` that could order anything is `index_track_album_order`, which is keyed on the album
+     * first - so SQLite builds a temporary B-tree over the owned tracks. `LIMIT` bounds what is
+     * *returned*, not what is sorted, so the cost is the whole library every time. Adding
+     * `Index(["title_normalised"])` to [app.needler.core.data.local.entity.TrackEntity] would fix
+     * that and is the obvious next move; it was not done here because an index is a schema change,
+     * and a schema change means a database version bump, a hand-written migration and a re-exported
+     * schema JSON, which is a larger and separately reviewable piece of work than adding a query.
+     * The tie-break after the title is artist, album, disc and track, so two songs of the same name
+     * keep a stable order between emissions instead of swapping places under the user's finger.
+     */
+    @Query(
+        """
+        SELECT track.*,
+               album.title AS album_title,
+               album.artist_name AS album_artist_name
+        FROM track
+        JOIN album ON album.release_group_mbid = track.release_group_mbid
+        WHERE album.in_library = 1
+        ORDER BY track.title_normalised ASC,
+                 album.artist_normalised ASC, album.title_normalised ASC,
+                 track.disc_no ASC, track.track_no ASC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public abstract fun observeLibrarySongsByTitle(limit: Int, offset: Int): Flow<List<LibrarySongRow>>
+
+    /**
+     * Every track in the library ordered by artist, then album, then disc and track number.
+     *
+     * The same shape as [observeTracksByGenre], deliberately: "sorted by artist" on a song list
+     * means an artist's records arrive whole and in running order, not their songs interleaved
+     * alphabetically. The sort key is `album.artist_normalised` rather than `track.artist_name`,
+     * because only the album's artist has a normalised, indexed form - see [LibrarySongRow]. A
+     * compilation therefore files under its album artist, which is how a shelf of records works and
+     * is what the Albums tab does with the same control.
+     */
+    @Query(
+        """
+        SELECT track.*,
+               album.title AS album_title,
+               album.artist_name AS album_artist_name
+        FROM track
+        JOIN album ON album.release_group_mbid = track.release_group_mbid
+        WHERE album.in_library = 1
+        ORDER BY album.artist_normalised ASC, album.title_normalised ASC,
+                 track.disc_no ASC, track.track_no ASC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public abstract fun observeLibrarySongsByArtist(limit: Int, offset: Int): Flow<List<LibrarySongRow>>
+
+    /**
+     * Every track in the library, most recently added album first, then in running order.
+     *
+     * A track has no `added_at` of its own: it arrived when its album did. Every track of one record
+     * therefore shares a position in this ordering, and the disc/track tie-break makes the record
+     * read as a record rather than as an arbitrary shuffle of itself.
+     *
+     * `added_at IS NULL` leads the ordering so albums the server never dated sort last rather than
+     * first, matching [AlbumDao.observeLibraryByRecentlyAdded]; the two must agree, because they are
+     * the same control on two tabs.
+     */
+    @Query(
+        """
+        SELECT track.*,
+               album.title AS album_title,
+               album.artist_name AS album_artist_name
+        FROM track
+        JOIN album ON album.release_group_mbid = track.release_group_mbid
+        WHERE album.in_library = 1
+        ORDER BY album.added_at IS NULL, album.added_at DESC, album.title_normalised ASC,
+                 track.disc_no ASC, track.track_no ASC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public abstract fun observeLibrarySongsByRecentlyAdded(
+        limit: Int,
+        offset: Int,
+    ): Flow<List<LibrarySongRow>>
+
+    /**
+     * Starred songs, most recently starred first.
+     *
+     * The join to `favourite` is on the three resolved key columns rather than on the composite text
+     * of `entity_id`, so it is index-served - REQUIREMENTS.md "Notes on the schema": "A starred track
+     * therefore stores the resolved tuple alongside the opaque id, so 'show my starred songs' is a
+     * join rather than a fetch-then-filter."
+     *
+     * This is not a duplicate of [FavouriteDao.observeStarredTracks]. That one answers "what has the
+     * user starred", is unbounded and is the Favourites screen's query. This one answers "which
+     * songs *in the library* are starred", carries the album columns the Songs tab renders, and is
+     * bounded like its three siblings. A star for a track whose album has left the library is
+     * excluded here and survives there, which is the correct behaviour for both.
+     */
+    @Query(
+        """
+        SELECT track.*,
+               album.title AS album_title,
+               album.artist_name AS album_artist_name
+        FROM favourite
+        JOIN track ON track.release_group_mbid = favourite.release_group_mbid
+            AND track.disc_no = favourite.disc_no
+            AND track.track_no = favourite.track_no
+        JOIN album ON album.release_group_mbid = track.release_group_mbid
+        WHERE favourite.entity_type = 'track' AND album.in_library = 1
+        ORDER BY favourite.starred_at IS NULL, favourite.starred_at DESC,
+                 track.title_normalised ASC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public abstract fun observeStarredLibrarySongs(limit: Int, offset: Int): Flow<List<LibrarySongRow>>
 
     // ---------------------------------------------------------------- staleness support
 

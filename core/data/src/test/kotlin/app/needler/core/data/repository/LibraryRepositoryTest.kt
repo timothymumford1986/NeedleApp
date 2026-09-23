@@ -19,6 +19,8 @@ import app.needler.core.data.fake.pullRow
 import app.needler.core.data.fake.trackRow
 import app.needler.core.data.local.entity.AlbumStateDb
 import app.needler.core.data.local.entity.DownloadStateDb
+import app.needler.core.data.local.entity.FavouriteEntity
+import app.needler.core.data.local.entity.FavouriteTypeDb
 import app.needler.core.data.local.entity.PullStatusDb
 import app.needler.core.data.mapper.GenreCodec
 import app.needler.core.data.sync.AlbumSyncer
@@ -34,6 +36,7 @@ import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.StatsSource
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
+import app.needler.core.domain.model.TrackListKind
 import app.needler.core.network.v1.dto.ArtistReleasesDto
 import app.needler.core.network.v1.dto.ReleaseItemDto
 import kotlinx.coroutines.flow.first
@@ -55,10 +58,13 @@ public class LibraryRepositoryTest {
 
     private val albumDao = FakeAlbumDao()
     private val artistDao = FakeArtistDao()
-    private val trackDao = FakeTrackDao()
+    private val favouriteDao = FakeFavouriteDao()
+
+    // The Songs tab's queries are joins, so the fake is given the two tables it joins to. Declared
+    // after both, because a property initialiser can only see what is already above it.
+    private val trackDao = FakeTrackDao(albums = albumDao, favourites = favouriteDao)
     private val pinDao = FakePinDao()
     private val pullDao = FakePullDao()
-    private val favouriteDao = FakeFavouriteDao()
     private val syncStateDao = FakeSyncStateDao()
     private val audioCacheDao = FakeAudioCacheDao()
     private val subsonic = FakeSubsonicApi()
@@ -197,6 +203,172 @@ public class LibraryRepositoryTest {
 
         assertEquals(1, tracks.size)
     }
+
+    // ------------------------------------------------------------------ songs tab
+
+    /*
+     * The Songs tab had no query of its own and was assembled from the tracks of the first forty
+     * albums of the *album* list. Two faults followed from that and both were seen on a device: the
+     * tab showed a sample rather than the library, and "Title" ordered by album title, so choosing
+     * it produced a single record in track order. The tests below are written against those two
+     * symptoms rather than against the implementation, so a future attempt to serve songs from an
+     * album list fails them again.
+     */
+
+    @Test
+    public fun `the songs tab lists every track in the library, not a sample of it`(): Unit =
+        runTest {
+            albumDao.rows["a"] = albumRow(mbid = "a")
+            albumDao.rows["b"] = albumRow(mbid = "b")
+            trackDao.rows["a/1/1"] = trackRow(mbid = "a", track = 1, title = "One")
+            trackDao.rows["a/1/2"] = trackRow(mbid = "a", track = 2, title = "Two")
+            trackDao.rows["b/1/1"] = trackRow(mbid = "b", track = 1, title = "Three")
+
+            val songs: List<Track> = repository.observeTracks(TrackListKind.NEWEST).first()
+
+            assertEquals(3, songs.size)
+        }
+
+    @Test
+    public fun `sorting songs by title sorts by the song's title, not its album's`(): Unit =
+        runTest {
+            // The regression, stated as data: the album ordering and the song ordering disagree,
+            // and only the song ordering is correct on this tab. Under the old stand-in this
+            // returned Aardvark's two tracks first because its *album* sorts first.
+            albumDao.rows["a"] = albumRow(mbid = "a", title = "Aardvark")
+            albumDao.rows["z"] = albumRow(mbid = "z", title = "Zoology")
+            trackDao.rows["a/1/1"] = trackRow(mbid = "a", track = 1, title = "Yesterday")
+            trackDao.rows["a/1/2"] = trackRow(mbid = "a", track = 2, title = "Zanzibar")
+            trackDao.rows["z/1/1"] = trackRow(mbid = "z", track = 1, title = "Anthem")
+
+            val titles: List<String> =
+                repository.observeTracks(TrackListKind.ALPHABETICAL_BY_TITLE).first().map { it.title }
+
+            assertEquals(listOf("Anthem", "Yesterday", "Zanzibar"), titles)
+        }
+
+    @Test
+    public fun `sorting songs by artist keeps each record whole and in running order`(): Unit =
+        runTest {
+            albumDao.rows["b"] = albumRow(mbid = "b", title = "Bee", artist = "Zither")
+            albumDao.rows["a"] = albumRow(mbid = "a", title = "Ay", artist = "Aviary")
+            trackDao.rows["b/1/2"] = trackRow(mbid = "b", track = 2, title = "Second")
+            trackDao.rows["b/1/1"] = trackRow(mbid = "b", track = 1, title = "First")
+            trackDao.rows["a/1/1"] = trackRow(mbid = "a", track = 1, title = "Only")
+
+            val titles: List<String> = repository
+                .observeTracks(TrackListKind.ALPHABETICAL_BY_ARTIST)
+                .first()
+                .map { it.title }
+
+            // Aviary's record first, then Zither's - and Zither's in track order, not alphabetical.
+            assertEquals(listOf("Only", "First", "Second"), titles)
+        }
+
+    @Test
+    public fun `recently added songs arrive with their album, undated albums last`(): Unit = runTest {
+        albumDao.rows["old"] = albumRow(mbid = "old", title = "Old", addedAt = 1_000L)
+        albumDao.rows["new"] = albumRow(mbid = "new", title = "New", addedAt = 9_000L)
+        albumDao.rows["undated"] = albumRow(mbid = "undated", title = "Undated", addedAt = null)
+        trackDao.rows["old/1/1"] = trackRow(mbid = "old", title = "From the old one")
+        trackDao.rows["new/1/1"] = trackRow(mbid = "new", title = "From the new one")
+        trackDao.rows["undated/1/1"] = trackRow(mbid = "undated", title = "From the undated one")
+
+        val titles: List<String> =
+            repository.observeTracks(TrackListKind.NEWEST).first().map { it.title }
+
+        assertEquals(
+            listOf("From the new one", "From the old one", "From the undated one"),
+            titles,
+        )
+    }
+
+    @Test
+    public fun `most played falls back to recently added, because the mirror counts no plays`(): Unit =
+        runTest {
+            // Not an oversight and not a placeholder: `getAlbumList2?type=frequent` is computed
+            // server-side, and the only play count in the mirror is on `audio_cache`, which is
+            // deleted with the bytes it describes. Ordering by it would make a well-worn song
+            // vanish from "most played" the moment the cache reclaimed it.
+            albumDao.rows["old"] = albumRow(mbid = "old", addedAt = 1_000L)
+            albumDao.rows["new"] = albumRow(mbid = "new", addedAt = 9_000L)
+            trackDao.rows["old/1/1"] = trackRow(mbid = "old", title = "Older")
+            trackDao.rows["new/1/1"] = trackRow(mbid = "new", title = "Newer")
+
+            assertEquals(
+                repository.observeTracks(TrackListKind.NEWEST).first().map { it.title },
+                repository.observeTracks(TrackListKind.FREQUENT).first().map { it.title },
+            )
+        }
+
+    @Test
+    public fun `starred songs come from the favourite table, recently starred first`(): Unit =
+        runTest {
+            albumDao.rows[RG] = albumRow()
+            trackDao.rows["$RG/1/1"] = trackRow(track = 1, title = "Starred early")
+            trackDao.rows["$RG/1/2"] = trackRow(track = 2, title = "Starred late")
+            trackDao.rows["$RG/1/3"] = trackRow(track = 3, title = "Not starred")
+            favouriteDao.rows["track/$RG/1/1"] = starredTrack(track = 1, starredAt = 1_000L)
+            favouriteDao.rows["track/$RG/1/2"] = starredTrack(track = 2, starredAt = 5_000L)
+
+            val songs: List<Track> = repository.observeTracks(TrackListKind.STARRED).first()
+
+            assertEquals(listOf("Starred late", "Starred early"), songs.map { it.title })
+            // Every row this ordering can return is starred by construction, so the flag is taken
+            // from the query rather than from a second lookup per song.
+            assertTrue(songs.all { it.isFavourite })
+        }
+
+    @Test
+    public fun `a song row carries its album title and borrows the album artist when it has none`(): Unit =
+        runTest {
+            albumDao.rows[RG] = albumRow(title = "Spiderland", artist = "Slint")
+            trackDao.rows["$RG/1/1"] = trackRow(title = "Nosferatu Man", artist = null)
+
+            val song: Track = repository.observeTracks(TrackListKind.NEWEST).first().single()
+
+            assertEquals("Spiderland", song.albumTitle)
+            // The server sends a per-track artist only where it differs from the album's, so a row
+            // rendered "· Spiderland" with nothing before the separator would read as a fault.
+            assertEquals("Slint", song.artistName)
+        }
+
+    @Test
+    public fun `a track whose album has left the library is not a song in the library`(): Unit =
+        runTest {
+            albumDao.rows[RG] = albumRow(state = AlbumStateDb.NOT_OWNED)
+            trackDao.rows["$RG/1/1"] = trackRow()
+
+            assertTrue(repository.observeTracks(TrackListKind.NEWEST).first().isEmpty())
+        }
+
+    @Test
+    public fun `the songs query is bounded, so a large library is never loaded whole`(): Unit =
+        runTest {
+            albumDao.rows[RG] = albumRow()
+            repeat(10) { index ->
+                trackDao.rows["$RG/1/${index + 1}"] =
+                    trackRow(track = index + 1, title = "Song " + ('a' + index))
+            }
+
+            val first: List<Track> =
+                repository.observeTracks(TrackListKind.ALPHABETICAL_BY_TITLE, limit = 3).first()
+            val second: List<Track> = repository
+                .observeTracks(TrackListKind.ALPHABETICAL_BY_TITLE, limit = 3, offset = 3)
+                .first()
+
+            assertEquals(listOf("Song a", "Song b", "Song c"), first.map { it.title })
+            assertEquals(listOf("Song d", "Song e", "Song f"), second.map { it.title })
+        }
+
+    private fun starredTrack(track: Int, starredAt: Long): FavouriteEntity = FavouriteEntity(
+        entityType = FavouriteTypeDb.TRACK,
+        entityId = "$RG/1/$track",
+        starredAt = starredAt,
+        releaseGroupMbid = RG,
+        discNo = 1,
+        trackNo = track,
+    )
 
     // --------------------------------------------------------------------- genres
 

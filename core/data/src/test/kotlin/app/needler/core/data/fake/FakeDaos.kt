@@ -14,6 +14,7 @@ import app.needler.core.data.local.entity.AlbumStateDb
 import app.needler.core.data.local.entity.ArtistEntity
 import app.needler.core.data.local.entity.AudioCacheEntity
 import app.needler.core.data.local.entity.DownloadStateDb
+import app.needler.core.data.local.entity.FavouriteTypeDb
 import app.needler.core.data.local.entity.PinEntity
 import app.needler.core.data.local.entity.PullEntity
 import app.needler.core.data.local.entity.PullStatusDb
@@ -26,6 +27,7 @@ import app.needler.core.data.local.projection.CacheUsageRow
 import app.needler.core.data.local.projection.CachedAudioSignatureRow
 import app.needler.core.data.local.projection.DownloadedAlbumRow
 import app.needler.core.data.local.projection.EvictionCandidateRow
+import app.needler.core.data.local.projection.LibrarySongRow
 import app.needler.core.data.local.projection.LibraryTotalsRow
 import app.needler.core.data.local.projection.PinnedAlbumRow
 import app.needler.core.data.local.projection.PlaylistTrackRow
@@ -181,7 +183,20 @@ public class FakeAlbumDao : AlbumDao {
 
 // -------------------------------------------------------------------------- track
 
-public class FakeTrackDao : TrackDao() {
+/**
+ * Tracks in memory.
+ *
+ * [albums] and [favourites] are the other two fakes this one *joins to*. The Songs tab's four
+ * queries are not track-only statements - each joins `album` for the `in_library` filter and for the
+ * title and artist a song row draws, and the starred one joins `favourite` as well - so a fake that
+ * could only see its own map would have to answer them with a guess. Both default to an empty fake,
+ * so the seven tests that do not exercise a listing construct this exactly as they did before; the
+ * one that does passes the same instances the repository under test was given.
+ */
+public class FakeTrackDao(
+    private val albums: FakeAlbumDao = FakeAlbumDao(),
+    private val favourites: FakeFavouriteDao = FakeFavouriteDao(),
+) : TrackDao() {
 
     public val rows: MutableMap<String, TrackEntity> = LinkedHashMap()
     private val changes: MutableStateFlow<Int> = MutableStateFlow(0)
@@ -244,6 +259,100 @@ public class FakeTrackDao : TrackDao() {
         limit: Int,
         offset: Int,
     ): Flow<List<TrackEntity>> = changes.map { emptyList() }
+
+    // ---- the songs tab ------------------------------------------------------
+    //
+    // These four reproduce the DAO's own ORDER BY in Kotlin, because that ordering is the whole
+    // point of the queries and a fake that returned insertion order would let the bug they were
+    // written to fix pass every test. They are not a SQLite reimplementation: the comparators say
+    // the same thing the SQL says, and where they cannot - SQLite's collation on non-ASCII text -
+    // the fixtures stay inside what both agree on.
+
+    override fun observeLibrarySongsByTitle(limit: Int, offset: Int): Flow<List<LibrarySongRow>> =
+        changes.map {
+            inLibrary()
+                .sortedWith(
+                    compareBy(
+                        { it.track.titleNormalised },
+                        { it.album.artistNormalised },
+                        { it.album.titleNormalised },
+                        { it.track.discNo },
+                        { it.track.trackNo },
+                    ),
+                )
+                .page(limit, offset)
+        }
+
+    override fun observeLibrarySongsByArtist(limit: Int, offset: Int): Flow<List<LibrarySongRow>> =
+        changes.map {
+            inLibrary()
+                .sortedWith(
+                    compareBy(
+                        { it.album.artistNormalised },
+                        { it.album.titleNormalised },
+                        { it.track.discNo },
+                        { it.track.trackNo },
+                    ),
+                )
+                .page(limit, offset)
+        }
+
+    override fun observeLibrarySongsByRecentlyAdded(
+        limit: Int,
+        offset: Int,
+    ): Flow<List<LibrarySongRow>> = changes.map {
+        inLibrary()
+            .sortedWith(
+                // `added_at IS NULL` first, then the date descending: an album the server never
+                // dated sorts last rather than first, which is what the SQL says.
+                compareBy<Joined> { it.album.addedAt == null }
+                    .thenByDescending { it.album.addedAt ?: 0L }
+                    .thenBy { it.album.titleNormalised }
+                    .thenBy { it.track.discNo }
+                    .thenBy { it.track.trackNo },
+            )
+            .page(limit, offset)
+    }
+
+    override fun observeStarredLibrarySongs(limit: Int, offset: Int): Flow<List<LibrarySongRow>> =
+        changes.map {
+            val starred: Map<String, Long?> = favourites.rows.values
+                .filter { it.entityType == FavouriteTypeDb.TRACK }
+                .mapNotNull { row ->
+                    val mbid: String = row.releaseGroupMbid ?: return@mapNotNull null
+                    val disc: Int = row.discNo ?: return@mapNotNull null
+                    val track: Int = row.trackNo ?: return@mapNotNull null
+                    TrackKeyDb(mbid, disc, track).canonical to row.starredAt
+                }
+                .toMap()
+            inLibrary()
+                .filter { starred.containsKey(key(it.track)) }
+                .sortedWith(
+                    compareBy<Joined> { starred[key(it.track)] == null }
+                        .thenByDescending { starred[key(it.track)] ?: 0L }
+                        .thenBy { it.track.titleNormalised },
+                )
+                .page(limit, offset)
+        }
+
+    /** A track joined to its album, which is what every Songs tab query selects. */
+    private data class Joined(val track: TrackEntity, val album: AlbumEntity)
+
+    /** The inner join plus `album.in_library = 1`: a track whose album has gone is not a song. */
+    private fun inLibrary(): List<Joined> = rows.values.mapNotNull { track ->
+        albums.rows[track.releaseGroupMbid]
+            ?.takeIf { it.inLibrary }
+            ?.let { Joined(track, it) }
+    }
+
+    private fun List<Joined>.page(limit: Int, offset: Int): List<LibrarySongRow> =
+        drop(offset).take(limit).map {
+            LibrarySongRow(
+                track = it.track,
+                albumTitle = it.album.title,
+                albumArtistName = it.album.artistName,
+            )
+        }
 
     override suspend fun getTracksByCanonicalKeys(canonicalKeys: List<String>): List<TrackEntity> =
         canonicalKeys.mapNotNull { rows[it] }

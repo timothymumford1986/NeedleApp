@@ -57,11 +57,20 @@ public fun albumRow(
     updatedAt = updatedAt,
 )
 
+/**
+ * A track row.
+ *
+ * [artist] is a parameter and nullable because the Songs tab has two things to say about it: it
+ * orders by the *album's* artist, and it falls back to that artist when the server sent none for the
+ * track - which is the normal case, since DroppedNeedle only reports a per-track artist where it
+ * differs from the album's. A fixture that always carried one could not exercise either.
+ */
 public fun trackRow(
     mbid: String = RG,
     disc: Int = 1,
     track: Int = 1,
     title: String = "Breadcrumb Trail",
+    artist: String? = "Slint",
     fileId: String? = "8801",
     sizeBytes: Long? = 40_000_000L,
     durationMs: Long? = 353_000L,
@@ -74,7 +83,7 @@ public fun trackRow(
     trackNo = track,
     title = title,
     titleNormalised = SortKeys.normalise(title),
-    artistName = "Slint",
+    artistName = artist,
     durationMs = durationMs,
     recordingMbid = null,
     fileId = fileId,
