@@ -328,7 +328,14 @@ public class AudioCacheWriteTest {
         assertEquals("ogg", AudioCacheStoreWriter.formatToken(AudioFormat.OGG_VORBIS))
     }
 
-    private fun partFile(): File = writer().partFileFor(key)
+    /**
+     * The **stream's** partial, which is not the download's.
+     *
+     * The two are separate files on purpose - a stream deletes its leftover and a download resumes
+     * from it, and one name cannot obey both rules - so these tests have to name the streaming one
+     * explicitly or they would be asserting about a file this path never touches.
+     */
+    private fun partFile(): File = writer().streamPartFileFor(key)
 
     private fun publishedFile(): File = writer().fileFor(key)
 
