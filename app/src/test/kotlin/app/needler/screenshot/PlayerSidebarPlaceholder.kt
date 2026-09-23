@@ -1,4 +1,4 @@
-package app.needler.ui.player
+package app.needler.screenshot
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -21,29 +21,35 @@ import app.needler.core.design.component.NeedlerVerticalHairline
 import app.needler.core.design.theme.NeedlerTheme
 
 /**
- * The tablet's permanent right-hand player and crate sidebar, as chrome only.
+ * The tablet's right-hand player panel as chrome only, for screenshots.
  *
- * Screen 09 fixes the shape: 400dp wide on the pack's surface with a hairline
- * down its left edge, 36dp of top padding and 32dp either side, holding large
- * artwork, the track and album line, the scrubber, the transport, the output
- * selector and the crate. REQUIREMENTS.md "Tablet layout" makes it permanent -
- * it is on screen at expanded width whichever destination is selected, which is
- * why it lives in the navigation scaffold and not in any one destination.
+ * The real panel is `:feature:player`'s `PlayerSidebarRoute`, and the running
+ * app is given that one - see `NeedlerNavHost`. It cannot be used here: it
+ * resolves two Hilt view models and binds them to a live `PlaybackController`,
+ * and [NavigationScreenshotTest] renders the scaffold with no Hilt graph and no
+ * session precisely so its images are of the *chrome* and nothing else.
  *
- * **Everything inside it belongs to `:feature:player`.** Now playing, the
- * crate, the EQ, crossfade and the output picker are that module's screens,
- * driven by `PlaybackController` in `:core:domain`. This file draws the panel
- * and its empty state so the tablet layout is complete and renderable, and
- * stops there: no transport that does nothing, no fake track, no artwork of an
- * album nobody is playing. When `:feature:player` lands, the scaffold's
- * `sidebar` parameter takes its composable and this file goes.
+ * So this draws the panel's shape and stops: 400dp on the pack's surface with a
+ * hairline down its left edge, 36dp of top padding and 32dp either side, per
+ * screen 09. What that leaves beside it is the content pane the app really
+ * gives a destination at expanded width - 1280 − 96 − 400 = 784dp - which is
+ * the measurement the tablet images exist to hold still. `:feature:library`
+ * keeps the same kind of stand-in for the same reason, in `TabletFrame`.
  *
- * The empty state is not throwaway work, incidentally - REQUIREMENTS.md
- * requires the player surfaces to "render sensibly with no network and no
- * active playback, since that is their most common state".
+ * It lives in the test source set, and that is the point of it being here at
+ * all: until this move it was `:app` production code *and* the scaffold's
+ * default `sidebar`, so any caller that forgot the parameter shipped it to a
+ * real device. One did, and a phone in landscape crosses into the expanded
+ * branch, so the panel announced "Nothing playing" over audible playback. A
+ * placeholder that only the renderer can reach cannot do that again.
+ *
+ * The pixels are unchanged from the file this came from
+ * (`app/src/main/kotlin/app/needler/ui/player/PlayerSidebar.kt`), deliberately:
+ * the committed `nav-*-tablet.png` goldens are of this composition, and moving
+ * a file is not a reason to redraw them.
  */
 @Composable
-fun PlayerSidebar(modifier: Modifier = Modifier) {
+internal fun PlayerSidebarPlaceholder(modifier: Modifier = Modifier) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     val sizes = NeedlerTheme.sizes

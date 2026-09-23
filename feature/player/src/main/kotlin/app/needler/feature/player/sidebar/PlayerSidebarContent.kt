@@ -43,11 +43,11 @@ import app.needler.feature.player.ui.TransportSize
 /**
  * The tablet's permanent right-hand player, screen 09.
  *
- * This is the content for the panel `:app` currently draws as chrome in `ui/player/PlayerSidebar.kt`
- * - that file says so itself: "Everything inside it belongs to `:feature:player`... When
- * `:feature:player` lands, the scaffold's `sidebar` parameter takes its composable and this file
- * goes." So this composable draws the whole panel, hairline and background included, and substitutes
- * for it one call at a time.
+ * This is the panel itself, not a part of one: hairline, surface and full 400 dp width included, so
+ * it drops straight into `NeedlerNavigationScaffold`'s `sidebar` slot. It replaced `:app`'s
+ * chrome-only placeholder (`ui/player/PlayerSidebar.kt`), which had asked to be deleted the moment
+ * this module landed and has been - it now survives only as a stand-in in `:app`'s own screenshot
+ * tests, which have no Hilt graph to build [PlayerSidebarRoute] with.
  *
  * The pack's measurements: 400 dp wide on the raised surface with a hairline down its left edge, 36
  * dp of top padding and 32 dp either side, then a 250 dp sleeve over a 270 dp disc, the title with
