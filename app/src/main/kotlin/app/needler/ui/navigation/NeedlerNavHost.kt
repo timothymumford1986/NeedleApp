@@ -34,9 +34,10 @@ import app.needler.feature.player.output.OutputUiState
 import app.needler.feature.player.output.OutputViewModel
 import app.needler.feature.player.settings.CrossfadeRoute
 import app.needler.feature.player.settings.EqualiserRoute
+import app.needler.feature.pulls.pulls.PullsRoute
+import app.needler.feature.search.search.SearchRoute
 import app.needler.feature.player.sidebar.PlayerSidebarRoute
 import app.needler.settings.SettingsRoute
-import app.needler.ui.placeholder.DestinationPlaceholder
 
 /** Onboarding. Screens 01 and 16. Owned by `:app`. */
 private const val ROUTE_CONNECT = "connect"
@@ -416,13 +417,24 @@ private fun NeedlerHome(
                 CrossfadeRoute(onBack = { navController.popBackStack() })
             }
 
-            // Search and Pulls are still placeholders. Each names the module
-            // that will replace it - see DestinationPlaceholder.
-            listOf(
-                NeedlerDestination.Search,
-                NeedlerDestination.Pulls,
-            ).forEach { destination ->
-                composable(destination.route) { DestinationPlaceholder(destination) }
+            composable(NeedlerDestination.Search.route) {
+                SearchRoute(
+                    widthSizeClass = widthSizeClass,
+                    onOpenAlbum = { navController.navigate(albumRoute(it.value)) },
+                    onOpenArtist = { navController.navigate(artistRoute(it.value)) },
+                    // The pack's Cancel returns to the library, and the bar has
+                    // to agree with it, so this is the same tab switch the bar
+                    // makes rather than a popBackStack that would leave Search
+                    // selected under a library screen.
+                    onCancel = { selectTab(NeedlerDestination.Library) },
+                )
+            }
+
+            composable(NeedlerDestination.Pulls.route) {
+                PullsRoute(
+                    widthSizeClass = widthSizeClass,
+                    onOpenAlbum = { navController.navigate(albumRoute(it.value)) },
+                )
             }
         }
     }
