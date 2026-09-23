@@ -118,8 +118,21 @@ public class AlbumDownloadTest {
     @Test
     public fun `bytes already cached from streaming are promoted rather than re-fetched`(): Unit = runTest {
         seedAlbum(trackCount = 1, fileIds = listOf("8801"))
-        // The same server-side file, already complete on the device.
-        audioCacheDao.upsert(cacheRow(track = 1, sourceFileId = "8801", complete = true))
+        // The same server-side file, already complete on the device -- and the bytes are really
+        // there. A row on its own is not enough any more, and deliberately so: claiming a file that
+        // is not on disk is how an album reported COMPLETE for ever and could never re-download.
+        val cached = File(folder.root, "already-streamed.audio").apply {
+            writeBytes(ByteArray(TRACK_BYTES.toInt()))
+        }
+        audioCacheDao.upsert(
+            cacheRow(
+                track = 1,
+                sourceFileId = "8801",
+                complete = true,
+                path = cached.path,
+                sizeBytes = TRACK_BYTES,
+            ),
+        )
 
         val outcome = downloader().download(RG)
 
