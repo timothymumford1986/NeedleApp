@@ -1,10 +1,17 @@
 package app.needler.ui.navigation
 
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -15,12 +22,16 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.needler.connect.ConnectRoute
 import app.needler.core.data.background.NotificationDestination
+import app.needler.core.design.theme.NeedlerTheme
 import app.needler.feature.library.album.AlbumRoute
 import app.needler.feature.library.artist.ArtistRoute
 import app.needler.feature.library.library.LibraryRoute
 import app.needler.feature.player.crate.CrateRoute
 import app.needler.feature.player.nowplaying.MiniPlayerRoute
 import app.needler.feature.player.nowplaying.NowPlayingRoute
+import app.needler.feature.player.output.OutputSheet
+import app.needler.feature.player.output.OutputUiState
+import app.needler.feature.player.output.OutputViewModel
 import app.needler.feature.player.sidebar.PlayerSidebarRoute
 import app.needler.ui.placeholder.DestinationPlaceholder
 
@@ -86,6 +97,10 @@ private fun artistRoute(mbid: String): String = "artist/$mbid"
  *   once a saved session exists; until `SessionRepository` has an
  *   implementation behind it, a cold start begins at Connect.
  */
+// ModalBottomSheet carries @ExperimentalMaterial3Api in some Material3
+// releases and not others. Opting in costs a warning when it is stable and
+// is required when it is not, so it is the cheaper of the two mistakes.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NeedlerNavHost(
     widthSizeClass: WindowWidthSizeClass,
@@ -136,6 +151,17 @@ fun NeedlerNavHost(
         // rather than destinations inside it - see ROUTE_NOW_PLAYING for why the
         // pack puts them out here.
         composable(ROUTE_NOW_PLAYING) {
+            // Screen 21 is a sheet, not a destination, and this is the host that
+            // answers that question. OutputPickerRoute draws its own dimmed
+            // backdrop and carries no dismiss callback, which is why it stayed
+            // unreachable: made a destination it would strand the listener on a
+            // screen with no way off. Its KDoc names the alternative - OutputSheet
+            // is "the content alone for a host that brings its own sheet" - so the
+            // sheet, and therefore the dismissal, belongs here. ModalBottomSheet
+            // supplies the scrim, the drag handle and the back gesture, none of
+            // which :feature:player then has to invent.
+            var outputPickerOpen: Boolean by rememberSaveable { mutableStateOf(false) }
+
             NowPlayingRoute(
                 // The chevron down in the header. A collapse rather than a back,
                 // but the same call AlbumRoute and ArtistRoute make: whatever
@@ -145,16 +171,31 @@ fun NeedlerNavHost(
                 onOpenCrate = {
                     navController.navigate(ROUTE_CRATE) { launchSingleTop = true }
                 },
-                // Nowhere to send this yet. :feature:player does build the
-                // picker - screen 21, as OutputPickerRoute - but it takes no
-                // dismiss callback, and its own KDoc leaves it to the host to
-                // decide whether it is a modal sheet or a destination of its
-                // own. Registering it here would be answering that question by
-                // accident, and stranding the listener on a screen with no way
-                // off it. The chip is inert until the host chooses; every other
-                // control on Now Playing works.
-                onChooseOutput = {},
+                onChooseOutput = { outputPickerOpen = true },
             )
+
+            if (outputPickerOpen) {
+                val outputViewModel: OutputViewModel = hiltViewModel()
+                val outputState: OutputUiState by outputViewModel.state
+                    .collectAsStateWithLifecycle()
+
+                ModalBottomSheet(
+                    onDismissRequest = { outputPickerOpen = false },
+                    containerColor = NeedlerTheme.colors.surface,
+                ) {
+                    OutputSheet(
+                        state = outputState,
+                        // Choosing an output closes the sheet, which is what the
+                        // pack draws: the tick lands and the sheet goes. The
+                        // selection itself is the view model's business.
+                        onSelect = { target ->
+                            outputViewModel.select(target)
+                            outputPickerOpen = false
+                        },
+                        onVolumeChange = outputViewModel::setVolume,
+                    )
+                }
+            }
         }
 
         // The crate is a destination of its own so the back gesture leaves it
