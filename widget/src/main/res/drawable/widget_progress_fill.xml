@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The elapsed half of the position bar: `height: 4px; border-radius: 2px;
+  background: #aed5f2` (NeedlerColors.accent).
+
+  Its *width* is computed in Kotlin and applied with GlanceModifier.width,
+  because Glance has no fractional weight and no ProgressBar whose height the
+  pack's 4dp can be pinned to. See NowPlayingCard.PositionRow.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="2dp" />
+    <solid android:color="@color/needler_widget_accent" />
+</shape>

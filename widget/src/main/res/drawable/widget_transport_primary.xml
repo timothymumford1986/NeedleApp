@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The primary transport button: a 44dp accent disc, `border-radius: 50%;
+  background: #aed5f2` on screens 15 and 18.
+
+  An oval <shape> rather than a 50% corner radius, for the same
+  minSdk-26 reason as widget_card.xml.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/needler_widget_accent" />
+</shape>

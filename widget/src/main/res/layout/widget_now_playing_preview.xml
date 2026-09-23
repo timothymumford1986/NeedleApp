@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The picture the Android 12+ widget picker shows before the widget is placed.
+
+  It is a static layout, not a Glance composition: the picker inflates it in its
+  own process with no session, no Hilt graph and no app process running, so it
+  cannot be the real card.
+
+  It deliberately draws the **empty state** rather than a fabricated
+  now-playing row. A picker preview showing "Sienna — The Marías" would be a
+  promise the widget cannot keep, and the empty card is what a user actually
+  gets the moment they drop it: REQUIREMENTS.md "Widgets" is explicit that no
+  active playback "is their most common state". It also means the preview uses
+  the product's real strings rather than sample data that would drift from them.
+
+  Only views RemoteViews supports are used (LinearLayout, ImageView, TextView,
+  View), because a preview layout has the same restrictions as the widget itself.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/widget_card"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:padding="14dp">
+
+    <!-- The 64dp cover, as the tinted placeholder: nothing is playing, so there is no art. -->
+    <ImageView
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:background="@drawable/widget_artwork_placeholder"
+        android:contentDescription="@string/widget_artwork" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:layout_width="12dp"
+                android:layout_height="12dp"
+                android:contentDescription="@null"
+                android:src="@drawable/widget_record_mark" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:text="@string/widget_wordmark"
+                android:textColor="@color/needler_widget_text_secondary"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:maxLines="1"
+            android:text="@string/widget_nothing_playing"
+            android:textColor="@color/needler_widget_text_primary"
+            android:textSize="16sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:maxLines="1"
+            android:text="@string/widget_nothing_playing_detail"
+            android:textColor="@color/needler_widget_text_secondary"
+            android:textSize="13sp" />
+
+    </LinearLayout>
+
+    <!--
+      Only the primary button, matching the empty state the widget itself draws:
+      with nothing loaded there is no previous and no next to offer, and
+      PlaybackController.play() restores the persisted crate, so Play is the one
+      control that still means something.
+    -->
+    <FrameLayout
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_marginStart="8dp"
+        android:background="@drawable/widget_transport_primary">
+
+        <ImageView
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_gravity="center"
+            android:contentDescription="@string/widget_action_play"
+            android:src="@drawable/widget_ic_play" />
+
+    </FrameLayout>
+
+</LinearLayout>
