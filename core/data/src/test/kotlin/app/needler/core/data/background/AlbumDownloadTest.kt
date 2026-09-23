@@ -13,6 +13,8 @@ import app.needler.core.data.fake.trackRow
 import app.needler.core.data.local.cache.AudioCacheStoreWriter
 import app.needler.core.data.local.cache.CacheIndex
 import app.needler.core.data.local.cache.DeviceFreeSpace
+import app.needler.core.data.local.dao.AudioCacheDao
+import app.needler.core.data.local.entity.AudioCacheEntity
 import app.needler.core.data.local.entity.DownloadStateDb
 import app.needler.core.data.local.entity.PinEntity
 import app.needler.core.domain.model.NeedlerError
@@ -50,15 +52,16 @@ public class AlbumDownloadTest {
     private fun downloader(
         freeBytes: Long = 100_000_000L,
         floorBytes: Long = 1_000L,
+        cacheDao: AudioCacheDao = audioCacheDao,
     ): AlbumDownloader = AlbumDownloader(
         pinDao = pinDao,
         trackDao = trackDao,
-        audioCacheDao = audioCacheDao,
+        audioCacheDao = cacheDao,
         albumDao = albumDao,
         store = AudioCacheStoreWriter(
-            audioCacheDao = audioCacheDao,
+            audioCacheDao = cacheDao,
             cacheIndex = CacheIndex(
-                audioCacheDao = audioCacheDao,
+                audioCacheDao = cacheDao,
                 deviceFreeSpace = DeviceFreeSpace.of(freeBytes = freeBytes, floorBytes = floorBytes),
             ),
             audioDirectory = folder.root,
@@ -304,6 +307,62 @@ public class AlbumDownloadTest {
             row.sourceFileId,
         )
     }
+
+    @Test
+    public fun `a failure to index the bytes is a retry, not a worker that dies in silence`(): Unit =
+        runTest {
+            // Room can fail the index write for reasons that have nothing to do with the download -
+            // a full disk, a locked database. Left unguarded that throwable escaped the `Worker`,
+            // which `WorkManager` records as a plain failure: no backoff, no second attempt, the pin
+            // row frozen on DOWNLOADING and nothing in logcat. The album screen would spin for ever
+            // over a condition that clears itself in a minute.
+            seedAlbum(trackCount = 1, fileIds = listOf("8801"))
+            val refusesToIndex = object : AudioCacheDao by audioCacheDao {
+                override suspend fun upsert(row: AudioCacheEntity) {
+                    error("database is locked")
+                }
+            }
+
+            val outcome = downloader(cacheDao = refusesToIndex).download(RG)
+
+            assertTrue(outcome is AlbumDownloadOutcome.Retry)
+            assertEquals(
+                "a condition that may clear is not a permanent failure to show the user",
+                DownloadStateDb.DOWNLOADING,
+                pin().downloadState,
+            )
+            assertTrue("nothing may claim bytes the index refused", audioCacheDao.rows.isEmpty())
+        }
+
+    @Test
+    public fun `a pass ends by reclaiming partial files whose tracks are on the device`(): Unit =
+        runTest {
+            // Nothing outside the store ever looks at a partial, so one left beside a published
+            // track is bytes that only an uninstall would reclaim. The sweep belongs to the job
+            // because the job is the only thing that knows no download of these tracks is running.
+            seedAlbum(trackCount = 1, fileIds = listOf("8801"))
+            val onDevice = File(folder.root, "already.audio")
+            onDevice.writeBytes(ByteArray(TRACK_BYTES.toInt()) { 3 })
+            audioCacheDao.upsert(
+                cacheRow(
+                    track = 1,
+                    path = onDevice.path,
+                    complete = true,
+                    pinned = true,
+                    sourceFileId = "8801",
+                    sizeBytes = TRACK_BYTES,
+                ),
+            )
+            val stray = File(folder.root, RG + "_1_1.part")
+            stray.writeBytes(ByteArray(8) { 9 })
+
+            val outcome = downloader().download(RG)
+
+            assertTrue(outcome is AlbumDownloadOutcome.Success)
+            assertTrue("bytes already on the device are never re-fetched", byteSource.requested.isEmpty())
+            assertFalse("a partial beside a published track stands for nothing", stray.exists())
+            assertTrue("the published bytes are untouched", onDevice.isFile)
+        }
 
     private companion object {
         const val TRACK_BYTES = 64L
