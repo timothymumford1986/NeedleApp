@@ -50,12 +50,24 @@ import app.needler.ui.player.PlayerSidebar
  * pack's own 24dp bottom inset for the gesture area, and adding the system one
  * on top of it would double the gap.
  *
+ * [miniPlayer] adds no insets of its own for the same reason: it is stacked
+ * above the bar, so the bar is what stands between it and the gesture area, and
+ * the pack's 8dp gap between the two is padding the bar's own card carries.
+ *
  * @param pullsBadgeCount the count on the Pulls item. REQUIREMENTS.md calls
  *   this "the reliable channel" for pull state - notifications are best-effort,
  *   this badge is not - so it is plumbed through the scaffold rather than being
  *   drawn from inside one screen. It is a parameter and not a repository read
  *   because `:feature:pulls` owns the source; until that lands the host passes
  *   the real value it has, which is zero.
+ * @param miniPlayer the phone's collapsed player, drawn between the content and
+ *   the bottom bar. A parameter for the same reason [sidebar] is one: the
+ *   scaffold is chrome, it does not know about playback, and the real bar is
+ *   `:feature:player`'s `MiniPlayerRoute` with a Hilt view model behind it -
+ *   which the host supplies and the screenshot tests, which have no Hilt graph,
+ *   leave at the default. That default draws nothing, which is also what the
+ *   real bar does with an empty crate: the bar is absent rather than empty, so
+ *   it never steals 72dp from a list to say nothing.
  * @param sidebar the tablet player sidebar. Defaults to [PlayerSidebar], the
  *   placeholder `:feature:player` replaces.
  */
@@ -66,6 +78,7 @@ fun NeedlerNavigationScaffold(
     onSelect: (NeedlerDestination) -> Unit,
     modifier: Modifier = Modifier,
     pullsBadgeCount: Int = 0,
+    miniPlayer: @Composable () -> Unit = {},
     sidebar: @Composable () -> Unit = { PlayerSidebar() },
     content: @Composable () -> Unit,
 ) {
@@ -110,6 +123,10 @@ fun NeedlerNavigationScaffold(
             ) {
                 content()
             }
+            // Between the content and the bar, which is where screens 06 and 13
+            // draw it, and outside the weighted Box so the bar is never
+            // scrolled past or overdrawn by a destination.
+            miniPlayer()
             NeedlerBottomNavBar(items = items)
         }
     }
