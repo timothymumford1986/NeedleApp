@@ -1,5 +1,6 @@
 package app.needler.feature.library.screenshot
 
+import app.needler.core.domain.model.NeedlerError
 import android.app.Application
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
@@ -49,7 +50,7 @@ class ArtistScreenshotTest {
             NeedlerDevice.Phone,
             LOADED.copy(
                 catalogueAlbums = emptyList(),
-                discographyUnavailable = true,
+                discographyError = NeedlerError.Offline(),
                 offline = true,
             ),
         )

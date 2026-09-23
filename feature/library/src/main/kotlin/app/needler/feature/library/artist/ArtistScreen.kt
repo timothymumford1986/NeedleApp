@@ -1,5 +1,6 @@
 package app.needler.feature.library.artist
 
+import app.needler.core.domain.model.NeedlerError
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -143,11 +144,10 @@ fun ArtistScreen(
                     item(key = "catalogue-unavailable") {
                         SectionSpacer()
                         NoticeLine(
-                            message = if (state.offline) {
-                                CATALOGUE_OFFLINE
-                            } else {
-                                CATALOGUE_UNAVAILABLE
-                            },
+                            message = catalogueNoticeMessage(
+                                error = state.discographyError,
+                                offline = state.offline,
+                            ),
                         )
                     }
                 }
@@ -380,6 +380,37 @@ private fun ArtistNotFound(gutter: Dp) {
 internal const val CATALOGUE_OFFLINE: String =
     "The rest of this artist's discography needs a connection. What you own is listed above " +
         "and plays as usual."
+
+/**
+ * Which sentence the catalogue notice shows.
+ *
+ * [NeedlerError]'s KDoc says the distinctions matter to the UI, and here they genuinely do: an
+ * artist the catalogue has never heard of, a server that answered 500, and a request that timed out
+ * are three different things, and telling someone the same sentence for all three is what made a
+ * failure on every artist indistinguishable from a failure on one.
+ *
+ * The error's own `diagnostic` is deliberately absent. It carries status codes and header names and
+ * its KDoc says it is never shown raw to the user; it belongs in the log, which is where
+ * [ArtistViewModel] now writes it.
+ */
+internal fun catalogueNoticeMessage(error: NeedlerError?, offline: Boolean): String = when {
+    offline || error is NeedlerError.Offline -> CATALOGUE_OFFLINE
+    error is NeedlerError.NotFound -> CATALOGUE_NOT_IN_CATALOGUE
+    error is NeedlerError.ServerError -> CATALOGUE_SERVER_ERROR
+    error is NeedlerError.RateLimited -> CATALOGUE_RATE_LIMITED
+    else -> CATALOGUE_UNAVAILABLE
+}
+
+internal const val CATALOGUE_NOT_IN_CATALOGUE: String =
+    "The catalogue has nothing else for this artist. What you own is listed above."
+
+internal const val CATALOGUE_SERVER_ERROR: String =
+    "Your server had a problem fetching the rest of this artist's discography. What you own is " +
+        "listed above."
+
+internal const val CATALOGUE_RATE_LIMITED: String =
+    "The catalogue is busy. The rest of this artist's discography will be there shortly; what " +
+        "you own is listed above."
 
 internal const val CATALOGUE_UNAVAILABLE: String =
     "The rest of this artist's discography could not be fetched from the catalogue. What you " +

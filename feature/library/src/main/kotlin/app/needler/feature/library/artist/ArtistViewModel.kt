@@ -1,11 +1,13 @@
 package app.needler.feature.library.artist
 
+import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.ArtistMbid
+import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.repository.LibraryRepository
@@ -54,7 +56,7 @@ class ArtistViewModel @Inject constructor(
 
     private val busy = MutableStateFlow(false)
     private val notice = MutableStateFlow<AlbumNotice?>(null)
-    private val discographyUnavailable = MutableStateFlow(false)
+    private val discographyFailure = MutableStateFlow<NeedlerError?>(null)
 
     private val content: Flow<Content> = combine(
         library.observeArtist(artistMbid),
@@ -76,14 +78,14 @@ class ArtistViewModel @Inject constructor(
         sessions.observeConnectivity(),
         busy,
         notice,
-        discographyUnavailable,
-    ) { current, connectivity, isBusy, currentNotice, unavailable ->
+        discographyFailure,
+    ) { current, connectivity, isBusy, currentNotice, failure ->
         ArtistUiState(
             loading = false,
             artist = current.artist,
             ownedAlbums = current.owned,
             catalogueAlbums = current.catalogue,
-            discographyUnavailable = unavailable && current.catalogue.isEmpty(),
+            discographyError = failure.takeIf { current.catalogue.isEmpty() },
             offline = !connectivity.isOnline,
             busy = isBusy,
             notice = currentNotice,
@@ -130,7 +132,22 @@ class ArtistViewModel @Inject constructor(
     fun refreshDiscography() {
         viewModelScope.launch {
             val result: Outcome<Unit> = library.refreshArtistDiscography(artistMbid)
-            discographyUnavailable.value = result is Outcome.Failure
+            // Keep the reason, not just the fact. NeedlerError's own KDoc says
+            // "the distinctions matter to the UI, which is why this is a sealed
+            // hierarchy rather than a message" - collapsing it to a boolean here
+            // threw that away, and left a universal catalogue failure with no
+            // symptom anywhere in the app beyond one sentence that could mean a
+            // 404, a 500, a timeout or a parse error.
+            val error: NeedlerError? = (result as? Outcome.Failure)?.error
+            if (error != null) {
+                // diagnostic is exactly this: "a short, non-localised description for the
+                // diagnostics log", and its KDoc forbids showing it raw to the user. One
+                // line here is the difference between a five-minute diagnosis and taking
+                // the server apart, because this is currently the only screen in the app
+                // where a v1-lane failure is visible at all.
+                Log.w(TAG, "artist discography failed for " + artistMbid.value + ": " + error.diagnostic)
+            }
+            discographyFailure.value = error
         }
     }
 
@@ -146,5 +163,8 @@ class ArtistViewModel @Inject constructor(
 
         private const val SUBSCRIPTION_TIMEOUT_MS: Long = 5_000L
     }
-}
 
+    private companion object {
+        private const val TAG: String = "ArtistViewModel"
+    }
+}
