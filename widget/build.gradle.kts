@@ -22,6 +22,16 @@ plugins {
 
 android {
     namespace = "app.needler.widget"
+
+    defaultConfig {
+        // Glance builds a PendingIntent that names an ActionCallback by class
+        // name, so R8 sees the transport buttons' classes as unreachable and
+        // strips them from :app's minified release. The rules ship with the
+        // module because the module is what knows why they are needed.
+        // (AndroidLibraryConventionPlugin deliberately does not set this for
+        // every module: AGP 9 fails the build when a named file is missing.)
+        consumerProguardFiles("consumer-rules.pro")
+    }
 }
 
 dependencies {
@@ -29,6 +39,18 @@ dependencies {
 
     implementation(libs.glance.appwidget)
     implementation(libs.glance.material3)
+
+    // Artwork. This does NOT build an ImageLoader: :app already builds the one
+    // the whole app shares (ArtworkRefMapper, the cert-pinned mediaClient, the
+    // 256 MB artwork disk cache) and publishes it as Coil's singleton, and the
+    // widgets compose in :app's own process, so SingletonImageLoader.get hands
+    // them that exact loader. The dependency is here only to name it.
+    //
+    // A widget must not open its own HTTP connection: REQUIREMENTS.md
+    // "Libraries" allows the project one OkHttp client and one certificate
+    // -pinning policy, and a second client here would fetch covers straight
+    // past the pin. See WidgetArtwork.kt.
+    implementation(libs.coil.core)
 
     implementation(libs.kotlinx.coroutines.android)
 }

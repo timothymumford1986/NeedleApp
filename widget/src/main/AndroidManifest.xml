@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  :widget — the Glance home-screen widgets.
+
+  REQUIREMENTS.md "Surfaces beyond the app > Widgets" names three widgets drawn
+  on screens 15 (phone) and 18 (tablet): now playing, recently added, and the
+  active pull with its percentage. Only the first is declared here, because only
+  the first has a class yet; the other two land with theirs. Declaring a
+  <receiver> that names a class which does not exist merges fine and then fails
+  lint's MissingClass check, which is the same reason app/src/main/AndroidManifest.xml
+  deliberately declares none of these itself.
+
+  Nothing else belongs in this file. The widgets need no permission of their own:
+  they read the running Media3 session through PlaybackController and fetch
+  artwork through the one ImageLoader :app already builds, so INTERNET and
+  ACCESS_NETWORK_STATE are already declared by :app for reasons that predate the
+  widgets. No android:process either — see NowPlayingWidget's KDoc for why the
+  widget composing in the app's own process is the whole basis of the design.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+
+        <!--
+          The now-playing widget's AppWidgetProvider.
+
+          android:exported is false. An app-widget provider only ever receives
+          broadcasts the platform sends to it by explicit component, so it does
+          not need to be reachable by other applications; exporting it would
+          hand every app on the device a way to poke the receiver.
+
+          android:label is what the widget picker prints above the preview, so
+          it is the product's own name for the widget rather than a class name.
+
+          APPWIDGET_UPDATE is the only action declared. The transport buttons do
+          NOT arrive here: Glance routes them through its own
+          ActionCallbackBroadcastReceiver, which the glance-appwidget manifest
+          declares, so adding a second action here would be a receiver with
+          nothing to deliver to it. See TransportActions.kt.
+        -->
+        <receiver
+            android:name=".nowplaying.NowPlayingWidgetReceiver"
+            android:exported="false"
+            android:label="@string/widget_now_playing_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_now_playing_info" />
+        </receiver>
+
+    </application>
+
+</manifest>

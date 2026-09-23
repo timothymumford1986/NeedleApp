@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Every string the widgets put on a screen or read aloud.
+
+  They live in a resource file rather than in Kotlin because two of them are
+  read by the platform before any of our code runs: android:label on the
+  <receiver> and android:description on the <appwidget-provider> are what the
+  widget picker prints, and the picker is a different process entirely.
+
+  The copy follows REQUIREMENTS.md "Vocabulary" — the crate is the play queue,
+  and a widget must never call it a queue — and matches the wording the player
+  screens already use ("Nothing playing", PlayerUiState.title), so the same
+  product says the same thing on the home screen as it does in the app.
+
+  Names are prefixed `widget_` for the same resource-merge reason as
+  widget_colours.xml.
+-->
+<resources>
+
+    <!-- Printed under the preview in the widget picker, and by TalkBack when the widget is focused. -->
+    <string name="widget_now_playing_label">Needler · Now playing</string>
+    <!-- Shown beneath the label in the Android 12+ widget picker. -->
+    <string name="widget_now_playing_description">What is playing, with the transport. Tap to open Needler.</string>
+
+    <!-- The empty state. Screens 15 and 18 draw only the playing case, so this wording is ours. -->
+    <string name="widget_nothing_playing">Nothing playing</string>
+    <string name="widget_nothing_playing_detail">Tap to pick something</string>
+
+    <!-- The eyebrow beside the record mark, drawn uppercase in the pack. -->
+    <string name="widget_wordmark">NEEDLER</string>
+
+    <!-- Transport content descriptions. These are the pack's own aria-labels. -->
+    <string name="widget_action_previous">Previous</string>
+    <string name="widget_action_next">Next</string>
+    <string name="widget_action_play">Play</string>
+    <string name="widget_action_pause">Pause</string>
+
+    <!-- Artwork alt text when there is no album to name, matching albumArtContentDescription's null case. -->
+    <string name="widget_artwork">Album artwork</string>
+
+    <!-- A timecode that is not known yet, as PlayerFormat.timecode prints it. -->
+    <string name="widget_unknown_time">--:--</string>
+
+</resources>
