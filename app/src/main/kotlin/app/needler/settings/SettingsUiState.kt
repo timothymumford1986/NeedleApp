@@ -402,6 +402,7 @@ data class StorageSectionState(
 data class AboutSectionState(
     val versionName: String = "",
     val versionCode: Long = 0L,
+    val updateCheck: UpdateCheckStatus = UpdateCheckStatus.Idle,
 ) {
     /** `0.1.0 (10100)`, or `Unknown` when the package could not be read at all. */
     val versionLabel: String
@@ -410,6 +411,23 @@ data class AboutSectionState(
             versionCode > 0L -> "$versionName ($versionCode)"
             else -> versionName
         }
+}
+
+/**
+ * What the "Check for updates" row is saying right now.
+ *
+ * The updater is otherwise invisible until a newer release happens to exist, so this row is the one
+ * place a person can confirm the feature is there at all and see the result of asking. Each state
+ * carries its own line; [Idle] shows nothing beyond the row's own label.
+ */
+enum class UpdateCheckStatus(val message: String?) {
+    Idle(null),
+    Checking("Checking..."),
+    UpToDate("You are on the latest version."),
+    UpdateAvailable("An update is ready. See the bar at the bottom of the app."),
+    Offline("Could not reach GitHub. Check your connection and try again."),
+    RateLimited("GitHub is rate-limiting update checks. Try again later."),
+    Busy("An update is already in progress."),
 }
 
 // ---------------------------------------------------------------------------

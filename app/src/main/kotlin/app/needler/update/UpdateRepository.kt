@@ -128,6 +128,53 @@ class UpdateRepository @Inject constructor(
         }
     }
 
+    /**
+     * Check right now, whatever the cadence says, and report what was found.
+     *
+     * This is the manual path: the "Check for updates" row in Settings, where a person has asked
+     * the question and is owed a plain answer, unlike [checkForUpdateIfDue] which is the ambient
+     * once-a-day glance. It still shares the mutex and still updates the offer, so a newer release
+     * found here lights the banner too; it just skips the "is it due yet" gate.
+     */
+    suspend fun checkNow(): ManualUpdateCheck {
+        when (local.value) {
+            is UpdateState.Available -> return ManualUpdateCheck.UPDATE_AVAILABLE
+            UpdateState.Idle -> Unit
+            // A download or install is already under way. Re-checking would only get in its way,
+            // and "an update is happening" is the honest answer.
+            else -> return ManualUpdateCheck.BUSY
+        }
+        return checkLock.withLock {
+            if (local.value is UpdateState.Available) return@withLock ManualUpdateCheck.UPDATE_AVAILABLE
+            val now = System.currentTimeMillis()
+            lastAttemptAtMillis = now
+            val outcome = when (val lookup = releases.latestRelease()) {
+                is ReleaseLookup.Found -> {
+                    preferences.recordCheckedAt(now)
+                    offer(lookup.release)
+                    // offer() lights the banner only when the release is newer and not dismissed;
+                    // if it did not, the release we found is the one already installed.
+                    if (local.value is UpdateState.Available) {
+                        ManualUpdateCheck.UPDATE_AVAILABLE
+                    } else {
+                        ManualUpdateCheck.UP_TO_DATE
+                    }
+                }
+                ReleaseLookup.NoUsableRelease -> {
+                    preferences.recordCheckedAt(now)
+                    ManualUpdateCheck.UP_TO_DATE
+                }
+                is ReleaseLookup.RateLimited -> {
+                    preferences.recordRetryNotBefore(now + lookup.retryAfterMillis)
+                    ManualUpdateCheck.RATE_LIMITED
+                }
+                ReleaseLookup.Unreachable -> ManualUpdateCheck.OFFLINE
+            }
+            downloader.pruneStaleDownloads(installed.versionCode())
+            outcome
+        }
+    }
+
     private fun offer(release: AvailableUpdate) {
         val shouldOffer = UpdateCheckPolicy.shouldOffer(
             candidateVersionCode = release.versionCode,
@@ -232,6 +279,9 @@ class UpdateRepository @Inject constructor(
  * composes to nothing rather than a screen with an empty state: for all but a few minutes in the
  * life of an install, the honest rendering of this state is no pixels at all.
  */
+/** The result of a manual "Check for updates", for a row that has to say something back. */
+enum class ManualUpdateCheck { UP_TO_DATE, UPDATE_AVAILABLE, OFFLINE, RATE_LIMITED, BUSY }
+
 sealed interface UpdateState {
 
     /** Nothing found, nothing offered, nothing running. Draws nothing. */
