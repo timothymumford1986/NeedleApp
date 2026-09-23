@@ -59,6 +59,10 @@ import app.needler.core.design.theme.NeedlerTheme
  *   drawn from inside one screen. It is a parameter and not a repository read
  *   because `:feature:pulls` owns the source; until that lands the host passes
  *   the real value it has, which is zero.
+ * @param updateBanner the "a new version is available" bar, drawn above the
+ *   mini-player so the two never argue about which is the bottom of the
+ *   content. Like [miniPlayer] it composes to nothing almost always - there
+ *   is no update almost always - so it costs a slot and no height.
  * @param miniPlayer the phone's collapsed player, drawn between the content and
  *   the bottom bar. A parameter for the same reason [sidebar] is one: the
  *   scaffold is chrome, it does not know about playback, and the real bar is
@@ -90,6 +94,7 @@ fun NeedlerNavigationScaffold(
     onSelect: (NeedlerDestination) -> Unit,
     modifier: Modifier = Modifier,
     pullsBadgeCount: Int = 0,
+    updateBanner: @Composable () -> Unit = {},
     miniPlayer: @Composable () -> Unit = {},
     sidebar: @Composable () -> Unit,
     content: @Composable () -> Unit,
@@ -142,6 +147,9 @@ fun NeedlerNavigationScaffold(
             // Between the content and the bar, which is where screens 06 and 13
             // draw it, and outside the weighted Box so the bar is never
             // scrolled past or overdrawn by a destination.
+            // Above the mini-player, so an update notice never sits between the
+            // player and the bar it belongs to.
+            updateBanner()
             miniPlayer()
             NeedlerBottomNavBar(items = items)
         }
