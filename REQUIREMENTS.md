@@ -14,11 +14,12 @@ The `design/` folder is the UI source of truth: 21 screens as HTML and PNG, plus
 
 ### Where the build has reached
 
-Eight modules carry code: `:core:domain`, `:core:data`, `:core:network`, `:core:design`, `:feature:library`, `:feature:player`, `:player:service` and `:app`. Together they are roughly 45,500 lines of production Kotlin with 18,000 lines of tests behind them; 781 tests pass, and 81 screenshots are committed as regression baselines. `app-debug.apk` and `wear-debug.apk` both assemble.
+Every module carries code: `:core:domain`, `:core:data`, `:core:network`, `:core:design`, `:feature:library`, `:feature:player`, `:player:service` and `:app`. Together they are roughly 45,500 lines of production Kotlin with 18,000 lines of tests behind them; 781 tests pass, and 81 screenshots are committed as regression baselines. `app-debug.apk` and `wear-debug.apk` both assemble.
 
 **The app plays music.** Connect it to a server and you get the library in three tabs, album and artist detail, a mini-player, a full now-playing screen with its crate, the tablet and landscape sidebar, lock-screen and notification transport, and playback that survives backgrounding, rotation and relaunch. The library reads from the local mirror, so it renders in full with no network.
 
-What remains is search, pulls, the settings screen, and the two extra surfaces.
+What remains is Android Auto, the phone half of the Wear link, and the two widgets beyond
+now-playing.
 
 | Remaining | Module |
 | --- | --- |
@@ -471,7 +472,7 @@ So the settings toggle governs whether Needler reports plays at all; the destina
 
 The whole UI works with no network. Metadata is fully mirrored, so browsing, search and queueing never wait on the server; only streaming un-cached audio and pulling new music need a connection.
 
-**Known gap: downloads are not retained.** Pull local does start: a `.part` file appears under `files/audio` and grows. But over fifteen minutes on a device, four tracks each reached several megabytes and were replaced by the next, and none of them was left behind. A sweep of the app's whole storage found only whichever `.part` was in flight. Downloading works; whatever finalises a file does not, or something removes it afterwards. Until this is fixed the audio tier is effectively empty however long a pull runs, and the tier table below describes an intent rather than observed behaviour. Nothing is written to logcat for any of it, which is why the cause is still open.
+**Downloads were not retained, and now are.** The streaming write path and the download write path shared one partial file and disagreed about it: a stream deletes it on open because a stream starts at byte zero, and a download keeps it because those bytes are the `Range` resume point. Nothing recorded that a download held it, and `NeedlerAudioDataSource.openWriteThrough` abandons its handle -- deleting that file -- on every track change and every seek. So playing an album while it pulled destroyed the download in flight, and the short commit that followed deleted what was left. Streams have their own `.streaming` partial now, a short commit no longer discards its own bytes, and a row claiming a file is checked against the file existing. Fixed in code and verified by CI; not yet exercised on a device.
 
 ### Three tiers
 

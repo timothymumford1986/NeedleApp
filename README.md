@@ -33,25 +33,33 @@ tabs, and the full player behind it.
 On a tablet, or a phone in landscape, the player moves into a panel beside the library rather than
 behind it.
 
+Search over your library and the MusicBrainz catalogue at once. The pulls queue, with progress,
+cancel and retry. Settings, including the equaliser and crossfade.
+
+A home-screen widget, and the app updates itself from the latest release.
+
 The library is mirrored on the phone, so it loads instantly and works with no connection.
 
 ## What doesn't
 
-Search, pulls and settings are placeholders.
+Offline downloads were keeping nothing at all until recently — playing a track while its album
+pulled deleted the download in flight. That is fixed but has not yet been run on a phone, so treat
+offline as working rather than proven.
 
-Downloads start but don't save, so offline playback isn't real yet.
+The Wear app runs and will say the phone is unreachable, because the phone half of the link is not
+written yet.
 
-No widget, no Wear app, no Android Auto.
+Artist discographies come back empty from the catalogue on every artist. The app now says which
+kind of failure it was and writes it to the log, which is how it will get found.
+
+No Android Auto.
 
 ## Roadmap
 
-In short: the offline store first, then the logging that would have found it, then search.
-
-1. Downloads that save
-2. Logging. The app is silent when it fails, which makes everything below it harder to find
-3. Artist discographies coming back empty from the catalogue
-4. Search
-5. Pulls, the widget, Wear
+1. Find the discography failure, now that the app will tell you what it is
+2. The phone side of the Wear link
+3. A live poll on the pulls screen, so it updates while you watch it
+4. Android Auto
 
 ## Build
 
