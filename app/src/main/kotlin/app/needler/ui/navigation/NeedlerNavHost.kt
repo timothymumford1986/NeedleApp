@@ -261,8 +261,15 @@ private fun NeedlerHome(
     onNotificationDestinationHandled: () -> Unit = {},
 ) {
     val backStackEntry by navController.currentBackStackEntryAsState()
-    val selected = NeedlerDestination.fromRoute(backStackEntry?.destination?.route)
-        ?: NeedlerDestination.Start
+    val currentRoute: String? = backStackEntry?.destination?.route
+    // A sub-screen belongs to the tab it was opened from, so the bar keeps that
+    // tab lit rather than falling back to the start: album and artist sit under
+    // Library, the equaliser and crossfade under Settings.
+    val selected: NeedlerDestination = when (currentRoute) {
+        ROUTE_ALBUM, ROUTE_ARTIST -> NeedlerDestination.Library
+        ROUTE_EQUALISER, ROUTE_CROSSFADE -> NeedlerDestination.Settings
+        else -> NeedlerDestination.fromRoute(currentRoute) ?: NeedlerDestination.Start
+    }
 
     // A notification tap lands here rather than on the outer graph, because
     // every destination it can name - an album, an artist, the Pulls tab - is
@@ -293,10 +300,20 @@ private fun NeedlerHome(
     // the field pushed an entry the bar's popUpTo could not account for, and
     // Library then ignored every tap until the listener pressed back.
     val selectTab: (NeedlerDestination) -> Unit = { destination ->
-        navController.navigate(destination.route) {
-            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-            launchSingleTop = true
-            restoreState = true
+        if (destination == selected && currentRoute != destination.route) {
+            // Already within this tab, on one of its sub-screens: return to the
+            // tab root rather than restoring the sub-screen. Without this,
+            // restoreState below would put the sub-screen (Crossfade, Equaliser,
+            // an album) straight back, and tapping the tab you are already in
+            // would look like it did nothing - which is exactly what Settings did
+            // from the Crossfade screen.
+            navController.popBackStack(destination.route, inclusive = false)
+        } else {
+            navController.navigate(destination.route) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
         }
     }
 
