@@ -42,6 +42,14 @@ import java.io.File
  * longer decrypts, which is produced by a device migration or a lock-screen change, not by anything
  * a test can ask for. Corrupting the XML by hand exercises a different branch (the parser's) and
  * would read as coverage it is not.
+ *
+ * ## Why the test names are not backticked
+ *
+ * Every unit test in this project names itself in backticks with spaces, and that is right for
+ * them. It does not work here. These methods are dexed, and DEX forbids a space in a method name
+ * below DEX version 040, which arrives with minSdk 30; Needler's minSdk is 26. D8 refuses the whole
+ * class at build time, so one backticked name takes the entire instrumented run down with it rather
+ * than failing a single test. Instrumented tests here use camelCase and say what they mean in KDoc.
  */
 @RunWith(AndroidJUnit4::class)
 public class SecureCredentialStoreKeystoreTest {
@@ -64,7 +72,7 @@ public class SecureCredentialStoreKeystoreTest {
     }
 
     @Test
-    public fun `a secret written through the Keystore comes back out of it`(): Unit {
+    public fun aSecretWrittenThroughTheKeystoreComesBackOutOfIt(): Unit {
         val written: SecureCredentialStore = SecureCredentialStore.create(context)
         assertTrue(written.saveServerUrl(ServerUrl.parseOrNull("https://music.example.net")!!))
         assertTrue(written.saveCompanionBearer("bearer-token", issuedAtMillis = 1_700_000_000_000L))
@@ -85,7 +93,7 @@ public class SecureCredentialStoreKeystoreTest {
     }
 
     @Test
-    public fun `the file on disk holds no plaintext`(): Unit {
+    public fun theFileOnDiskHoldsNoPlaintext(): Unit {
         val credentials: SecureCredentialStore = SecureCredentialStore.create(context)
         assertTrue(credentials.saveCompanionBearer("bearer-token", issuedAtMillis = 1L))
         assertTrue(credentials.saveAppPassword("app-password-secret"))
@@ -102,7 +110,7 @@ public class SecureCredentialStoreKeystoreTest {
     }
 
     @Test
-    public fun `clear leaves nothing a later store can read`(): Unit {
+    public fun clearLeavesNothingALaterStoreCanRead(): Unit {
         val credentials: SecureCredentialStore = SecureCredentialStore.create(context)
         assertTrue(credentials.saveServerUrl(ServerUrl.parseOrNull("https://music.example.net")!!))
         assertTrue(credentials.saveCompanionBearer("bearer-token", issuedAtMillis = 1L))
@@ -122,7 +130,7 @@ public class SecureCredentialStoreKeystoreTest {
     }
 
     @Test
-    public fun `the store never renders its contents`(): Unit {
+    public fun theStoreNeverRendersItsContents(): Unit {
         val credentials: SecureCredentialStore = SecureCredentialStore.create(context)
         assertTrue(credentials.saveAppPassword("app-password-secret"))
 
