@@ -181,8 +181,12 @@ jobs:
           disable-animations: true
           script: ./gradlew connectedDebugAndroidTest --stacktrace
 
-      - name: Upload reports on failure
-        if: failure()
+      # always(), not failure(), unlike the unit-test job above. Gradle's console
+      # prints "Running tests on devices" for every module it visits, including
+      # the ones with no instrumented sources at all, so a green run is not by
+      # itself evidence that anything ran. The report is where the counts are.
+      - name: Upload reports
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: instrumented-reports
