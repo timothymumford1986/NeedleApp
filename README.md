@@ -52,6 +52,12 @@ You'll need JDK 21 and the Android SDK with `android-37.x`.
 
 `test` rewrites the committed screenshots unless you pass `-Pneedler.screenshots.verify`, which is what CI runs. Record changes with the flag off, then commit the result.
 
+You don't need a phone. Logic is covered by JVM unit tests, every screen renders to a PNG on the JVM, and the few things that only exist on a real Android runtime — the Keystore, SQLite, a bound Service — run on an emulator CI boots itself. To run those locally you do need the emulator:
+
+```bash
+./gradlew connectedDebugAndroidTest
+```
+
 In a synced folder (OneDrive, Dropbox) the sync client holds Gradle's output open and the build fails with "Unable to delete directory". Put `needler.buildDir=/some/path/outside/the/sync` in `~/.gradle/gradle.properties`.
 
 Debug builds are signed with each machine's own debug key, so a build from a second computer won't install over one from the first. Releases don't have that problem.
