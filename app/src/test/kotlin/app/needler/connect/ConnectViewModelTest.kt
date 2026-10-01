@@ -4,6 +4,8 @@ import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineCause
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.ReonboardingReason
+import app.needler.core.domain.model.SessionState
 import app.needler.core.network.ApiLane
 import app.needler.core.network.NetworkError
 import app.needler.core.network.ProxyInterception
@@ -404,6 +406,67 @@ class ConnectViewModelTest {
         viewModel.cancelConnect()
 
         assertTrue(viewModel.state.value.connected)
+        assertNull(viewModel.state.value.failure)
+    }
+
+    // ---- arriving on this screen without having asked to -------------------
+
+    @Test
+    fun `a session the keystore would not unlock is explained, not shown as a fresh install`() {
+        // The worst bug in the app, from the user's side: signed in for weeks, then three empty
+        // fields and no explanation. REQUIREMENTS.md "Expiry, and why playback survives it" is
+        // explicit that a dead credential degrades the app rather than erasing it, and an
+        // unreadable one is not even dead.
+        val viewModel = ConnectViewModel(
+            FakeSessionRepository(
+                initialSession = SessionState.ReonboardingRequired(
+                    server = FakeSessionRepository.IDENTITY,
+                    reason = ReonboardingReason.CREDENTIALS_UNREADABLE,
+                ),
+            ),
+            proxyStore,
+        )
+
+        val failure: ConnectFailure? = viewModel.state.value.failure
+        assertTrue(failure.toString(), failure is ConnectFailure.SavedSessionLocked)
+        // The address is not a secret and never had to be lost with the key.
+        assertEquals("https://music.yourhome.net", viewModel.state.value.server)
+        assertTrue(failure!!.detail.contains("https://music.yourhome.net"))
+        assertTrue(failure.detail, failure.detail.contains("untouched"))
+    }
+
+    @Test
+    fun `signing out deliberately still shows the empty form`() {
+        // The one state that must look like a fresh install, because the user asked for it.
+        val viewModel = ConnectViewModel(
+            FakeSessionRepository(
+                initialSession = SessionState.ReonboardingRequired(
+                    server = null,
+                    reason = ReonboardingReason.SIGNED_OUT,
+                ),
+            ),
+            proxyStore,
+        )
+
+        assertNull(viewModel.state.value.failure)
+        assertEquals("", viewModel.state.value.server)
+    }
+
+    @Test
+    fun `an ordinary expiry is not the keystore's fault and gets no notice here`() {
+        // Both credentials dead is the documented re-onboarding case and is handled by the
+        // non-blocking prompt the rest of the app owns. Claiming the keystore failed would be a
+        // false explanation, which is the fault item 3b on the punch list is about.
+        val viewModel = ConnectViewModel(
+            FakeSessionRepository(
+                initialSession = SessionState.ReonboardingRequired(
+                    server = FakeSessionRepository.IDENTITY,
+                    reason = ReonboardingReason.BOTH_CREDENTIALS_DEAD,
+                ),
+            ),
+            proxyStore,
+        )
+
         assertNull(viewModel.state.value.failure)
     }
 

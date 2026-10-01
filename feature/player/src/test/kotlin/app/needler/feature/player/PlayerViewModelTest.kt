@@ -422,10 +422,12 @@ class PlayerViewModelTest {
             val timer: SleepTimer = awaitItem().sleepTimer
             assertTrue("expected a timed stop, got " + timer, timer is SleepTimer.At)
             // A window, not a value: the instant is "now plus thirty minutes", and the only thing a test
-            // can honestly say about "now" is roughly when it was. Thirty minutes is what was asked for,
-            // so the gap can only be that minus however long the two statements took.
+            // can honestly say about "now" is roughly when it was. [before] is read *first*, so the gap
+            // can only be thirty minutes plus however long the two statements took - never less. The
+            // window was written the other way round and failed on a clock that ticked 2 ms between the
+            // two reads, which is a test asserting the arrow of time backwards rather than a defect.
             val ahead: Long = (timer as SleepTimer.At).instant.toEpochMilliseconds() - before
-            assertTrue("expected about 30 minutes, got " + ahead + " ms", ahead in 1_740_000L..1_800_000L)
+            assertTrue("expected about 30 minutes, got " + ahead + " ms", ahead in 1_800_000L..1_860_000L)
         }
         assertEquals(listOf("setSleepTimer(At)"), controller.commands)
     }

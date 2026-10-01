@@ -3,6 +3,7 @@ package app.needler.feature.library.artist
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
 import app.needler.core.domain.model.AlbumState
+import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.FavouriteTarget
 import app.needler.core.domain.model.NeedlerError
@@ -402,6 +403,31 @@ class ArtistViewModelTest {
             assertEquals(SampleLibrary.CATALOGUE_ONLY_ARTIST_NAME, loaded.displayName)
             assertTrue(loaded.fromHintsOnly)
             assertTrue(loaded.canPullArtist)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The header's artwork tints its letter placeholder from an identity, and on this
+     * path there is no `Artist` to take one from. Falling back to the name would give
+     * the same artist one colour in search and a different one here; the route's own
+     * MBID is what keeps them the same, so it has to reach the state.
+     */
+    @Test
+    fun `the route's artist id reaches the state even with no mirror row`() = runTest {
+        library.ownedByArtist.value = mapOf(CATALOGUE_ONLY to emptyList())
+        library.discographyByArtist.value = mapOf(CATALOGUE_ONLY to unowned)
+
+        val model = viewModel(
+            artistId = CATALOGUE_ONLY,
+            artistName = SampleLibrary.CATALOGUE_ONLY_ARTIST_NAME,
+        )
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.catalogueAlbums.isEmpty()) loaded = awaitItem()
+            assertNull(loaded.artist)
+            assertEquals(ArtistMbid(CATALOGUE_ONLY), loaded.mbid)
             cancelAndIgnoreRemainingEvents()
         }
     }

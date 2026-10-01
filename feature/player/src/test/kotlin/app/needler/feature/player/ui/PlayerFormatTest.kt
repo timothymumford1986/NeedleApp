@@ -77,6 +77,74 @@ class PlayerFormatTest {
         assertEquals("1 track · 1 min", PlayerFormat.crateSummary(1, 4_000L))
     }
 
+    /**
+     * The crate's two summaries disagreed with each other on a device.
+     *
+     * Visible: "11 tracks - 51 min". Spoken: "11 tracks, 50 minutes 22 seconds". 50:22 is not 51 min,
+     * and both were describing the same crate: the visible line rounds up to the minute while the spoken
+     * one went through `spokenDuration`, which truncates to the second because the sleep timer needs it
+     * to. 3,022,000 ms is the case that separates them, which is why it is the case asserted first.
+     */
+    @Test
+    fun `the spoken crate summary agrees with the printed one`() {
+        assertEquals("11 tracks · 51 min", PlayerFormat.crateSummary(11, 3_022_000L))
+        assertEquals("11 tracks, 51 minutes", PlayerFormat.spokenCrateSummary(11, 3_022_000L))
+
+        // And across the shapes the printed line has, so the two cannot drift apart again by one of them
+        // gaining an hour form, a singular, or a floor that the other does not have.
+        for (millis in longArrayOf(0L, 1L, 4_000L, 60_000L, 200_000L, 1_260_000L, 3_022_000L, 3_660_000L, 7_200_000L)) {
+            val printed: String = PlayerFormat.crateSummary(11, millis)
+            val spoken: String = PlayerFormat.spokenCrateSummary(11, millis)
+            assertEquals(
+                "printed and spoken must report the same minutes at " + millis + " ms: " +
+                    printed + " / " + spoken,
+                PlayerFormat.crateMinutes(millis).takeIf { millis > 0L },
+                minutesIn(spoken),
+            )
+            assertEquals(
+                "and the printed side must report that same figure at " + millis + " ms: " + printed,
+                PlayerFormat.crateMinutes(millis).takeIf { millis > 0L },
+                minutesIn(printed),
+            )
+        }
+    }
+
+    @Test
+    fun `the spoken crate summary says minutes in full, and an hour as an hour`() {
+        assertEquals("0 tracks", PlayerFormat.spokenCrateSummary(0, 0L))
+        assertEquals("1 track, 1 minute", PlayerFormat.spokenCrateSummary(1, 4_000L))
+        assertEquals("6 tracks, 21 minutes", PlayerFormat.spokenCrateSummary(6, 1_260_000L))
+        assertEquals("2 tracks, 1 hour 1 minute", PlayerFormat.spokenCrateSummary(2, 3_660_000L))
+        assertEquals("2 tracks, 2 hours", PlayerFormat.spokenCrateSummary(2, 7_200_000L))
+    }
+
+    /** `spokenDuration` is untouched, because the sleep timer needs its truncating behaviour. */
+    @Test
+    fun `the sleep timer still counts down in seconds`() {
+        assertEquals("59 seconds", PlayerFormat.spokenDuration(59_000L))
+        assertEquals("3 minutes 20 seconds", PlayerFormat.spokenDuration(200_000L))
+    }
+
+    @Test
+    fun `a track's place in the record reads the same printed and spoken`() {
+        val item = PlayerFixtures.item("q1", PlayerFixtures.hamptons)
+        assertEquals("Track 2", PlayerFormat.trackPosition(item))
+        assertEquals("Disc 1, track 2", PlayerFormat.trackPosition(item, includeDisc = true))
+        assertEquals("", PlayerFormat.trackPosition(null))
+    }
+
+    /**
+     * Pulls the minute figure back out of either summary, so the two can be compared without this test
+     * restating the formatting it is checking.
+     */
+    private fun minutesIn(summary: String): Long? {
+        val hours: Long = Regex("(\\d+) (?:hr|hours?)").find(summary)?.groupValues?.get(1)?.toLong() ?: 0L
+        val minutes: Long =
+            Regex("(\\d+) (?:min|minutes?)\\b").find(summary)?.groupValues?.get(1)?.toLong() ?: 0L
+        val total: Long = hours * 60L + minutes
+        return total.takeIf { it > 0L }
+    }
+
     @Test
     fun `a lossless badge carries no bitrate and a lossy one does`() {
         assertEquals("FLAC", PlayerFormat.formatBadge(AudioQuality(AudioFormat.FLAC, 1_411)))

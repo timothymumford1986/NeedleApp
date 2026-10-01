@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.ReonboardingReason
+import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.network.ProxyCredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -67,6 +69,32 @@ class ConnectViewModel @Inject constructor(
 
     /** The attempt in flight, so the user can stop it. */
     private var attempt: Job? = null
+
+    init {
+        // Why the screen asks the repository anything at all before the user has touched it: this
+        // route is also where a *failed* session restore lands, and a blank form is the wrong thing
+        // to show someone who was signed in a minute ago. See ConnectFailure.SavedSessionLocked.
+        //
+        // Only the one reason is read. `BOTH_CREDENTIALS_DEAD` is an ordinary expiry and arrives
+        // through the non-blocking prompt the rest of the app owns; `SIGNED_OUT` is deliberate and
+        // must show the empty form; `SERVER_IDENTITY_CHANGED` is a different story with a different
+        // message. `CREDENTIALS_UNREADABLE` is the only one that is nobody's fault.
+        viewModelScope.launch {
+            val session: SessionState = sessions.currentSession()
+            if (session !is SessionState.ReonboardingRequired) return@launch
+            if (session.reason != ReonboardingReason.CREDENTIALS_UNREADABLE) return@launch
+            val server: String? = session.server?.baseUrl?.takeIf { it.isNotBlank() }
+            _state.update { current ->
+                current.copy(
+                    // Pre-filled rather than merely quoted: the address is not a secret and never
+                    // had to be lost with the key, and re-typing a LAN address with a port is the
+                    // part of re-onboarding users get wrong.
+                    server = current.server.ifBlank { server.orEmpty() },
+                    failure = ConnectFailure.SavedSessionLocked(server),
+                )
+            }
+        }
+    }
 
     /**
      * How long an attempt runs before the screen admits it is still trying.

@@ -605,10 +605,25 @@ private fun ActivePullRow(
  * A pull the server has finished with: the pack's `EARLIER` rows.
  *
  * A finished one gets the `Ready` badge and a **Play** pill; anything in the
- * failed bucket gets its reason in the subtitle and a **Retry**, which is
- * exactly how screen 06 draws "Paul Kossoff · no source found". There is
- * deliberately no badge on the failed row: the reason *is* the label, and
- * drawing both would say the same thing twice on a 390dp line.
+ * failed bucket gets its state as a badge, its reason in the subtitle and a
+ * **Retry**.
+ *
+ * ## Every row names its state
+ *
+ * This row used to draw no badge at all in the failed bucket, on the argument
+ * that the reason in the subtitle was already the label and a badge beside it
+ * would say the same thing twice. That was wrong in two ways. The trailing
+ * column is where this list puts state — `Pulling 62%`, `Searching`, `Ready` —
+ * so a row that left it empty but for a Retry pill made the one outcome a user
+ * most needs to spot the only one they had to read prose to find. And the three
+ * end states are not one state: "no source found", "some tracks did not arrive"
+ * and "cancelled" are different outcomes with different next steps, and the
+ * badge is what separates them at a glance.
+ *
+ * The split that avoids the repetition is the one [PullsFormat.stateDetail]
+ * already uses everywhere else: the badge carries the state's **name**, the
+ * subtitle carries the **explanation**. So a cancelled pull no longer repeats
+ * "cancelled" in its line, and a part-delivered one says how far it got.
  *
  * A part-delivered pull sits in the failed bucket and offers **Retry**, but it
  * is still an album that plays — REQUIREMENTS.md, "Partial content is a normal
@@ -636,8 +651,8 @@ private fun FinishedPullRow(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                NeedlerStateBadge(badge = badgeFor(pull))
                 if (ready) {
-                    NeedlerStateBadge(badge = NeedlerAlbumBadge.Ready)
                     RowAction(label = "Play " + PullsFormat.albumPhrase(pull)) {
                         NeedlerPrimaryButton(
                             text = "Play",
@@ -725,7 +740,14 @@ private fun badgeFor(pull: Pull): NeedlerAlbumBadge = when (pull.state) {
     PullState.PROCESSING -> NeedlerAlbumBadge.Pulling(PullsFormat.percent(pull.progress.fraction))
 
     PullState.COMPLETED -> NeedlerAlbumBadge.Ready
-    PullState.PARTIAL, PullState.FAILED, PullState.CANCELLED -> NeedlerAlbumBadge.NoSource
+
+    // The state's name only. Why it failed, how far a part-delivered pull got
+    // and who cancelled it are all in the subtitle, from
+    // [PullsFormat.stateDetail] - a badge that repeated them would be the
+    // duplication this row was once drawn without a badge to avoid.
+    PullState.FAILED -> NeedlerAlbumBadge.Failed
+    PullState.PARTIAL -> NeedlerAlbumBadge.PartlyDelivered
+    PullState.CANCELLED -> NeedlerAlbumBadge.Cancelled
 }
 
 /**

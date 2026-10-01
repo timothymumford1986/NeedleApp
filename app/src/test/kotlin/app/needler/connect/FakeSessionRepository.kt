@@ -38,6 +38,14 @@ internal class FakeSessionRepository(
     var connectOutcome: Outcome<SessionState> = Outcome.Success(AUTHENTICATED),
     var negotiateOutcome: Outcome<ServerCapabilities> = Outcome.Success(CAPABILITIES),
     var trustOutcome: Outcome<Unit> = Outcome.Ok,
+    /**
+     * The state the app starts in, which the Connect screen now reads.
+     *
+     * A parameter because the screen's behaviour on arrival depends on it: a session the keystore
+     * would not unlock has to be explained rather than shown as a fresh install, and a deliberate
+     * sign-out has to show the empty form.
+     */
+    initialSession: SessionState = SessionState.NotConfigured,
 ) : SessionRepository {
 
     /** Every call the screen made, in order, for asserting on the sequence. */
@@ -49,7 +57,7 @@ internal class FakeSessionRepository(
     /** The certificate the last [trustCertificate] was made with. */
     var lastTrusted: CertificateInfo? = null
 
-    private val session = MutableStateFlow<SessionState>(SessionState.NotConfigured)
+    private val session = MutableStateFlow(initialSession)
 
     data class ConnectArgs(
         val serverUrl: String,

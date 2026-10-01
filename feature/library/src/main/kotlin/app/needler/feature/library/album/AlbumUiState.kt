@@ -34,6 +34,14 @@ data class AlbumUiState(
 
     val nowPlayingTrackKey: TrackKey? = null,
 
+    /**
+     * What the primary control does, which is not always "play from the top".
+     *
+     * Defaults to [AlbumTransport.START] so that a screen with no player bound - a screenshot, a
+     * build with no session - offers the same thing it always did.
+     */
+    val transport: AlbumTransport = AlbumTransport.START,
+
     /** How far the download to this device has got, when the album is pinned. */
     val download: OfflineDownloadState? = null,
 
@@ -269,6 +277,119 @@ enum class AlbumPrimaryAction {
 
     /** Nothing loaded. */
     NONE,
+}
+
+/**
+ * What the action block's two playback controls actually do, given what is loaded in the crate.
+ *
+ * ## Why this exists
+ *
+ * The primary control used to be a button labelled "Play" that called `playAlbum` unconditionally.
+ * Opening the record you were already listening to and pressing it threw the position away and
+ * re-buffered from zero - measured on a device at `position=32975` before the tap and `position=0`
+ * after it, with the buffer down from 76355 ms to 1906 ms. The label was the symptom; the lost
+ * position and the re-fetched bytes were the defect. A control that looks like a transport control
+ * has to be one.
+ *
+ * ## How "the loaded crate is this album" is decided
+ *
+ * Not by the current track. `PlaybackState.currentItem` belonging to this record answers a
+ * different and much weaker question: a crate assembled from a playlist, a genre or a search
+ * result can be playing one track of this album while holding nineteen others, and if that counted
+ * then every album with a track in the crate would offer Pause and none of them could be played.
+ *
+ * The test is on the crate as a whole - see `AlbumViewModel.transportFor`: **every**
+ * `QueueItem.track.key.releaseGroupMbid` in `PlaybackController.observeQueue` is this release
+ * group, and the current item is one of them. Only a crate loaded by this record's own Play or
+ * Shuffle satisfies that, which is exactly the case where restarting would be destructive. The
+ * crate is deliberately not required to hold *all* of the album: a part-delivered pull queues only
+ * the tracks that arrived, and REQUIREMENTS.md "Partial content is a normal state" makes that the
+ * ordinary case rather than a corner.
+ *
+ * The track-row highlight is a separate question and keeps its separate answer: a row is marked as
+ * playing whenever the current track is that row, mixed crate or not, because "this is the track
+ * you are hearing" is true there regardless of what else is queued.
+ *
+ * ## Why Shuffle is relabelled rather than disabled or made a toggle
+ *
+ * Shuffle on an album you are already inside restarts the record in a new order. That is a
+ * legitimate thing to want and there is no non-destructive version of it, so the honest fix is to
+ * say what it will do before the tap - "Shuffle again" and a spoken label that names the restart -
+ * rather than to hide the action.
+ *
+ * Two alternatives were rejected. Turning it into a `setShuffleEnabled` toggle on the live crate
+ * was rejected because `PlaybackController.playAlbum` documents album shuffle as shuffling "the
+ * album's own tracks rather than turning on the global shuffle mode for everything that follows":
+ * flipping the global mode from an album header would silently change what happens to every crate
+ * after this one. Disabling it while this album plays was rejected because it removes a capability
+ * the user still has a reason to reach for, and a greyed control with no explanation reads as a
+ * bug.
+ *
+ * ## The labels are part of the contract
+ *
+ * The words and the spoken descriptions live here rather than in the composable because
+ * REQUIREMENTS.md "Accessibility" - "Every control carries a content description" - makes them the
+ * thing a TalkBack user acts on, and the device audit found the labels are what people read in
+ * preference to the glyph. Holding them beside the state they describe lets a unit test assert the
+ * label and the effect together; the pair going out of step is the whole bug this type exists for.
+ */
+enum class AlbumTransport {
+
+    /**
+     * Nothing of this album is loaded: no crate, or a crate holding some other record.
+     *
+     * Play starts this album from its first playable track, which is what it has always done.
+     */
+    START,
+
+    /** This album is the loaded crate and it is playing. The primary control pauses it. */
+    PAUSE,
+
+    /**
+     * This album is the loaded crate and it is paused or stopped.
+     *
+     * The primary control resumes **where it stopped**. It must not re-issue `playAlbum`, which
+     * replaces the crate and seeks to zero.
+     */
+    RESUME,
+    ;
+
+    /** True when this album is the loaded crate, in either transport state. */
+    val isLoaded: Boolean get() = this != START
+
+    /** The word on the primary button. */
+    val primaryLabel: String
+        get() = when (this) {
+            START -> "Play"
+            PAUSE -> "Pause"
+            RESUME -> "Resume"
+        }
+
+    /**
+     * The primary button spoken, naming the record.
+     *
+     * [albumLabel] comes from `LibraryFormat.albumLabel`, because `Album.title` can be blank.
+     */
+    fun primaryDescription(albumLabel: String): String = when (this) {
+        START -> "Play " + albumLabel
+        PAUSE -> "Pause " + albumLabel
+        RESUME -> "Resume " + albumLabel + " where it stopped"
+    }
+
+    /** The word on the shuffle button. */
+    val shuffleLabel: String get() = if (isLoaded) "Shuffle again" else "Shuffle"
+
+    /**
+     * Shuffle spoken.
+     *
+     * The restart is stated when there is something to restart, because that is the one fact a
+     * listener cannot recover from after the tap.
+     */
+    fun shuffleDescription(albumLabel: String): String = if (isLoaded) {
+        "Shuffle " + albumLabel + " again. This starts the album over in a new order"
+    } else {
+        "Shuffle " + albumLabel
+    }
 }
 
 /**

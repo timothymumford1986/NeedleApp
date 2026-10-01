@@ -50,7 +50,8 @@ internal class FakePlaylistRepository : PlaylistRepository {
     var deleteOutcome: Outcome<Unit>? = null
     var removeOutcome: Outcome<Unit>? = null
 
-    override fun observePlaylists(): Flow<List<Playlist>> = playlistsFlow
+    override fun observePlaylists(limit: Int, offset: Int): Flow<List<Playlist>> =
+        playlistsFlow.map { it.drop(offset).take(limit) }
 
     override fun observePlaylist(id: PlaylistId): Flow<Playlist?> =
         playlistsFlow.map { list -> list.firstOrNull { it.id == id } }

@@ -86,6 +86,18 @@ const val PathPlay: String = "M7 5v14l11-7z"
 /** `M7 4.5v15l12-7.5z` - the outlined play triangle on an album grid cell. */
 const val PathPlayOutline: String = "M7 4.5v15l12-7.5z"
 
+/**
+ * `M6 5h4v14H6zM14 5h4v14h-4z` - the two solid bars of pause. One path, not two, so the pack's
+ * 4x14 rects keep their proportions at every size.
+ *
+ * Here rather than in a feature module because two screens draw it: the player's transport row and
+ * the album screen's primary button, which turns into a real pause once the album on screen is the
+ * one playing. A feature module cannot see another feature module, so the album screen's only
+ * alternative was a second copy of the string - and a cap or a width adjusted on one copy and not
+ * the other is a difference nothing would fail on.
+ */
+const val PathPause: String = "M6 5h4v14H6zM14 5h4v14h-4z"
+
 /** `M9 5l7 7-7 7` - the row chevron. */
 const val PathChevronRight: String = "M9 5l7 7-7 7"
 

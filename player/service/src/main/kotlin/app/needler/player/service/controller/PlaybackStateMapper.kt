@@ -96,23 +96,19 @@ public object PlaybackStateMapper {
     )
 
     /**
-     * Progress, with the local-file rule applied.
+     * Progress, clamped.
      *
-     * For a track playing from the on-device store the buffered position is the duration: the bytes are
-     * already there, and drawing a creeping buffer bar over a local file would be a lie.
+     * `MediaController.getCurrentPosition` returns `C.TIME_UNSET` - a large negative - between a
+     * `setMediaItems` and the session's first position report, so the floor is not defensive padding: a
+     * scrubber handed a negative position draws its thumb off the left of the track.
+     *
+     * This used to apply a second rule, carrying a buffered position and overriding it to the full
+     * duration for a track coming off the device. Both halves went with `bufferedPositionMs`, which no
+     * surface ever drew - [PlaybackProgress] says why - while `SourcePlan.LocalFile` and
+     * `NeedlerAudioDataSource.isPlayingFromLocalFile` still describe the rule for whoever draws the bar.
      */
-    public fun toProgress(
-        positionMs: Long,
-        bufferedPositionMs: Long,
-        durationMs: Long?,
-        playingFromLocalFile: Boolean,
-    ): PlaybackProgress = PlaybackProgress(
-        positionMs = positionMs.coerceAtLeast(0L),
-        bufferedPositionMs = when {
-            playingFromLocalFile && durationMs != null && durationMs > 0L -> durationMs
-            else -> maxOf(bufferedPositionMs, positionMs).coerceAtLeast(0L)
-        },
-    )
+    public fun toProgress(positionMs: Long): PlaybackProgress =
+        PlaybackProgress(positionMs = positionMs.coerceAtLeast(0L))
 
     /** Domain repeat mode to `Player.REPEAT_MODE_*`. */
     public fun toPlayerRepeatMode(mode: RepeatMode): Int = when (mode) {

@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerIconButton
+import app.needler.core.design.theme.NeedlerColors
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.playback.RepeatMode
 
@@ -108,11 +110,7 @@ fun TransportRow(
             visualSize = size.sideButton,
         ) {
             PlayerShuffleIcon(
-                tint = when {
-                    !enabled -> colors.textMuted
-                    shuffleEnabled -> colors.accent
-                    else -> colors.textSecondary
-                },
+                tint = transportModeTint(colors, enabled = enabled, active = shuffleEnabled),
                 size = size.sideIcon,
             )
         }
@@ -163,16 +161,39 @@ fun TransportRow(
             visualSize = size.sideButton,
         ) {
             PlayerRepeatIcon(
-                tint = when {
-                    !enabled -> colors.textMuted
-                    repeatMode != RepeatMode.OFF -> colors.accent
-                    else -> colors.textSecondary
-                },
+                tint = transportModeTint(
+                    colors,
+                    enabled = enabled,
+                    active = repeatMode != RepeatMode.OFF,
+                ),
                 size = size.sideIcon,
                 one = repeatMode == RepeatMode.ONE,
             )
         }
     }
+}
+
+/**
+ * The tint of a mode button - shuffle or repeat - in each of its three states.
+ *
+ * Pulled out of [TransportRow] and given no `@Composable` so the three states can be asserted as three
+ * distinct colours. The device audit found shuffle and repeat "markedly dimmer than the adjacent skip
+ * icons" and hard to read at all, because off and unavailable were drawn in the same
+ * [app.needler.core.design.theme.NeedlerColors.textMuted]: a live control that looked inoperable.
+ * REQUIREMENTS.md keeps `#6f7a68` as drawn *for what the pack uses it for* - "placeholders, timecodes,
+ * disabled text, inactive nav items" - and an off-but-usable shuffle is none of those, so off is
+ * `textSecondary` and muted is kept for [enabled] false. No new token.
+ *
+ * @param active shuffle on, or any repeat mode other than off.
+ */
+internal fun transportModeTint(
+    colors: NeedlerColors,
+    enabled: Boolean,
+    active: Boolean,
+): Color = when {
+    !enabled -> colors.textMuted
+    active -> colors.accent
+    else -> colors.textSecondary
 }
 
 /**

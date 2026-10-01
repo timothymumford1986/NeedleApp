@@ -2,8 +2,7 @@ package app.needler.core.data.security
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
+import app.needler.core.domain.diagnostics.DiagnosticsSink
 import app.needler.core.network.CredentialProvider
 import app.needler.core.network.ProxyCredentialStore
 import app.needler.core.network.ProxyCredentials
@@ -11,9 +10,6 @@ import app.needler.core.network.ServerUrl
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.File
-import java.io.IOException
-import java.security.GeneralSecurityException
 
 /**
  * The only place Needler keeps a secret: `EncryptedSharedPreferences` under a Keystore master key.
@@ -28,10 +24,13 @@ import java.security.GeneralSecurityException
  *
  *  * Both secrets live in `EncryptedSharedPreferences` under a Keystore master key. The master key
  *    never leaves the hardware-backed keystore, so the file on disk is useless without the device.
- *  * **Never written to Room, logs, analytics or crash reports.** Nothing in this class logs, and
- *    nothing returns a value that reads as a credential in a stack trace: [toString] is overridden
- *    to say nothing at all, because the default data-class-ish rendering of a holder object is
- *    exactly how a token ends up in a bug report.
+ *  * **Never written to Room, logs, analytics or crash reports.** Nothing in this class logs a
+ *    value, and nothing returns a value that reads as a credential in a stack trace: [toString] is
+ *    overridden to say nothing at all, because the default data-class-ish rendering of a holder
+ *    object is exactly how a token ends up in a bug report. The one thing this package does log is
+ *    the *failure to open the file* - see `CredentialStoreUnlock.kt` and
+ *    `credentialStoreDiagnostics` for why that is required rather than merely allowed, and why it
+ *    carries no secret.
  *  * `android:allowBackup="false"` in the `:app` manifest keeps the file off cloud backups. That
  *    manifest belongs to another module; if the flag is ever flipped on, this file must be excluded
  *    explicitly, because a Keystore-encrypted blob restored onto a different device is not just
@@ -50,10 +49,44 @@ import java.security.GeneralSecurityException
  * The app-password secret is returned by the server exactly once and is never re-fetchable, so a
  * failed write must abort the flow and revoke it (Authentication point 3). `apply()` cannot report
  * failure; `commit()` can, and every setter returns whether the value actually reached the disk.
+ *
+ * ## What happens when the file will not open
+ *
+ * [state] says. The store is usable in every case - a launch that cannot read its secrets must not
+ * be a launch that crashes - and the three outcomes are not interchangeable:
+ * [CredentialStoreState.Locked] means the secrets are intact on disk and this launch could not read
+ * them, and **nothing is deleted**; [CredentialStoreState.Rebuilt] means the Keystore key is
+ * provably gone and the file was discarded with it. The sequence that decides between them is
+ * [unlock], and the reason it is the shape it is is written down there.
  */
 public class SecureCredentialStore private constructor(
-    private val preferences: SharedPreferences,
+    initialPreferences: SharedPreferences,
+    private val files: CredentialStoreFiles?,
+    private val serverMirror: SharedPreferences?,
+    private val diagnostics: DiagnosticsSink,
+    initialState: CredentialStoreState,
 ) : CredentialProvider, ProxyCredentialStore {
+
+    /**
+     * Volatile and a `var`, because a [CredentialStoreState.Locked] store heals itself on the first
+     * write and swaps the real file in behind the interceptors already reading through it.
+     */
+    @Volatile
+    private var preferences: SharedPreferences = initialPreferences
+
+    @Volatile
+    private var storeState: CredentialStoreState = initialState
+
+    /**
+     * How this store came to be holding what it is holding.
+     *
+     * Read by `DefaultSessionRepository` to decide the session state the app starts in: a store
+     * whose saved session is unavailable produces `ReonboardingRequired` with
+     * `ReonboardingReason.CREDENTIALS_UNREADABLE` rather than the blank first-run form, which is
+     * REQUIREMENTS.md "Expiry, and why playback survives it" applied to the one credential failure
+     * that is nobody's fault - a user who sees onboarding assumes they were never signed in.
+     */
+    public val state: CredentialStoreState get() = storeState
 
     // In-memory cache. Volatile: interceptors read these from OkHttp's dispatcher threads while the
     // onboarding flow writes them from a coroutine.
@@ -77,8 +110,8 @@ public class SecureCredentialStore private constructor(
      * a basic-auth pair, an API gateway key.
      *
      * Every value is a credential and lives here for the same reason the other two do: the file is
-     * encrypted under a Keystore master key, nothing in this class logs, and nothing returns a
-     * value that would render in a stack trace.
+     * encrypted under a Keystore master key, nothing in this class logs a value, and nothing returns
+     * a value that would render in a stack trace.
      */
     @Volatile
     private var cachedProxyCredentials: ProxyCredentials = ProxyCredentials.None
@@ -108,7 +141,18 @@ public class SecureCredentialStore private constructor(
     public val appPasswordRepairNeeded: StateFlow<Boolean> = appPasswordRepairNeededState.asStateFlow()
 
     init {
-        cachedServerUrl = preferences.getString(KEY_SERVER_URL, null)
+        // The server address falls back to the unencrypted mirror, which is the whole reason the
+        // mirror exists: see `saveServerUrl`. Every other field has no fallback and must not have
+        // one - they are the secrets.
+        val encryptedServerUrl: String? = preferences.getString(KEY_SERVER_URL, null)
+        cachedServerUrl = encryptedServerUrl ?: serverMirror?.getString(KEY_SERVER_URL, null)
+        // Backfilled on a successful open, so an install that was signed in before the mirror
+        // existed gains one without waiting for the user to re-enter an address. Without this, the
+        // first launch after upgrading is the one launch where a keystore failure would still cost
+        // the address - which is exactly the launch an upgrade is most likely to break.
+        if (encryptedServerUrl != null && serverMirror?.getString(KEY_SERVER_URL, null) == null) {
+            runCatching { serverMirror?.edit()?.putString(KEY_SERVER_URL, encryptedServerUrl)?.apply() }
+        }
         cachedBearer = preferences.getString(KEY_COMPANION_BEARER, null)
         cachedAppPassword = preferences.getString(KEY_APP_PASSWORD, null)
         cachedFingerprint = preferences.getString(KEY_CERT_FINGERPRINT, null)
@@ -205,6 +249,11 @@ public class SecureCredentialStore private constructor(
      *
      * A missing server is not this state - that is an app that has never been set up, which the
      * Connect screen owns.
+     *
+     * Also true of a store whose file would not open, because a secret that cannot be read is as
+     * unusable as one that has been revoked. The two are **not** the same thing to the user, and
+     * [state] is what separates them: the secrets may still be on the disk, so nothing is deleted
+     * and the message says the saved session could not be unlocked rather than that it is gone.
      */
     public fun isReonboardingRequired(): Boolean =
         parsedServerUrl != null && cachedAppPassword == null && cachedBearer == null
@@ -214,9 +263,33 @@ public class SecureCredentialStore private constructor(
     /**
      * Saves the normalised server address. Stored as [ServerUrl.baseUrl], which is also the
      * identity string `sync_state.server_identity` holds, so the two comparisons cannot disagree.
+     *
+     * ## Why it is written twice
+     *
+     * Once encrypted with the secrets, and once to an ordinary unencrypted preferences file. **The
+     * server address is not a secret.** It is the one thing in this store that is not, and keeping
+     * it only inside the encrypted file meant that a Keystore failure cost the user their address
+     * and their username as well as their credentials - so the app they re-onboarded into was
+     * indistinguishable from a fresh install, which is precisely the confusion that made the
+     * logged-out state ambiguous in the first place. The mirror survives a key the secrets cannot,
+     * so the Connect screen can say "this is your server, sign in again" instead of showing an
+     * empty form.
+     *
+     * It is written unconditionally, before the encrypted commit, because a [CredentialStoreState]
+     * of `Locked` is exactly the case where the encrypted write is the one that fails and the
+     * address is the one thing still worth keeping. `apply()` rather than `commit()`: the caller is
+     * told whether the *credential* store took the value, which is the answer that matters, and
+     * blocking onboarding on the mirror reaching the disk would be paying latency for a hint.
+     *
+     * The rejected alternative was a second Keystore-encrypted file for the non-secret. It buys
+     * nothing - the threat model for a plain server address in app-private storage that
+     * `android:allowBackup="false"` keeps on the device is the same as for the Room mirror next to
+     * it, which already holds every album title the user owns - and it would fail for the same
+     * reason the first file did.
      */
     public fun saveServerUrl(serverUrl: ServerUrl): Boolean {
         val rendered: String = serverUrl.baseUrl
+        runCatching { serverMirror?.edit()?.putString(KEY_SERVER_URL, rendered)?.apply() }
         val committed: Boolean = commit { it.putString(KEY_SERVER_URL, rendered) }
         if (committed) {
             cachedServerUrl = rendered
@@ -331,8 +404,13 @@ public class SecureCredentialStore private constructor(
      *
      * The audio cache and the mirror are dropped separately, by
      * `NeedlerDatabase.clearForServerChange`.
+     *
+     * The unencrypted server mirror goes too. It exists so that a *failure* cannot cost the user
+     * their address; a sign-out is not a failure, and leaving the last server behind after one
+     * would be a stale address pre-filled on a form the user reached deliberately.
      */
     public fun clear(): Boolean {
+        runCatching { serverMirror?.edit()?.clear()?.apply() }
         val committed: Boolean = commit { it.clear() }
         if (committed) {
             cachedServerUrl = null
@@ -348,9 +426,11 @@ public class SecureCredentialStore private constructor(
     }
 
     /** Says nothing. A credential holder that renders its contents is a credential in a log file. */
-    override fun toString(): String = "SecureCredentialStore(provisioned=" + isFullyProvisioned() + ")"
+    override fun toString(): String =
+        "SecureCredentialStore(provisioned=" + isFullyProvisioned() + ", state=" + storeState + ")"
 
     private fun commit(block: (SharedPreferences.Editor) -> Unit): Boolean {
+        if (!healIfLocked()) return false
         val editor: SharedPreferences.Editor = preferences.edit()
         block(editor)
         return try {
@@ -360,6 +440,35 @@ public class SecureCredentialStore private constructor(
             // that failed to encrypt. The boolean is the signal the caller must act on.
             false
         }
+    }
+
+    /**
+     * Makes a [CredentialStoreState.Locked] store writable, if it can be made writable at all.
+     *
+     * ## Why a write is the moment the store may destroy itself
+     *
+     * A locked store is holding ciphertext it cannot read. Nothing is deleted while that is all
+     * that is true, because the next launch may well read it. But a *write* means the user has
+     * typed a replacement credential: at that instant the unreadable blob is a blob they have
+     * asked to replace, so discarding it costs them nothing they have not already decided to give
+     * up - and refusing to discard it would leave the Connect screen as a dead end where sign-in
+     * appears to succeed and nothing is ever persisted.
+     *
+     * So this is the one path that passes `mayRebuild = true` to [unlock], and the ordering inside
+     * [unlock] still gives the data every chance first: the file is opened twice, and only if both
+     * attempts fail is anything thrown away. A store that opens on the retry keeps every secret it
+     * had, and the write lands on top of them.
+     *
+     * Returns false only when there is no file behind this store at all, which is the unit-test
+     * construction. A production store always has one and always ends up writable.
+     */
+    private fun healIfLocked(): Boolean {
+        if (storeState.canPersist) return true
+        val target: CredentialStoreFiles = files ?: return false
+        val healed: UnlockResult = unlock(files = target, diagnostics = diagnostics, mayRebuild = true)
+        preferences = healed.preferences
+        storeState = healed.state
+        return healed.state.canPersist
     }
 
     public companion object {
@@ -372,6 +481,12 @@ public class SecureCredentialStore private constructor(
 
         /** The encrypted file's name. Frozen: changing it orphans every existing credential. */
         public const val FILE_NAME: String = "needler_credentials"
+
+        /**
+         * The unencrypted file holding the one value in this store that is not a secret: the server
+         * address. Frozen for the same reason as [FILE_NAME].
+         */
+        public const val SERVER_FILE_NAME: String = "needler_server"
 
         private const val KEY_SERVER_URL: String = "server_url"
         private const val KEY_COMPANION_BEARER: String = "companion_bearer"
@@ -387,57 +502,75 @@ public class SecureCredentialStore private constructor(
          *
          * A Keystore-backed key can become unusable: a device migration, a restore onto different
          * hardware, or the user changing their lock screen in a way that invalidates keys. The
-         * symptom is a [GeneralSecurityException] or [IOException] from
-         * `EncryptedSharedPreferences.create`. When that happens the ciphertext on disk is
-         * permanently undecryptable, so the only recovery is to delete the file and start again -
-         * which forces re-onboarding. This is one of the few paths that does: **a revoked
-         * app-password is not**, because with the bearer still readable the app mints a replacement
-         * and says nothing. Here both secrets are unreadable at once, so there is nothing left to
-         * repair with. Failing to handle it would instead crash the app on every launch with no way
-         * out but reinstalling.
+         * symptom is a `GeneralSecurityException` or an `IOException` from
+         * `EncryptedSharedPreferences.create`, and the hard part is that the same two exceptions
+         * also come out of a failure that means nothing at all - the factory is known to fail
+         * transiently under concurrent access and around process death.
+         *
+         * The previous implementation did not distinguish them. It deleted the credential file and
+         * its backup on either, logged nothing, and reopened; a `force-stop` or an ordinary
+         * low-memory process kill therefore destroyed a working session, and the user was returned
+         * to a blank first-run form having lost their server address and username with their
+         * secrets. Reproduced twice on a device on 2026-10-01.
+         *
+         * [unlock] is the replacement and carries the reasoning. In short: every failure is logged
+         * and retried once; a transient failure deletes nothing and leaves the store
+         * [CredentialStoreState.Locked] with the secrets intact on disk; only a
+         * `KeyPermanentlyInvalidatedException`, or a write the user has already asked for, discards
+         * anything. The saved server address survives all three, in the unencrypted mirror
+         * `saveServerUrl` keeps.
          *
          * Deleting the file does **not** revoke anything server-side. The companion session and the
          * app-password remain listed on the server until the user revokes them or they expire; the
          * onboarding flow replaces the app-password named `Needler` rather than adding a second one,
          * and the cap is 25 per user.
          */
-        public fun create(context: Context): SecureCredentialStore =
-            SecureCredentialStore(openPreferences(context.applicationContext))
-
-        /** For tests: wrap any [SharedPreferences], including an in-memory fake. */
-        public fun createForTesting(preferences: SharedPreferences): SecureCredentialStore =
-            SecureCredentialStore(preferences)
-
-        private fun openPreferences(context: Context): SharedPreferences =
-            try {
-                encryptedPreferences(context)
-            } catch (error: GeneralSecurityException) {
-                deleteCorruptStore(context)
-                encryptedPreferences(context)
-            } catch (error: IOException) {
-                deleteCorruptStore(context)
-                encryptedPreferences(context)
-            }
-
-        private fun encryptedPreferences(context: Context): SharedPreferences {
-            val masterKey: MasterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            return EncryptedSharedPreferences.create(
-                context,
-                FILE_NAME,
-                masterKey,
-                // Deterministic encryption for keys, so a key can still be looked up; randomised
-                // AES-GCM for the values, which are the secrets.
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        public fun create(context: Context): SecureCredentialStore {
+            val application: Context = context.applicationContext
+            val files = EncryptedCredentialFile(application)
+            val diagnostics: DiagnosticsSink = credentialStoreDiagnostics()
+            val opened: UnlockResult = unlock(files = files, diagnostics = diagnostics)
+            return SecureCredentialStore(
+                initialPreferences = opened.preferences,
+                files = files,
+                serverMirror = application.getSharedPreferences(
+                    SERVER_FILE_NAME,
+                    Context.MODE_PRIVATE,
+                ),
+                diagnostics = diagnostics,
+                initialState = opened.state,
             )
         }
 
-        private fun deleteCorruptStore(context: Context) {
-            val prefsDir = File(context.applicationInfo.dataDir, "shared_prefs")
-            File(prefsDir, FILE_NAME + ".xml").delete()
-            File(prefsDir, FILE_NAME + ".xml.bak").delete()
-        }
+        /** For tests: wrap any [SharedPreferences], including an in-memory fake. */
+        public fun createForTesting(preferences: SharedPreferences): SecureCredentialStore =
+            SecureCredentialStore(
+                initialPreferences = preferences,
+                files = null,
+                serverMirror = null,
+                diagnostics = DiagnosticsSink.None,
+                initialState = CredentialStoreState.Opened,
+            )
+
+        /**
+         * For tests of the unlock and heal paths: a store over a stand-in file, in a chosen state.
+         *
+         * `internal` because [CredentialStoreFiles] is, which is the point - the decision this
+         * exercises is the one that destroyed credentials on a device, and it has to be assertable
+         * without a device.
+         */
+        internal fun createForTesting(
+            preferences: SharedPreferences,
+            files: CredentialStoreFiles?,
+            serverMirror: SharedPreferences?,
+            state: CredentialStoreState,
+            diagnostics: DiagnosticsSink = DiagnosticsSink.None,
+        ): SecureCredentialStore = SecureCredentialStore(
+            initialPreferences = preferences,
+            files = files,
+            serverMirror = serverMirror,
+            diagnostics = diagnostics,
+            initialState = state,
+        )
     }
 }

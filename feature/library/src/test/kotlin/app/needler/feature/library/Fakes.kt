@@ -55,6 +55,7 @@ import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.core.domain.playback.PlaybackState
 import app.needler.core.domain.playback.RepeatMode
+import app.needler.core.domain.repository.DownloadedAlbumOrder
 import app.needler.core.domain.repository.FavouriteRepository
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.PinRepository
@@ -121,7 +122,8 @@ internal class FakeLibraryRepository(
      */
     val refreshedDiscographies: MutableList<ArtistMbid> = mutableListOf()
 
-    override fun observeArtists(): Flow<List<Artist>> = artistList
+    override fun observeArtists(limit: Int, offset: Int): Flow<List<Artist>> =
+        artistList.map { it.drop(offset).take(limit) }
 
     override fun observeArtist(mbid: ArtistMbid): Flow<Artist?> =
         artistList.map { list -> list.firstOrNull { it.mbid == mbid } }
@@ -148,7 +150,8 @@ internal class FakeLibraryRepository(
         return songList
     }
 
-    override fun observeGenres(): Flow<List<Genre>> = error("not used by :feature:library")
+    override fun observeGenres(limit: Int, offset: Int): Flow<List<Genre>> =
+        error("not used by :feature:library")
 
     override fun observeTracksByGenre(genre: String, limit: Int, offset: Int): Flow<List<Track>> =
         error("not used by :feature:library")
@@ -408,7 +411,11 @@ internal class FakePinRepository : PinRepository {
 
     override fun observeStorageUsage(): Flow<StorageUsage> = usage
 
-    override fun observeDownloadedAlbums(): Flow<List<DownloadedAlbum>> =
+    override fun observeDownloadedAlbums(
+        order: DownloadedAlbumOrder,
+        limit: Int,
+        offset: Int,
+    ): Flow<List<DownloadedAlbum>> =
         error("not used by :feature:library")
 
     override fun observeStoragePreferences(): Flow<StoragePreferences> = preferences
@@ -463,6 +470,15 @@ internal class FakePlaybackController : PlaybackController {
 
     val playbackState = MutableStateFlow(PlaybackState.Idle)
 
+    /**
+     * The live crate, scriptable.
+     *
+     * A field rather than a fresh `MutableStateFlow` per call, because the album screen's transport
+     * is decided by what the crate is **made of** and a test has to be able to load one. The
+     * default is still [PlayQueue.Empty], so every existing caller sees what it saw before.
+     */
+    val queue = MutableStateFlow(PlayQueue.Empty)
+
     data class PlayAlbumCall(
         val mbid: ReleaseGroupMbid,
         val startIndex: Int,
@@ -472,19 +488,36 @@ internal class FakePlaybackController : PlaybackController {
     val playAlbumCalls: MutableList<PlayAlbumCall> = mutableListOf()
     val playTracksCalls: MutableList<List<Track>> = mutableListOf()
 
+    /**
+     * Every transport command this controller was given, in order, named as the interface names it:
+     * `play`, `pause`, `playPause`, `playAlbum`.
+     *
+     * A log rather than a set of booleans because the assertion that matters is a negative one, and
+     * it is about which command was chosen: resuming must reach `play` and **not** `playAlbum`,
+     * which is what replaces the crate and seeks to zero. "Did not call" is only assertable if the
+     * calls are recorded.
+     */
+    val transportCommands: MutableList<String> = mutableListOf()
+
     override fun observeState(): Flow<PlaybackState> = playbackState
 
     override fun observeProgress(): Flow<PlaybackProgress> = MutableStateFlow(PlaybackProgress.Zero)
 
-    override fun observeQueue(): Flow<PlayQueue> = MutableStateFlow(PlayQueue.Empty)
+    override fun observeQueue(): Flow<PlayQueue> = queue
 
     override suspend fun currentState(): PlaybackState = playbackState.value
 
-    override suspend fun play() = Unit
+    override suspend fun play() {
+        transportCommands += "play"
+    }
 
-    override suspend fun pause() = Unit
+    override suspend fun pause() {
+        transportCommands += "pause"
+    }
 
-    override suspend fun playPause() = Unit
+    override suspend fun playPause() {
+        transportCommands += "playPause"
+    }
 
     override suspend fun seekTo(positionMs: Long) = Unit
 
@@ -496,6 +529,7 @@ internal class FakePlaybackController : PlaybackController {
 
     override suspend fun playAlbum(mbid: ReleaseGroupMbid, startIndex: Int, shuffle: Boolean) {
         playAlbumCalls += PlayAlbumCall(mbid, startIndex, shuffle)
+        transportCommands += "playAlbum"
     }
 
     override suspend fun playTracks(tracks: List<Track>, startIndex: Int) {

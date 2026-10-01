@@ -13,6 +13,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.needler.core.data.settings.NeedlerSettingsStore
 import app.needler.core.data.settings.NotificationSettings
+import app.needler.core.domain.model.ReonboardingReason
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EvictionReport
@@ -490,7 +491,29 @@ class SettingsViewModel @Inject constructor(
             "The server has the Subsonic protocol switched off, so there is no library to browse. " +
                 "An administrator has to enable it."
 
-        is SessionState.ReonboardingRequired -> "Signed out. Connect to a server to start again."
+        // Branching on the reason, because one of these four is not a sign-out
+        // and saying it is would be a lie told to the person least able to check
+        // it. CREDENTIALS_UNREADABLE means the secrets are still on disk and
+        // could not be unlocked - see SecureCredentialStore, which no longer
+        // deletes anything it cannot prove is unrecoverable. Telling that user
+        // they were "signed out" invites them to wonder what they did, when the
+        // honest answer is that the device could not open its own keystore.
+        is SessionState.ReonboardingRequired -> when (sessionState.reason) {
+            ReonboardingReason.CREDENTIALS_UNREADABLE ->
+                "This device could not unlock your saved sign-in. Your library, downloads and " +
+                    "server address are untouched - signing in again restores the rest."
+
+            ReonboardingReason.BOTH_CREDENTIALS_DEAD ->
+                "Both of this device's credentials were rejected by the server, so there is " +
+                    "nothing left to renew them with. Sign in again to reconnect."
+
+            ReonboardingReason.SERVER_IDENTITY_CHANGED ->
+                "The server's identity changed, so the library mirror and downloads were " +
+                    "cleared. Sign in again to rebuild them."
+
+            ReonboardingReason.SIGNED_OUT ->
+                "Signed out. Connect to a server to start again."
+        }
 
         // Silent by design - see this function's documentation.
         is SessionState.RepairingAppPassword -> null

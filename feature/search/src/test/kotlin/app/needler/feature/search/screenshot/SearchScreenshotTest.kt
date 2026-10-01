@@ -183,6 +183,9 @@ class SearchScreenshotTest {
             "search-pull-sheet",
             NeedlerDevice.Phone,
             RESULTS.copy(pullSheetAlbum = SampleSearch.buzz, monitorArtist = true),
+            // The sheet is what this image is about, and a field focused behind
+            // it would draw an accent border through the scrim.
+            autoFocus = false,
         )
     }
 
@@ -252,6 +255,7 @@ class SearchScreenshotTest {
         device: NeedlerDevice,
         state: SearchUiState,
         fontScale: Float = 1f,
+        autoFocus: Boolean = true,
     ) {
         val file = captureNeedlerScreen(name, device, fontScale) {
             Screen(
@@ -260,16 +264,22 @@ class SearchScreenshotTest {
                     NeedlerDevice.Phone -> WindowWidthSizeClass.Compact
                     NeedlerDevice.Tablet -> WindowWidthSizeClass.Expanded
                 },
+                autoFocus = autoFocus,
             )
         }
         assertRendered(file, device)
     }
 
     @Composable
-    private fun Screen(state: SearchUiState, widthSizeClass: WindowWidthSizeClass) {
+    private fun Screen(
+        state: SearchUiState,
+        widthSizeClass: WindowWidthSizeClass,
+        autoFocus: Boolean = true,
+    ) {
         SearchScreen(
             state = state,
             widthSizeClass = widthSizeClass,
+            autoFocus = autoFocus,
             onQueryChange = {},
             onClearQuery = {},
             onSubmitQuery = {},

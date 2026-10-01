@@ -42,4 +42,13 @@ dependencies {
     // arrives transitively through :core:design's `api`, but the test source
     // set names what it uses.
     testImplementation(libs.compose.material3)
+
+    // On the JVM, beside Robolectric, so the sidebar's height arithmetic can be
+    // checked against a real measure pass rather than only as arithmetic.
+    // PlayerSidebarMeasureTest reads the laid-out bounds of the transport, the
+    // output chip and the scrubber at three panel heights: that is the only
+    // assertion that actually catches the landscape P0, where every control was
+    // measured at zero height. A Roborazzi render cannot - a PNG of the right
+    // size is still the right size with nothing in it.
+    testImplementation(libs.compose.ui.test.junit4)
 }

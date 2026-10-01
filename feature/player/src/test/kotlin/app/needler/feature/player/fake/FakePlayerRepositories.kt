@@ -104,7 +104,7 @@ class FakeLibraryRepository(
         albumsByMbid.value = albumsByMbid.value + (album.releaseGroupMbid.value to album)
     }
 
-    override fun observeArtists(): Flow<List<Artist>> = notUsed()
+    override fun observeArtists(limit: Int, offset: Int): Flow<List<Artist>> = notUsed()
 
     override fun observeArtist(mbid: ArtistMbid): Flow<Artist?> = notUsed()
 
@@ -120,7 +120,7 @@ class FakeLibraryRepository(
     override fun observeTracks(kind: TrackListKind, limit: Int, offset: Int): Flow<List<Track>> =
         notUsed()
 
-    override fun observeGenres(): Flow<List<Genre>> = notUsed()
+    override fun observeGenres(limit: Int, offset: Int): Flow<List<Genre>> = notUsed()
 
     override fun observeTracksByGenre(genre: String, limit: Int, offset: Int): Flow<List<Track>> =
         notUsed()

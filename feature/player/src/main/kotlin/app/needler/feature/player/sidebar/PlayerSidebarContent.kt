@@ -350,6 +350,8 @@ private fun SidebarCrate(
                         null
                     },
                     onRemove = { onRemove(item.id) },
+                    subtitle = crate.rowSubtitle(item),
+                    showArtwork = crate.showsRowArtwork,
                 )
             }
         }

@@ -24,9 +24,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -367,7 +370,28 @@ private fun TabletConnect(
     }
 }
 
-/** The three fields, identical at both widths. */
+/**
+ * The three fields, identical at both widths - which is why the cursor is placed here rather than in
+ * either layout branch.
+ *
+ * ## Autofocus, and the one case it must not fire in
+ *
+ * The screen used to open with no field focused (`mInputShown=false`), so a user who had just been
+ * signed out had to tap before they could type. The cursor therefore goes into SERVER on arrival,
+ * once: [LaunchedEffect] keyed on `Unit` reads the state as it was on the first composition and
+ * never asks again, because a later request would steal focus from whichever field the user had
+ * moved to by then.
+ *
+ * It is skipped while an attempt is in flight, and skipped when there is a failure notice on
+ * screen. The notice is an assertive live region, and taking focus cuts its announcement off
+ * mid-sentence - which would matter most in exactly the case that most often brings someone back to
+ * this form, `ConnectFailure.SavedSessionLocked`: a user who cannot hear why their saved session was
+ * not restored is left assuming they were never signed in, which is the defect that message exists
+ * to remove. Saving a tap is not worth re-introducing it through the focus path.
+ *
+ * `runCatching`, because `requestFocus` throws if the node is not attached - a configuration change
+ * landing between the composition and the effect - and a lost cursor is not worth a crash.
+ */
 @Composable
 private fun ConnectForm(
     state: ConnectUiState,
@@ -377,6 +401,12 @@ private fun ConnectForm(
     onConnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val serverField: FocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (state.connecting || state.failure != null) return@LaunchedEffect
+        runCatching { serverField.requestFocus() }
+    }
+
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step9),
@@ -393,6 +423,7 @@ private fun ConnectForm(
                 imeAction = ImeAction.Next,
                 autoCorrectEnabled = false,
             ),
+            focusRequester = serverField,
         )
         NeedlerLabelledTextField(
             label = "USERNAME",

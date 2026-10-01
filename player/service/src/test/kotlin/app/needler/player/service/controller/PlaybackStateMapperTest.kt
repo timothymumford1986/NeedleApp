@@ -96,31 +96,38 @@ class PlaybackStateMapperTest {
         assertTrue(state.hasCurrentItem)
     }
 
-    /** Drawing a creeping buffer bar over a file that is already on disk would be a lie. */
     @Test
-    fun `a local file is fully buffered by definition`() {
-        val progress = PlaybackStateMapper.toProgress(
-            positionMs = 10_000L,
-            bufferedPositionMs = 12_000L,
-            durationMs = 240_000L,
-            playingFromLocalFile = true,
-        )
+    fun `progress carries the position and the fraction it is of the track`() {
+        val progress = PlaybackStateMapper.toProgress(positionMs = 10_000L)
 
-        assertEquals(240_000L, progress.bufferedPositionMs)
         assertEquals(10_000L, progress.positionMs)
         assertEquals(0.0416f, progress.fractionOf(240_000L)!!, 0.001f)
     }
 
+    /**
+     * `C.TIME_UNSET` is `Long.MIN_VALUE + 1`, and the session returns it between a `setMediaItems` and
+     * its first position report. A scrubber handed that draws its thumb off the left of the track.
+     */
     @Test
-    fun `a stream reports what it has actually buffered`() {
-        val progress = PlaybackStateMapper.toProgress(
-            positionMs = 10_000L,
-            bufferedPositionMs = 12_000L,
-            durationMs = 240_000L,
-            playingFromLocalFile = false,
-        )
+    fun `an unset position is floored rather than passed on`() {
+        assertEquals(0L, PlaybackStateMapper.toProgress(positionMs = Long.MIN_VALUE + 1).positionMs)
+        assertEquals(0L, PlaybackStateMapper.toProgress(positionMs = -1L).positionMs)
+    }
 
-        assertEquals(12_000L, progress.bufferedPositionMs)
+    /**
+     * The field this replaced.
+     *
+     * `bufferedPositionMs` was documented for a lighter bar behind the scrubber, drawn by nothing, and
+     * it was the one value on this flow that changed while a *paused* player sat pre-buffering - so
+     * `distinctUntilChanged` on `observeProgress()` could not suppress it. Two progress readings of the
+     * same paused position must now be equal, which is what makes the paused case quiet.
+     */
+    @Test
+    fun `two readings of a still position are equal`() {
+        assertEquals(
+            PlaybackStateMapper.toProgress(positionMs = 10_000L),
+            PlaybackStateMapper.toProgress(positionMs = 10_000L),
+        )
     }
 
     @Test

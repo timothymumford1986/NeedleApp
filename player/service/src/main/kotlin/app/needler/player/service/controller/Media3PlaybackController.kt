@@ -383,15 +383,13 @@ public class Media3PlaybackController @Inject constructor(
         )
     }
 
-    private fun readProgress(session: MediaController): PlaybackProgress = PlaybackStateMapper.toProgress(
-        positionMs = session.currentPosition,
-        bufferedPositionMs = session.bufferedPosition,
-        durationMs = session.duration.takeIf { it > 0L },
-        // The session does not say which of the two a track came from, and asking the cache index on every
-        // tick would put a Room query on the scrubber's path. Reported as a stream; the local-file case is a
-        // refinement the controller cannot see from here without a session extra to carry it.
-        playingFromLocalFile = false,
-    )
+    // The buffered position is deliberately not read. `MediaController.bufferedPosition` creeps while a
+    // paused stream pre-buffers, which is a value that genuinely changes while nothing a listener can see
+    // does - so shipping it defeated `distinctUntilChanged` on observeProgress() and woke the player
+    // screen, the widgets and Wear once a second to redraw an identical scrubber. Nothing draws a buffered
+    // bar; PlaybackProgress says what adding one back would need first.
+    private fun readProgress(session: MediaController): PlaybackProgress =
+        PlaybackStateMapper.toProgress(positionMs = session.currentPosition)
 
     private suspend fun readQueue(session: MediaController): PlayQueue {
         val count: Int = session.mediaItemCount

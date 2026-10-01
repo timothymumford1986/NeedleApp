@@ -37,11 +37,18 @@ import java.io.File
  *
  * ## What it deliberately does not cover
  *
- * The recovery path in `openPreferences` - delete the file and start again when the key has become
- * unusable - cannot be provoked honestly from a test. It needs a Keystore entry that exists but no
- * longer decrypts, which is produced by a device migration or a lock-screen change, not by anything
- * a test can ask for. Corrupting the XML by hand exercises a different branch (the parser's) and
- * would read as coverage it is not.
+ * The recovery sequence in `unlock` - retry, then report, and discard only a key that is provably
+ * gone - cannot be provoked honestly from here. It needs a Keystore entry that exists but no longer
+ * decrypts, which is produced by a device migration or a lock-screen change, not by anything a test
+ * can ask for. Corrupting the XML by hand exercises a different branch (the parser's) and would read
+ * as coverage it is not.
+ *
+ * That is why the sequence reaches the filesystem and the Keystore only through
+ * `CredentialStoreFiles`, and why the decision it turns on is three pure functions:
+ * `CredentialStoreUnlockTest` asserts the whole of it on the JVM against a stand-in, including the
+ * case that destroyed sessions on a real device - two transient failures in a row, which must now
+ * delete nothing. What is left here is the part that genuinely needs hardware, which is the
+ * encryption itself.
  *
  * ## Why the test names are not backticked
  *

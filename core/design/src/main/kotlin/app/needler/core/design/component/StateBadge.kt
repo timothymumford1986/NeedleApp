@@ -38,8 +38,23 @@ import app.needler.core.design.theme.tabularNumerals
  * | (pull, searching) | Searching | secondary |
  * | (pull, parked) | Needs attention on the server | secondary |
  * | (pull, complete) | Ready | positive |
+ * | (pull, failed) | Failed | secondary |
+ * | (pull, part-delivered) | Partly delivered | secondary |
+ * | (pull, cancelled) | Cancelled | secondary |
  *
  * `NotOwned` has no badge at all - it gets [NeedlerPullButton] instead.
+ *
+ * ## Why the last three exist
+ *
+ * The Pulls screen drew nothing in the trailing column of a row whose pull had
+ * ended badly, on the argument that the failure reason in the subtitle was
+ * already the label. It is not the same thing: every other row on that list
+ * names its state in the trailing column, so a reader scanning that column
+ * found a Retry pill under no heading at all, and the three end states - no
+ * source, part-delivered, cancelled - were indistinguishable without reading
+ * the prose. These three carry the state's **name**; the subtitle keeps the
+ * explanation, which is the same split [Searching] and "asking slskd" already
+ * use.
  */
 sealed interface NeedlerAlbumBadge {
     /** Owned by the server, streams on demand. Secondary colour with a check (03, 10). */
@@ -69,6 +84,21 @@ sealed interface NeedlerAlbumBadge {
 
     /** No usable source was found. Muted, and the pack gives it no icon (06). */
     data object NoSource : NeedlerAlbumBadge
+
+    /** The pull ended without the album. The reason stays in the row's subtitle. */
+    data object Failed : NeedlerAlbumBadge
+
+    /**
+     * Some tracks arrived and some did not.
+     *
+     * REQUIREMENTS.md, "Partial content is a normal state": this is not a
+     * failure to hide. The album is in the library and plays, so the badge says
+     * what is true rather than borrowing [Failed].
+     */
+    data object PartlyDelivered : NeedlerAlbumBadge
+
+    /** The pull was stopped, by this user or on the server. */
+    data object Cancelled : NeedlerAlbumBadge
 }
 
 /**
@@ -96,7 +126,12 @@ fun NeedlerStateBadge(
         NeedlerAlbumBadge.InLibrary,
         NeedlerAlbumBadge.Waiting,
         NeedlerAlbumBadge.Searching,
-        NeedlerAlbumBadge.NeedsAttention -> colors.textSecondary
+        NeedlerAlbumBadge.NeedsAttention,
+        // Not the destructive colour. `#e8908a` is reserved for data the user is
+        // about to lose; a pull that did not land has cost them nothing but time.
+        NeedlerAlbumBadge.Failed,
+        NeedlerAlbumBadge.PartlyDelivered,
+        NeedlerAlbumBadge.Cancelled -> colors.textSecondary
 
         // The pack renders this one as muted metadata rather than as a coloured badge. It uses the
         // AA-compliant muted value because "no source found" is the only explanation the user gets.
@@ -128,7 +163,15 @@ fun NeedlerStateBadge(
             NeedlerAlbumBadge.NeedsAttention ->
                 NeedlerClockIcon(tint = tint)
 
-            NeedlerAlbumBadge.NoSource -> Unit
+            // The pack gives its one end-state badge no glyph, and the three
+            // added beside it follow: nothing in the icon set says "stopped"
+            // without also saying "error", which this palette has no colour for.
+            // The label is the whole signal, and each label is a different word,
+            // so nothing here is encoded in colour alone.
+            NeedlerAlbumBadge.NoSource,
+            NeedlerAlbumBadge.Failed,
+            NeedlerAlbumBadge.PartlyDelivered,
+            NeedlerAlbumBadge.Cancelled -> Unit
         }
         Text(text = label, style = typography.metaStrong, color = tint, maxLines = 2)
         if (percent != null) {
@@ -152,6 +195,9 @@ fun NeedlerAlbumBadge.label(): String = when (this) {
     NeedlerAlbumBadge.NeedsAttention -> "Needs attention on the server"
     NeedlerAlbumBadge.Ready -> "Ready"
     NeedlerAlbumBadge.NoSource -> "no source found"
+    NeedlerAlbumBadge.Failed -> "Failed"
+    NeedlerAlbumBadge.PartlyDelivered -> "Partly delivered"
+    NeedlerAlbumBadge.Cancelled -> "Cancelled"
 }
 
 /** The same, spoken: a full phrase, with the percentage read out rather than shown as a symbol. */

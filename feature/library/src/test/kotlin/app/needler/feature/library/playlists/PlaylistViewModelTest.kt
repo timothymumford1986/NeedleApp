@@ -1,6 +1,7 @@
 package app.needler.feature.library.playlists
 
 import androidx.lifecycle.SavedStateHandle
+import app.cash.turbine.expectMostRecentItem
 import app.cash.turbine.test
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.PlaylistEdit
@@ -315,8 +316,12 @@ class PlaylistViewModelTest {
 
             model.onAddSelected()
             advanceUntilIdle()
-            var current = awaitItem()
-            while (current.notice == null) current = awaitItem()
+            // The settled state, not the first emission carrying a notice. `picker` is a combine
+            // behind a flatMapLatest, so the outer combine publishes the new notice against its
+            // cached picker one step before the null reaches it: a loop that stops at the first
+            // non-null notice reads a picker that is on its way out. Nothing is idle at that point,
+            // and after `advanceUntilIdle` everything is - so the last emission is the assertion.
+            val current = expectMostRecentItem()
             assertEquals(
                 PlaylistNotice.TracksAdded(count = 2, queued = false),
                 current.notice,

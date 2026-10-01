@@ -88,21 +88,76 @@ object PlayerFormat {
     fun crateSummary(trackCount: Int, totalDurationMs: Long): String {
         val tracks: String = plural(trackCount.toLong(), "track")
         if (totalDurationMs <= 0L) return tracks
-        val minutes: Long = ((totalDurationMs + 59_999L) / 60_000L).coerceAtLeast(1L)
-        return if (minutes >= 60L) {
-            val hours: Long = minutes / 60L
-            val rest: Long = minutes % 60L
-            val length: String =
-                if (rest == 0L) plural(hours, "hr") else plural(hours, "hr") + " " + rest + " min"
-            tracks + DOT + length
+        return tracks + DOT + minutesLabel(crateMinutes(totalDurationMs))
+    }
+
+    /**
+     * The same, spoken: `11 tracks, 51 minutes`.
+     *
+     * ## Why this does not use [spokenDuration]
+     *
+     * It did, and that made the crate disagree with itself on a device: the visible line read
+     * "11 tracks - 51 min" while TalkBack said "11 tracks, 50 minutes 22 seconds". Both were correct
+     * about 3,022,000 ms and neither was correct about the other - [crateSummary] rounds *up* to the
+     * minute, because "0 min" beside a queued track reads as an error, and [spokenDuration] truncates to
+     * the second, because it is also what [spokenSleepTimer] says and a timer with 59 seconds left must
+     * not announce a minute.
+     *
+     * So both sides now take their minute figure from [crateMinutes] and differ only in how they say it.
+     * The seconds are deliberately not spoken at all: a crate's total is a planning number - is there
+     * enough queued for the walk home - and twenty-two seconds of it is noise in a sentence a listener
+     * hears every time the heading takes focus.
+     */
+    fun spokenCrateSummary(trackCount: Int, totalDurationMs: Long): String {
+        val tracks: String = plural(trackCount.toLong(), "track")
+        if (totalDurationMs <= 0L) return tracks
+        return tracks + ", " + spokenMinutesLabel(crateMinutes(totalDurationMs))
+    }
+
+    /**
+     * The crate's length in whole minutes, rounded **up**.
+     *
+     * The one figure both [crateSummary] and [spokenCrateSummary] render, so that the line on screen and
+     * the line TalkBack speaks cannot be two measurements of the same crate. Rounded up, and floored at
+     * one, because anything at all queued is at least a minute's listening as far as this label is
+     * concerned; tracks whose length the server never reported contribute nothing, which is the rule
+     * [app.needler.core.domain.model.PlayQueue.totalDurationMs] already uses.
+     */
+    internal fun crateMinutes(totalDurationMs: Long): Long =
+        ((totalDurationMs + 59_999L) / 60_000L).coerceAtLeast(1L)
+
+    /** `51 minutes`, `1 hour`, `1 hour 20 minutes` - [minutesLabel]'s own shape, said in full. */
+    private fun spokenMinutesLabel(minutes: Long): String {
+        if (minutes < 60L) return plural(minutes, "minute")
+        val hours: Long = minutes / 60L
+        val rest: Long = minutes % 60L
+        return if (rest == 0L) {
+            plural(hours, "hour")
         } else {
-            tracks + DOT + minutes + " min"
+            plural(hours, "hour") + " " + plural(rest, "minute")
         }
     }
 
-    /** The same, spoken. */
-    fun spokenCrateSummary(trackCount: Int, totalDurationMs: Long): String =
-        plural(trackCount.toLong(), "track") + ", " + spokenDuration(totalDurationMs)
+    /**
+     * Where a track sits in the record the whole crate belongs to: `Track 4`, or `Disc 2, track 4`.
+     *
+     * Drawn instead of [artistAndAlbum] when every row of the crate is the same album, where the artist
+     * and the album are the same two words on all eleven rows and the player two hand-widths above
+     * already says both. REQUIREMENTS.md "Queue" describes the crate as a record's own running order, so
+     * the running order is what the line says in that case.
+     *
+     * It reads as well spoken as printed, which is why it is a position and not a duration: this string
+     * is also the second half of `NeedlerQueueRow`'s content description, and "Sienna, 3 colon 20" is not
+     * a sentence.
+     *
+     * @param includeDisc for a crate that spans more than one disc, where "Track 1" would otherwise
+     *   appear twice.
+     */
+    fun trackPosition(item: QueueItem?, includeDisc: Boolean = false): String {
+        val key = item?.track?.key ?: return ""
+        val track: String = "Track " + key.trackNumber
+        return if (includeDisc) "Disc " + key.discNumber + ", track " + key.trackNumber else track
+    }
 
     /**
      * The format badge beside the title: `FLAC`, `MP3 320`.

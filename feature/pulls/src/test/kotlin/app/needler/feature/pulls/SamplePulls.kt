@@ -197,6 +197,28 @@ internal object SamplePulls {
         updatedAt = renderedAt - Duration.parse("96h"),
     )
 
+    /**
+     * A pull somebody stopped.
+     *
+     * The third of the failed bucket's three outcomes, and the one that had no
+     * fixture at all — which is why the row drew "cancelled" in its subtitle and
+     * nothing in the trailing column for as long as it did. `failureReason` is
+     * left null on purpose: the server sends none when the stop came from a
+     * client, so the row has the state and nothing else to say.
+     */
+    val cancelled: Pull = Pull(
+        releaseGroupMbid = mbid("sound-ancestors"),
+        albumTitle = "Sound Ancestors",
+        artistName = "Madlib",
+        taskId = PullTaskId("dl-4575"),
+        status = PullStatus.CANCELLED,
+        searchJobId = "sj-4575",
+        candidateIndex = 0,
+        source = "slskd",
+        createdAt = renderedAt - Duration.parse("130h"),
+        updatedAt = renderedAt - Duration.parse("128h"),
+    )
+
     // ---- pulls the server could not name ------------------------------------
 
     /**
@@ -285,7 +307,7 @@ internal object SamplePulls {
         failed,
     )
 
-    /** The pack plus the three states it does not happen to draw. */
+    /** The pack plus the four states it does not happen to draw. */
     val everyState: List<Pull> = listOf(
         downloading,
         searching,
@@ -295,6 +317,7 @@ internal object SamplePulls {
         landedYesterday,
         failed,
         partial,
+        cancelled,
     )
 
     /**

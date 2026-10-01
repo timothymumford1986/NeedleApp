@@ -160,6 +160,29 @@ class PlayerScreenshotTest {
         }
     }
 
+    /**
+     * The crate when it is one record, which the pack never draws and which is how a crate is normally
+     * filled.
+     *
+     * A device audit found an album queue printing the same artist, the same album and the same thumbnail
+     * on every row. The rows carry their place in the record instead, and no thumbnail - the sleeve is
+     * already drawn at full size in the player above. `player-crate-phone.png` cannot show this: the
+     * pack's own crate is four different records, which is why it never caught it.
+     */
+    @Test
+    fun `the crate when every row is the same record`() {
+        capture("player-crate-one-record", PlayerDevice.Phone) {
+            CrateScreen(
+                state = CrateUiState(queue = PlayerFixtures.albumCrate, isPlaying = true),
+                onBack = {},
+                onClear = {},
+                onPlayItem = {},
+                onMove = { _, _ -> },
+                onRemove = {},
+            )
+        }
+    }
+
     @Test
     fun `the crate with nothing in it`() {
         capture("player-crate-empty", PlayerDevice.Phone) {
@@ -435,6 +458,6 @@ class PlayerScreenshotTest {
         )
 
         /** 1:16 of 3:20, which is the 38% the pack draws the thumb at. */
-        val PROGRESS = PlaybackProgress(positionMs = 76_000L, bufferedPositionMs = 120_000L)
+        val PROGRESS = PlaybackProgress(positionMs = 76_000L)
     }
 }

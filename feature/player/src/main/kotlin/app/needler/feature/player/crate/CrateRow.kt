@@ -37,6 +37,14 @@ import app.needler.feature.player.ui.PlayerFormat
  *   custom action does: it is focusable, it is labelled with the track it removes, and it is 48 dp.
  *   `NeedlerIconButton` is documented as staying separately reachable inside a row that merges its own
  *   descendants, which is exactly this case.
+ *
+ * @param subtitle the second line. Defaults to the artist and the album, which is what the pack draws
+ *   and what a mixed crate wants; a crate that is one record passes
+ *   [CrateUiState.rowSubtitle] instead, which prints the track's place in it. The caller decides,
+ *   because the decision is a property of the whole crate and not of one row.
+ * @param showArtwork false for a one-record crate, where eleven copies of one sleeve say what the sleeve
+ *   above the crate already says. `NeedlerQueueRow`'s artwork slot is nullable, so the row closes up
+ *   around it rather than drawing a gap.
  */
 @Composable
 internal fun CrateRow(
@@ -47,6 +55,8 @@ internal fun CrateRow(
     onMoveUp: (() -> Unit)?,
     onMoveDown: (() -> Unit)?,
     onRemove: (() -> Unit)? = null,
+    subtitle: String = PlayerFormat.artistAndAlbum(item),
+    showArtwork: Boolean = true,
 ) {
     val key: String = ROW_KEY_PREFIX + item.id
     val dragging: Boolean = reorder.draggingKey == key
@@ -54,7 +64,7 @@ internal fun CrateRow(
 
     NeedlerQueueRow(
         title = item.track.title,
-        subtitle = PlayerFormat.artistAndAlbum(item),
+        subtitle = subtitle,
         isPlaying = isPlaying,
         onClick = onClick,
         onMoveUp = onMoveUp,
@@ -81,14 +91,18 @@ internal fun CrateRow(
                 }
             }
         },
-        artwork = {
-            PlayerArtwork(
-                artwork = item.track.artwork,
-                albumTitle = item.track.albumTitle,
-                artistName = item.track.artistName,
-                modifier = Modifier.size(NeedlerTheme.sizes.artworkThumb),
-                describe = false,
-            )
+        artwork = if (!showArtwork) {
+            null
+        } else {
+            {
+                PlayerArtwork(
+                    artwork = item.track.artwork,
+                    albumTitle = item.track.albumTitle,
+                    artistName = item.track.artistName,
+                    modifier = Modifier.size(NeedlerTheme.sizes.artworkThumb),
+                    describe = false,
+                )
+            }
         },
         modifier = Modifier
             .zIndex(if (dragging) 1f else 0f)

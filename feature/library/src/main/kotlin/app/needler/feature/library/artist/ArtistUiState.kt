@@ -3,6 +3,7 @@ package app.needler.feature.library.artist
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Track
 import app.needler.feature.library.album.AlbumNotice
@@ -28,6 +29,19 @@ data class ArtistUiState(
     val loading: Boolean = true,
 
     val artist: Artist? = null,
+
+    /**
+     * The artist this screen was opened for, straight off the route.
+     *
+     * Separate from `artist.mbid` because it is known on a path where [artist] is
+     * not: catalogue search opens this screen for an artist the mirror has no row
+     * for. It exists so the header's artwork has a stable identity even then —
+     * `NeedlerArtwork` tints its letter placeholder from whatever identity it is
+     * handed, so falling back to the name would give the same artist one colour in
+     * search and another here, which is exactly the inconsistency
+     * `:feature:search`'s own avatar comments on.
+     */
+    val mbid: ArtistMbid? = null,
 
     /**
      * The artist's name as the caller already knew it, for an artist the mirror has

@@ -13,6 +13,7 @@ import app.needler.feature.library.SampleLibrary
 import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.album.AlbumScreen
 import app.needler.feature.library.album.AlbumTrack
+import app.needler.feature.library.album.AlbumTransport
 import app.needler.feature.library.album.AlbumUiState
 import app.needler.feature.library.common.RequestSheetState
 import org.junit.Test
@@ -232,6 +233,50 @@ class AlbumScreenshotTest {
         )
     }
 
+    // ---- the transport ------------------------------------------------------
+
+    /**
+     * The album you are listening to, with the control that stops it.
+     *
+     * The state these two PNGs cover is the one the device audit found: a record playing, its own
+     * screen open, and a primary button reading "Play" that restarted it. There was no screenshot
+     * of this before because every album fixture in this file was rendered with nothing loaded, so
+     * the only state the images could show was the one state that was right.
+     */
+    @Test
+    fun `the album you are listening to shows Pause`() {
+        capture("album-playing", NeedlerDevice.Phone, playing())
+    }
+
+    @Test
+    fun `the album you are listening to, paused, offers Resume`() {
+        capture(
+            "album-paused",
+            NeedlerDevice.Phone,
+            playing().copy(transport = AlbumTransport.RESUME),
+        )
+    }
+
+    /**
+     * Pause and "Shuffle again" at 200% text.
+     *
+     * Both words are longer than the ones they replace, and the action block is a `FlowRow` three
+     * controls wide. REQUIREMENTS.md "Accessibility" asks for 200% without clipping, so the longer
+     * labels are rendered at it rather than assumed to fit.
+     */
+    @Test
+    fun `the transport controls at 200 percent text size`() {
+        capture("album-playing-large-text", NeedlerDevice.Phone, playing(), fontScale = 2f)
+    }
+
+    @Test
+    fun `the album you are listening to, on a tablet`() {
+        val file = captureNeedlerScreen("album-playing", NeedlerDevice.Tablet) {
+            TabletFrame { Screen(playing(), WindowWidthSizeClass.Expanded) }
+        }
+        assertRendered(file, NeedlerDevice.Tablet)
+    }
+
     // ---- nothing the server sent is guaranteed to be there ------------------
 
     /**
@@ -278,7 +323,7 @@ class AlbumScreenshotTest {
             state = state,
             widthSizeClass = widthSizeClass,
             onBack = {},
-            onPlay = {},
+            onPlayPause = {},
             onShuffle = {},
             onPlayTrack = {},
             onPull = {},
@@ -329,6 +374,15 @@ class AlbumScreenshotTest {
         album = SampleLibrary.submarine.copy(state = AlbumState.Owned),
         tracks = rows(SampleLibrary.submarinePartialTracks, owned = true),
     )
+
+    /**
+     * This album as the loaded crate, playing.
+     *
+     * [AlbumUiState.transport] rather than a playback fixture, because the composable is given the
+     * resolved value: deciding that the crate is this record is `AlbumViewModel`'s job and is
+     * tested there, against a real `PlayQueue`.
+     */
+    private fun playing(): AlbumUiState = owned().copy(transport = AlbumTransport.PAUSE)
 
     private fun starred(): AlbumUiState = owned().let { state ->
         state.copy(

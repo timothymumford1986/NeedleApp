@@ -119,6 +119,8 @@ fun CrateScreen(
                         onMoveUp = null,
                         onMoveDown = null,
                         onRemove = { onRemove(playing.id) },
+                        subtitle = state.rowSubtitle(playing),
+                        showArtwork = state.showsRowArtwork,
                     )
                 }
             }
@@ -150,6 +152,8 @@ fun CrateScreen(
                         null
                     },
                     onRemove = { onRemove(item.id) },
+                    subtitle = state.rowSubtitle(item),
+                    showArtwork = state.showsRowArtwork,
                 )
             }
         }

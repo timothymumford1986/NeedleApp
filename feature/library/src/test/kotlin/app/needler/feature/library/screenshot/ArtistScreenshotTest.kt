@@ -230,6 +230,7 @@ class ArtistScreenshotTest {
         val LOADED = ArtistUiState(
             loading = false,
             artist = SampleLibrary.artists.first(),
+            mbid = SampleLibrary.artists.first().mbid,
             ownedAlbums = listOf(
                 SampleLibrary.submarine,
                 SampleLibrary.album(
@@ -265,6 +266,7 @@ class ArtistScreenshotTest {
         val NAME_DERIVED = ArtistUiState(
             loading = false,
             artist = SampleLibrary.nameDerivedArtist,
+            mbid = SampleLibrary.nameDerivedArtist.mbid,
             ownedAlbums = listOf(SampleLibrary.submarine),
             artistNotInCatalogue = true,
             playableTracks = SampleLibrary.submarineTracks,
@@ -274,6 +276,10 @@ class ArtistScreenshotTest {
         val CATALOGUE_ONLY = ArtistUiState(
             loading = false,
             artist = null,
+            // No mirror row, so no `Artist` and no artwork — but the route still knew
+            // which artist this is, which is what tints the letter placeholder the same
+            // colour search drew.
+            mbid = SampleLibrary.artistMbid("cake"),
             knownName = SampleLibrary.CATALOGUE_ONLY_ARTIST_NAME,
             knownSubtitle = ArtistUiState.NOT_IN_LIBRARY_YET,
             catalogueAlbums = listOf(

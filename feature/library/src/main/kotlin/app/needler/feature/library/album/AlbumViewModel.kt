@@ -10,6 +10,8 @@ import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.FavouriteTarget
 import app.needler.core.domain.model.OfflineDownloadState
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.PlayQueue
+import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RemovedDownload
 import app.needler.core.domain.model.RequestReceipt
@@ -22,6 +24,7 @@ import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.model.TrackRequest
 import app.needler.core.domain.playback.PlaybackController
+import app.needler.core.domain.playback.PlaybackState
 import app.needler.core.domain.repository.FavouriteRepository
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.PinRepository
@@ -44,7 +47,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -99,21 +101,44 @@ class AlbumViewModel @Inject constructor(
     private val notice = MutableStateFlow<AlbumNotice?>(null)
     private val requestSheet = MutableStateFlow<RequestSheetState?>(null)
 
-    private val nowPlayingKey: Flow<TrackKey?> =
-        playback.orElse(null)
-            ?.observeState()
-            ?.map { playbackState -> playbackState.currentItem?.track?.key }
-            ?: flowOf(null)
+    /**
+     * What playback is doing, as far as this one record is concerned.
+     *
+     * Both of the controller's event flows are needed and neither is sufficient:
+     * [PlaybackController.observeState] says whether sound is coming out and which track it is,
+     * and [PlaybackController.observeQueue] says what the crate is made of - which is the only
+     * flow that can distinguish "this album is loaded" from "one of its tracks happens to be in
+     * somebody else's crate". See [transportFor].
+     *
+     * [PlaybackController.observeProgress] is deliberately **not** collected. It ticks several
+     * times a second and nothing on this screen moves with it; subscribing would recompose the
+     * header and the whole track list on every tick, which is the exact cost the controller
+     * documents that flow being separate to avoid.
+     *
+     * One flow rather than two so that the transport and the row highlight are computed from a
+     * single pair of emissions. Read from two combines they could disagree for a frame, and the
+     * disagreement would be a button that says Pause over a list with nothing marked as playing.
+     */
+    private val playbackLens: Flow<PlaybackLens> =
+        playback.orElse(null)?.let { controller ->
+            combine(controller.observeState(), controller.observeQueue()) { playbackState, queue ->
+                PlaybackLens(
+                    nowPlayingTrackKey = playbackState.currentItem?.track?.key,
+                    transport = transportFor(playbackState, queue),
+                )
+            }
+        } ?: flowOf(PlaybackLens())
 
     private val content: Flow<Content> = combine(
         library.observeAlbum(releaseGroupMbid),
         library.observeAlbumTracks(releaseGroupMbid),
-        nowPlayingKey,
-    ) { album, tracks, playingKey ->
+        playbackLens,
+    ) { album, tracks, lens ->
         Content(
             album = album,
             tracks = tracks.toRows(owned = album?.isOwned == true),
-            nowPlayingTrackKey = playingKey,
+            nowPlayingTrackKey = lens.nowPlayingTrackKey,
+            transport = lens.transport,
         )
     }
 
@@ -157,6 +182,7 @@ class AlbumViewModel @Inject constructor(
             album = current.album,
             tracks = current.tracks,
             nowPlayingTrackKey = current.nowPlayingTrackKey,
+            transport = current.transport,
             download = env.download,
             downloadAllowed = env.downloadAllowed,
             offline = env.offline,
@@ -181,12 +207,57 @@ class AlbumViewModel @Inject constructor(
 
     // ---- playback -----------------------------------------------------------
 
-    fun onPlay() {
+    /**
+     * The primary control: pause, resume, or start this album from the top.
+     *
+     * Which of the three it is comes off [AlbumUiState.transport], so the effect and the label the
+     * user read are decided by the same value. Before this, the control called [
+     * PlaybackController.playAlbum] in every state, so opening the album you were listening to and
+     * pressing the button that looked like a transport control replaced the crate with an identical
+     * one and seeked to zero: `position=32975` before the tap, `position=0` after, with the buffer
+     * thrown away and re-fetched. It cost the user their place and it cost them the bytes.
+     *
+     * **Not [PlaybackController.playPause].** That toggles whatever the session is doing at the
+     * moment the command lands, which is not necessarily what the button said when it was drawn - a
+     * track ending between the render and the tap would make the button labelled Pause start
+     * playback. [PlaybackController.pause] and [PlaybackController.play] are idempotent and do what
+     * the label promised even when the session has moved on. The player's own transport can use the
+     * toggle because its button is redrawn from the same state it toggles; this one is read next to
+     * an album header and can be looked at for a while before it is pressed.
+     *
+     * The transport is read once, before the suspend, for the same reason: the decision the user
+     * made is the one on screen.
+     */
+    fun onPlayPause() {
         val controller: PlaybackController = playback.orElse(null) ?: return
-        val startIndex: Int = state.value.firstPlayableIndex
-        viewModelScope.launch { controller.playAlbum(releaseGroupMbid, startIndex = startIndex) }
+        val snapshot: AlbumUiState = state.value
+        viewModelScope.launch {
+            when (snapshot.transport) {
+                AlbumTransport.PAUSE -> controller.pause()
+                AlbumTransport.RESUME -> controller.play()
+                AlbumTransport.START ->
+                    controller.playAlbum(
+                        releaseGroupMbid,
+                        startIndex = snapshot.firstPlayableIndex,
+                    )
+            }
+        }
     }
 
+    /**
+     * Shuffle, or re-shuffle.
+     *
+     * One call either way, deliberately: there is no non-destructive re-shuffle to offer. Shuffling
+     * a record you are inside means hearing it again in another order, and the controller's only
+     * album-shuffle command replaces the crate. What changes when this album is already loaded is
+     * the label and the spoken description - [AlbumTransport.shuffleLabel] and
+     * [AlbumTransport.shuffleDescription] - so the restart is something the user chose rather than
+     * something that happened to them. The reasoning, and the two alternatives rejected, are on
+     * [AlbumTransport].
+     *
+     * Still `playAlbum(shuffle = true)` rather than [PlaybackController.setShuffleEnabled]: album
+     * shuffle shuffles this record's own tracks and leaves the global mode alone.
+     */
     fun onShuffle() {
         val controller: PlaybackController = playback.orElse(null) ?: return
         viewModelScope.launch { controller.playAlbum(releaseGroupMbid, shuffle = true) }
@@ -514,10 +585,58 @@ class AlbumViewModel @Inject constructor(
         )
     }
 
+    /**
+     * Whether the crate the session is holding **is this album**, and if so what it is doing.
+     *
+     * Three conditions, and the third is the one that is easy to leave out:
+     *
+     *  1. something is loaded at all - no current item means nothing to pause or resume;
+     *  2. the current item belongs to this release group;
+     *  3. **every** row of the crate belongs to this release group.
+     *
+     * Condition 3 is what makes this "the loaded queue is this album" rather than "a track of this
+     * album is playing". Without it a crate built from a playlist, a genre, the favourites list or
+     * a search result would hand Pause to whichever album happened to own the current track, and
+     * Play - the only way to actually play that record - would be unreachable from its own screen
+     * for as long as the crate was running. One album in a twenty-album crate would be
+     * indistinguishable from that album loaded on its own.
+     *
+     * The crate is **not** required to contain all of this album. REQUIREMENTS.md "Partial content
+     * is a normal state": a part-delivered pull leaves tracks that exist nowhere, `playAlbum`
+     * queues what there is, and a subset test would mean the part-delivered albums - the ones most
+     * likely to be replayed while the rest is still arriving - were the only ones still losing
+     * their position.
+     *
+     * `isPlaying` alone decides between pause and resume. `isBuffering` is not consulted, because
+     * the controller documents a track re-buffering mid-stream as still playing, and the player's
+     * own transport row branches on the same field - two surfaces disagreeing about what the same
+     * session is doing would be worse than either answer. The one state this gets briefly wrong is
+     * the moment between a play command and the first audio, where the button may read Resume; the
+     * cost of that is a [PlaybackController.play] call on a session that was starting anyway, which
+     * loses nothing.
+     */
+    private fun transportFor(playbackState: PlaybackState, queue: PlayQueue): AlbumTransport {
+        val current: QueueItem = playbackState.currentItem ?: return AlbumTransport.START
+        if (current.track.key.releaseGroupMbid != releaseGroupMbid) return AlbumTransport.START
+        val items: List<QueueItem> = queue.items
+        if (items.isEmpty()) return AlbumTransport.START
+        if (items.any { it.track.key.releaseGroupMbid != releaseGroupMbid }) {
+            return AlbumTransport.START
+        }
+        return if (playbackState.isPlaying) AlbumTransport.PAUSE else AlbumTransport.RESUME
+    }
+
     private data class Content(
         val album: Album?,
         val tracks: List<AlbumTrack>,
         val nowPlayingTrackKey: TrackKey?,
+        val transport: AlbumTransport,
+    )
+
+    /** The two playback flows folded into the two facts this screen reads off them. */
+    private data class PlaybackLens(
+        val nowPlayingTrackKey: TrackKey? = null,
+        val transport: AlbumTransport = AlbumTransport.START,
     )
 
     private data class Environment(

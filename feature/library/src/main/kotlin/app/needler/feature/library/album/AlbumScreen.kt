@@ -27,8 +27,6 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
@@ -63,6 +61,8 @@ import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerStateBadge
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.PULL_SHEET_EXPLANATION
+import app.needler.core.design.component.PathClose
+import app.needler.core.design.component.PathPause
 import app.needler.core.design.component.PathPlay
 import app.needler.core.design.component.PathPull
 import app.needler.core.design.theme.NeedlerTheme
@@ -94,7 +94,7 @@ import app.needler.feature.library.library.LibraryTrackRow
  * | `NotOwned` | **Pull this album**, with the line explaining what the server will do |
  * | `PendingApproval` | The Waiting badge, and why no progress is moving |
  * | `Acquiring` | Pulling with its percentage, a progress bar, and Cancel |
- * | `Owned` | Play, Shuffle, Pull local, and the track list |
+ * | `Owned` | The transport control, Shuffle, Pull local, and the track list |
  * | `Pinned` | The same, with the on-device mark and Remove from device |
  * | `Failed` | What went wrong, in words, and Retry |
  *
@@ -126,7 +126,7 @@ fun AlbumScreen(
     state: AlbumUiState,
     widthSizeClass: WindowWidthSizeClass,
     onBack: () -> Unit,
-    onPlay: () -> Unit,
+    onPlayPause: () -> Unit,
     onShuffle: () -> Unit,
     onPlayTrack: (AlbumTrack) -> Unit,
     onPull: () -> Unit,
@@ -173,7 +173,7 @@ fun AlbumScreen(
                 wide -> TabletAlbum(
                     state = state,
                     gutter = gutter,
-                    onPlay = onPlay,
+                    onPlayPause = onPlayPause,
                     onShuffle = onShuffle,
                     onPlayTrack = onPlayTrack,
                     onPull = onPull,
@@ -191,7 +191,7 @@ fun AlbumScreen(
                 else -> PhoneAlbum(
                     state = state,
                     gutter = gutter,
-                    onPlay = onPlay,
+                    onPlayPause = onPlayPause,
                     onShuffle = onShuffle,
                     onPlayTrack = onPlayTrack,
                     onPull = onPull,
@@ -230,7 +230,7 @@ fun AlbumScreen(
 private fun PhoneAlbum(
     state: AlbumUiState,
     gutter: Dp,
-    onPlay: () -> Unit,
+    onPlayPause: () -> Unit,
     onShuffle: () -> Unit,
     onPlayTrack: (AlbumTrack) -> Unit,
     onPull: () -> Unit,
@@ -276,7 +276,7 @@ private fun PhoneAlbum(
                 }
                 AlbumActions(
                     state = state,
-                    onPlay = onPlay,
+                    onPlayPause = onPlayPause,
                     onShuffle = onShuffle,
                     onPull = onPull,
                     onCancelPull = onCancelPull,
@@ -317,7 +317,7 @@ private fun PhoneAlbum(
 private fun TabletAlbum(
     state: AlbumUiState,
     gutter: Dp,
-    onPlay: () -> Unit,
+    onPlayPause: () -> Unit,
     onShuffle: () -> Unit,
     onPlayTrack: (AlbumTrack) -> Unit,
     onPull: () -> Unit,
@@ -361,7 +361,7 @@ private fun TabletAlbum(
             )
             AlbumActions(
                 state = state,
-                onPlay = onPlay,
+                onPlayPause = onPlayPause,
                 onShuffle = onShuffle,
                 onPull = onPull,
                 onCancelPull = onCancelPull,
@@ -498,7 +498,6 @@ private fun AlbumTopBar(
     gutter: Dp,
 ) {
     val colors = NeedlerTheme.colors
-    var menuOpen: Boolean by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -520,31 +519,12 @@ private fun AlbumTopBar(
                     glyphSize = 22.dp,
                 )
             }
-            if (album?.artistMbid != null) {
-                Box {
-                    NeedlerIconButton(
-                        contentDescription = "More actions for this album",
-                        onClick = { menuOpen = true },
-                    ) {
-                        NeedlerMoreIcon(tint = colors.textPrimary, size = 22.dp)
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    text = "Go to artist",
-                                    style = NeedlerTheme.typography.body,
-                                    color = colors.textPrimary,
-                                )
-                            },
-                            onClick = {
-                                menuOpen = false
-                                onOpenArtist()
-                            },
-                        )
-                    }
-                }
-            }
+            // No overflow menu. It held one item, "Go to artist", which called
+            // the same onOpenArtist as the artist link in the header a few dp
+            // below it - so the screen offered two routes to one destination and
+            // hid one of them behind a tap. A menu earns its place when it has
+            // actions with nowhere else to live; this one taught the user to open
+            // it and find nothing new.
         }
     }
 }
@@ -745,11 +725,24 @@ private fun AlbumQualityTags(
  * Which buttons appear is read off [AlbumUiState.primaryAction], which is read
  * off `AlbumState.offeredActions` — so the set of actions the UI offers and the
  * set the domain says are legal cannot drift apart.
+ *
+ * ## The primary control is a transport control
+ *
+ * In the `PLAY` state its word, its glyph and its spoken description all come off
+ * [AlbumUiState.transport]: Pause while this record is the loaded crate and playing, Resume while
+ * it is the loaded crate and paused, Play otherwise. Nothing here decides which — this composable
+ * renders the value and calls back, because REQUIREMENTS.md "The player boundary" allows a feature
+ * module no view of the session at all: it "renders state and calls methods", and every fact about
+ * what is loaded arrives through `PlaybackController` in domain types. `:feature:library` takes no
+ * Media3 dependency to draw a pause icon.
+ *
+ * The shuffle control is relabelled from the same value rather than disabled. Why, and the two
+ * alternatives rejected, are recorded on [AlbumTransport].
  */
 @Composable
 private fun AlbumActions(
     state: AlbumUiState,
-    onPlay: () -> Unit,
+    onPlayPause: () -> Unit,
     onShuffle: () -> Unit,
     onPull: () -> Unit,
     onCancelPull: () -> Unit,
@@ -773,32 +766,41 @@ private fun AlbumActions(
         when (state.primaryAction) {
             AlbumPrimaryAction.PLAY -> {
                 val pinned: Boolean = album.state is AlbumState.Pinned
+                val transport: AlbumTransport = state.transport
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(spacing.step4),
                     verticalArrangement = Arrangement.spacedBy(spacing.step4),
                 ) {
                     NeedlerPrimaryButton(
-                        text = "Play",
-                        onClick = onPlay,
+                        text = transport.primaryLabel,
+                        onClick = onPlayPause,
                         size = NeedlerButtonSize.Medium,
-                        enabled = !state.busy && state.hasPlayableTracks,
+                        // Pause and Resume stay reachable even if the mirror reports no playable
+                        // track: sound you can hear must always be stoppable from the screen that
+                        // started it, and a part-delivered album mid-sync can briefly have an empty
+                        // track list while its own crate is playing.
+                        enabled = !state.busy && (transport.isLoaded || state.hasPlayableTracks),
                         leadingIcon = { tint ->
                             NeedlerStrokeIcon(
-                                pathData = PathPlay,
+                                pathData = if (transport == AlbumTransport.PAUSE) {
+                                    PathPause
+                                } else {
+                                    PathPlay
+                                },
                                 tint = tint,
                                 size = 18.dp,
                                 filled = true,
                             )
                         },
-                        contentDescription = "Play " + label,
+                        contentDescription = transport.primaryDescription(label),
                     )
                     NeedlerSecondaryButton(
-                        text = "Shuffle",
+                        text = transport.shuffleLabel,
                         onClick = onShuffle,
                         size = NeedlerButtonSize.Medium,
                         enabled = !state.busy && state.hasPlayableTracks,
-                        contentDescription = "Shuffle " + label,
+                        contentDescription = transport.shuffleDescription(label),
                     )
                     // REQUIREMENTS.md: hide the pin affordance entirely when the
                     // administrator has turned library download off, rather than
@@ -1018,7 +1020,7 @@ private fun NoticeCard(notice: AlbumNotice, onDismiss: () -> Unit) {
             onClick = onDismiss,
             visualSize = 36.dp,
         ) {
-            NeedlerStrokeIcon(pathData = PATH_CLOSE, tint = colors.textMuted, size = 16.dp)
+            NeedlerStrokeIcon(pathData = PathClose, tint = colors.textMuted, size = 16.dp)
         }
     }
 }
@@ -1098,8 +1100,6 @@ private fun AlbumNotFound(gutter: Dp) {
 
 /** The width of the artwork-and-actions column on a tablet, from screen 11. */
 private val HERO_COLUMN_WIDTH: Dp = 280.dp
-
-private const val PATH_CLOSE: String = "M6 6l12 12M18 6L6 18"
 
 /**
  * What the server will do, under the Pull button.

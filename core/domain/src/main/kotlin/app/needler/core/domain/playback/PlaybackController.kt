@@ -69,12 +69,17 @@ public interface PlaybackController {
     public fun observeState(): Flow<PlaybackState>
 
     /**
-     * Position and buffered position, which move several times a second.
+     * The playback position, which moves several times a second.
      *
      * Kept apart from [observeState] so that only the scrubber and the elapsed-time label depend on
      * it. The emission rate is the implementation's business; a client that wants fewer updates
      * samples this flow rather than asking the session to tick more slowly, since the same session
      * feeds the widgets and Wear.
+     *
+     * **Implementations must not emit a value equal to the last one.** A paused player's position does
+     * not move, and this flow is collected by the widgets and Wear as well as by the player screen, so
+     * an unchanged re-emission wakes three surfaces to redraw the same pixels. See [PlaybackProgress]
+     * for the field that was removed because it defeated exactly that.
      */
     public fun observeProgress(): Flow<PlaybackProgress>
 
@@ -262,16 +267,32 @@ public data class PlaybackState(
  *
  * Nothing here changes what the player screen *looks* like beyond the scrubber and two time labels,
  * which is the entire reason it is a separate flow from [PlaybackState].
+ *
+ * ## Why there is no buffered position
+ *
+ * There was one - `bufferedPositionMs`, documented as "how far the buffer reaches, for the lighter bar
+ * drawn behind the scrubber". No surface ever drew that bar, REQUIREMENTS.md does not ask for one on any
+ * of the three scrubbers it specifies (screens 07, 09 and 14), and the field could not have been drawn
+ * honestly if one had: the rule it carried was that a track playing from the on-device store reports its
+ * whole duration as buffered, because "a creeping buffer bar drawn over a local file is a lie", and the
+ * only place that knows which of the two is happening is the data source inside the player service. The
+ * controller reads the session, which does not say, so it passed the local-file flag as a constant
+ * `false` - meaning a fully-downloaded album reported a creeping buffer, which is the lie the rule
+ * existed to prevent.
+ *
+ * It also cost something every second. [PlaybackController.observeProgress] is `distinctUntilChanged`,
+ * so a paused player stops re-emitting and every collector of it - the player screen, the widgets and
+ * Wear - stops being woken. A paused stream still pre-buffers, so a buffered position *genuinely*
+ * changes while nothing a listener can see does, and the operator cannot suppress what really differs.
+ * Removing the field is what makes the paused case actually quiet.
+ *
+ * If a buffered bar is wanted later it needs two things this field never had: a `buffered` parameter on
+ * `NeedlerScrubBar` in `:core:design`, and a session extra carrying the data source's
+ * `isPlayingFromLocalFile` so the bar is true for the on-device case. Adding the field back without both
+ * reinstates a value that is wrong in the normal case and emits once a second to say so.
  */
 public data class PlaybackProgress(
     val positionMs: Long = 0L,
-    /**
-     * How far the buffer reaches, for the lighter bar drawn behind the scrubber.
-     *
-     * For a track playing from the on-device store this equals the duration: the bytes are already
-     * there, and drawing a creeping buffer bar over a local file would be a lie.
-     */
-    val bufferedPositionMs: Long = 0L,
 ) {
     /**
      * Fraction of [durationMs] elapsed, 0f..1f, or null when the length is unknown.

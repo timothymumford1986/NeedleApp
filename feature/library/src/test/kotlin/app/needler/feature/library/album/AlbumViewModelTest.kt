@@ -10,11 +10,15 @@ import app.needler.core.domain.model.OfflineDownloadState
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.Pin
 import app.needler.core.domain.model.PinSource
+import app.needler.core.domain.model.PlayQueue
 import app.needler.core.domain.model.PullProgress
+import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.RequestStatus
 import app.needler.core.domain.model.ServerCapabilities
 import app.needler.core.domain.model.StreamRung
+import app.needler.core.domain.model.Track
+import app.needler.core.domain.playback.PlaybackState
 import app.needler.feature.library.FakeFavouriteRepository
 import app.needler.feature.library.FakeLibraryRepository
 import app.needler.feature.library.FakePinRepository
@@ -79,6 +83,25 @@ class AlbumViewModelTest {
     private fun ownedSubmarine() {
         library.albumsByMbid.value = mapOf(mbid.value to submarine.copy(state = AlbumState.Owned))
         library.tracksByMbid.value = mapOf(mbid.value to SampleLibrary.submarineTracks)
+    }
+
+    /** A crate of [tracks], as `playAlbum` or a playlist would have built it. */
+    private fun crate(tracks: List<Track>, currentIndex: Int = 0): PlayQueue = PlayQueue(
+        items = tracks.mapIndexed { index, track -> QueueItem(id = "q-" + index, track = track) },
+        currentIndex = currentIndex,
+    )
+
+    /**
+     * Put [queue] in the session and say whether it is playing.
+     *
+     * Both flows, because the album screen's transport needs both: the state says what the session
+     * is doing, the crate says what it is doing it to. Setting only one of them is how a test comes
+     * to assert on a transport the screen could never show.
+     */
+    private fun loadCrate(queue: PlayQueue, playing: Boolean) {
+        playback.queue.value = queue
+        playback.playbackState.value =
+            PlaybackState(currentItem = queue.currentItem, isPlaying = playing)
     }
 
     // ---- states -------------------------------------------------------------
@@ -236,7 +259,7 @@ class AlbumViewModelTest {
             awaitItem()
             val loaded = awaitItem()
             assertEquals(1, loaded.firstPlayableIndex)
-            model.onPlay()
+            model.onPlayPause()
             advanceUntilIdle()
             cancelAndIgnoreRemainingEvents()
         }
@@ -305,6 +328,180 @@ class AlbumViewModelTest {
         assertEquals(listOf(mbid), pulls.retried)
     }
 
+    // ---- the transport ------------------------------------------------------
+    // Punch-list 8b. Every test here asserts what the control *does* as well as what it says. The
+    // device audit found a button reading "Play" on the album that was already playing, and tapping
+    // it took `position=32975` to `position=0` and threw 76 seconds of buffer away. A test that
+    // only read the label would have passed on that defect, which is the lesson of the exercise.
+
+    @Test
+    fun `this album playing offers Pause, and pausing does not reload the crate`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.submarineTracks, currentIndex = 1), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            val loaded = awaitItem()
+            assertEquals(AlbumTransport.PAUSE, loaded.transport)
+            assertEquals("Pause", loaded.transport.primaryLabel)
+            assertEquals("Pause Submarine", loaded.transport.primaryDescription("Submarine"))
+            model.onPlayPause()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf("pause"), playback.transportCommands)
+        assertTrue("pausing must not reload the album", playback.playAlbumCalls.isEmpty())
+    }
+
+    @Test
+    fun `this album paused resumes where it stopped rather than starting over`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.submarineTracks, currentIndex = 1), playing = false)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            val loaded = awaitItem()
+            assertEquals(AlbumTransport.RESUME, loaded.transport)
+            assertEquals("Resume", loaded.transport.primaryLabel)
+            assertEquals(
+                "Resume Submarine where it stopped",
+                loaded.transport.primaryDescription("Submarine"),
+            )
+            model.onPlayPause()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf("play"), playback.transportCommands)
+        // This is the defect itself. `playAlbum` replaces the crate and seeks to zero, so reaching
+        // it from a paused album is the lost position, whatever the button happened to say.
+        assertTrue(
+            "resuming must not reach playAlbum - that is what destroys the position",
+            playback.playAlbumCalls.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `a different album playing leaves Play meaning play from the start`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.blackClassicalTracks), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            val loaded = awaitItem()
+            assertEquals(AlbumTransport.START, loaded.transport)
+            assertEquals("Play", loaded.transport.primaryLabel)
+            assertEquals("Play Submarine", loaded.transport.primaryDescription("Submarine"))
+            // Nothing of this record is playing, so no row of it is marked either.
+            assertTrue(loaded.tracks.none { it.key == loaded.nowPlayingTrackKey })
+            model.onPlayPause()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf("playAlbum"), playback.transportCommands)
+        val call = playback.playAlbumCalls.single()
+        assertEquals(mbid, call.mbid)
+        assertEquals(0, call.startIndex)
+        assertFalse(call.shuffle)
+    }
+
+    @Test
+    fun `nothing loaded offers Play and starts this album`() = runTest {
+        ownedSubmarine()
+        // The session is left Idle with an empty crate: a cold start, or everything cleared.
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            val loaded = awaitItem()
+            assertEquals(AlbumTransport.START, loaded.transport)
+            assertNull(loaded.nowPlayingTrackKey)
+            model.onPlayPause()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(mbid, playback.playAlbumCalls.single().mbid)
+    }
+
+    /**
+     * The wrong answer, caught.
+     *
+     * "The current track belongs to this album" is true here and "this album is the loaded queue"
+     * is false. Had the screen used the first test, every album with a track in a playlist crate
+     * would have offered Pause, and none of them could have been played from its own screen.
+     */
+    @Test
+    fun `a crate holding one track of this album is not this album`() = runTest {
+        ownedSubmarine()
+        val mixed: List<Track> =
+            listOf(SampleLibrary.submarineTracks[1]) + SampleLibrary.blackClassicalTracks
+        loadCrate(crate(mixed, currentIndex = 0), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            val loaded = awaitItem()
+            assertEquals(AlbumTransport.START, loaded.transport)
+            assertEquals("Play", loaded.transport.primaryLabel)
+            // The row highlight answers a different question and keeps its own answer: this *is*
+            // the track you are hearing, whatever else is queued behind it.
+            assertEquals(SampleLibrary.submarineTracks[1].key, loaded.nowPlayingTrackKey)
+            model.onPlayPause()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf("playAlbum"), playback.transportCommands)
+        assertEquals(mbid, playback.playAlbumCalls.single().mbid)
+    }
+
+    /**
+     * A part-delivered album is still "the loaded queue".
+     *
+     * `playAlbum` queues the tracks that arrived, so the crate is a subset of the track list. A
+     * rule that asked for the whole album would have left the part-delivered records - the ones
+     * most likely to be replayed while the rest is still coming - as the only ones still losing
+     * their position. REQUIREMENTS.md "Partial content is a normal state".
+     */
+    @Test
+    fun `a part-delivered album counts as loaded from the tracks that arrived`() = runTest {
+        library.albumsByMbid.value = mapOf(mbid.value to submarine.copy(state = AlbumState.Owned))
+        library.tracksByMbid.value = mapOf(mbid.value to SampleLibrary.submarinePartialTracks)
+        val delivered: List<Track> = SampleLibrary.submarinePartialTracks
+            .filter { it.key.trackNumber != 4 && it.key.trackNumber != 7 }
+        loadCrate(crate(delivered), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            val loaded = awaitItem()
+            assertEquals(6, delivered.size)
+            assertEquals(AlbumTransport.PAUSE, loaded.transport)
+            model.onPlayPause()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf("pause"), playback.transportCommands)
+    }
+
+    @Test
+    fun `the control follows the session, not the state the screen opened in`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.submarineTracks, currentIndex = 1), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            assertEquals(AlbumTransport.PAUSE, awaitItem().transport)
+            // The lock screen, a widget, Auto or Wear pauses the same session - REQUIREMENTS.md
+            // "The player boundary": this screen is one more client of it, not its owner.
+            playback.playbackState.value = playback.playbackState.value.copy(isPlaying = false)
+            assertEquals(AlbumTransport.RESUME, awaitItem().transport)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
     // ---- actions ------------------------------------------------------------
 
     @Test
@@ -313,7 +510,37 @@ class AlbumViewModelTest {
         val model = viewModel()
         model.state.test {
             awaitItem()
+            val loaded = awaitItem()
+            assertEquals("Shuffle", loaded.transport.shuffleLabel)
+            assertEquals("Shuffle Submarine", loaded.transport.shuffleDescription("Submarine"))
+            model.onShuffle()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(playback.playAlbumCalls.single().shuffle)
+    }
+
+    /**
+     * Re-shuffling is a restart, and it says so before the tap.
+     *
+     * There is no non-destructive re-shuffle to offer, so the fix is the label rather than the
+     * behaviour - see `AlbumTransport`. The spoken description names the restart because that is
+     * the one thing a listener cannot undo afterwards.
+     */
+    @Test
+    fun `shuffling an album you are already inside says it will start over`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.submarineTracks, currentIndex = 3), playing = true)
+
+        val model = viewModel()
+        model.state.test {
             awaitItem()
+            val loaded = awaitItem()
+            assertEquals("Shuffle again", loaded.transport.shuffleLabel)
+            assertEquals(
+                "Shuffle Submarine again. This starts the album over in a new order",
+                loaded.transport.shuffleDescription("Submarine"),
+            )
             model.onShuffle()
             advanceUntilIdle()
             cancelAndIgnoreRemainingEvents()

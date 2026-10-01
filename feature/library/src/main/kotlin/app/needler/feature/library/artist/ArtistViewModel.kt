@@ -183,6 +183,7 @@ class ArtistViewModel @Inject constructor(
         ArtistUiState(
             loading = false,
             artist = current.artist,
+            mbid = artistMbid,
             knownName = knownName,
             knownSubtitle = knownSubtitle,
             ownedAlbums = current.owned,

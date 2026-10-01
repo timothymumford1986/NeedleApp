@@ -44,7 +44,8 @@ internal class FakeGenreLibrary(
     /** Every `observeTracksByGenre` subscription, as (genre, limit) pairs. */
     val genreQueries: MutableList<Pair<String, Int>> = mutableListOf()
 
-    override fun observeGenres(): Flow<List<Genre>> = genreList
+    override fun observeGenres(limit: Int, offset: Int): Flow<List<Genre>> =
+        genreList.map { it.drop(offset).take(limit) }
 
     override fun observeTracksByGenre(genre: String, limit: Int, offset: Int): Flow<List<Track>> {
         genreQueries += genre to limit
@@ -53,7 +54,8 @@ internal class FakeGenreLibrary(
 
     // ---- everything these screens must not touch ----------------------------
 
-    override fun observeArtists(): Flow<List<Artist>> = error("not used by the genre screens")
+    override fun observeArtists(limit: Int, offset: Int): Flow<List<Artist>> =
+        error("not used by the genre screens")
 
     override fun observeArtist(mbid: ArtistMbid): Flow<Artist?> =
         error("not used by the genre screens")

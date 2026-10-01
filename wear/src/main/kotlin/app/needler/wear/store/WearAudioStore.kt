@@ -113,7 +113,13 @@ class WearAudioStore internal constructor(private val root: File) {
      * non-root process may not use, which is the right one for an app-private write.
      */
     fun space(): WearStoreSpace {
-        val directory: File = audioDirectory()
+        // The audio directory only exists once something has been written, and `usableSpace` answers
+        // 0 for a path that names no partition - so measuring it before the first ingest reported an
+        // unreadable volume, which `canAccept` refuses outright. That made the first transfer to a
+        // fresh watch fail with NoRoom and stay failing, because the directory that would have fixed
+        // the reading is created *after* the room check. The root is on the same volume and always
+        // exists, so it is the honest fallback.
+        val directory: File = audioDirectory().takeIf { it.isDirectory } ?: root
         return try {
             WearStoreSpace(usableBytes = directory.usableSpace, totalBytes = directory.totalSpace)
         } catch (failure: SecurityException) {
@@ -177,6 +183,12 @@ class WearAudioStore internal constructor(private val root: File) {
             // Removed before the rename, so a crash in the next two steps leaves audio with no sidecar
             // - which sweeps clean - rather than new bytes described by an old record.
             sidecar.delete()
+            // The old bytes go before the rename too. `File.renameTo` is explicitly platform-dependent
+            // about an existing destination: POSIX `rename` replaces it, Windows refuses, so an upgrade
+            // over a track the watch already held returned Failed on a JVM host. Deleting first is what
+            // `writeSidecar` and `ingestCover` already do, and it narrows the crash window from "old
+            // bytes with no sidecar" to "nothing", which is the cheaper of the two to sweep.
+            audio.delete()
             if (!part.renameTo(audio)) {
                 part.delete()
                 return@withLock WearIngestOutcome.Failed

@@ -226,6 +226,57 @@ sealed interface ConnectFailure {
     }
 
     /**
+     * The app was signed in, and this launch could not get the saved credentials out of the
+     * device's keystore.
+     *
+     * ## Why this is on the Connect screen at all
+     *
+     * Because the alternative was what shipped: three empty fields and no explanation. The
+     * credential store used to delete itself on any failure to open - including the transient ones
+     * `EncryptedSharedPreferences.create` produces around process death - so a user who had been
+     * signed in for weeks was returned to a form identical to a fresh install, having also lost the
+     * server address and username that would have told them otherwise. It was reproduced twice on a
+     * device on 2026-10-01, once by `force-stop` and once by an ordinary low-memory process kill,
+     * and because nothing in that path logged, it was "logged out, cause unknown" for the length of
+     * an audit.
+     *
+     * REQUIREMENTS.md "Expiry, and why playback survives it" already settles what should happen:
+     * "an expired session degrades the app to a pure music player rather than bricking it". A
+     * credential that cannot be read is less dead than an expired one, so it must cost the user
+     * less, and the least it can cost is an explanation. A user who sees this can act. A user who
+     * sees onboarding assumes they were never signed in.
+     *
+     * ## Why one message for two different outcomes
+     *
+     * The store distinguishes a key that is provably gone from a file that merely would not open,
+     * and it must - one discards, the other keeps every byte. The user cannot act on the
+     * difference: either way the next step is the password field below. So the copy is written to
+     * be true of both and to name the thing that *does* tell them apart, which is whether it
+     * happens again after a restart.
+     *
+     * @param server the saved address, which survives a keystore failure because
+     *   `SecureCredentialStore` keeps it outside the encrypted file for exactly this reason. Null
+     *   only if the app never reached a server at all, in which case this state should not arise.
+     */
+    data class SavedSessionLocked(val server: String?) : ConnectFailure {
+        override val title: String get() = "Needler could not unlock your saved sign-in"
+        override val detail: String
+            get() = buildString {
+                append("Your credentials")
+                if (server != null) {
+                    append(" for ")
+                    append(server)
+                }
+                append(" are held in this device's secure keystore, and it would not release ")
+                append("them on this launch. Your library, your downloads and your server ")
+                append("address are untouched - only the sign-in has to be redone, so enter ")
+                append("your password below. If it happens again after a restart, the keystore ")
+                append("key itself has been replaced, which a device migration or a change to ")
+                append("your lock screen can do.")
+            }
+    }
+
+    /**
      * The user stopped the attempt.
      *
      * Not really a failure, but it belongs in the same slot: something has to replace "Connecting…"

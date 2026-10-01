@@ -36,7 +36,7 @@ fun AlbumRoute(
         state = state,
         widthSizeClass = widthSizeClass,
         onBack = onBack,
-        onPlay = viewModel::onPlay,
+        onPlayPause = viewModel::onPlayPause,
         onShuffle = viewModel::onShuffle,
         onPlayTrack = viewModel::onPlayTrack,
         onPull = viewModel::onPull,

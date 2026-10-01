@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumRow
+import app.needler.core.design.component.NeedlerArtwork
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerButtonTone
 import app.needler.core.design.component.NeedlerIconButton
@@ -204,13 +205,12 @@ fun ArtistScreen(
                     if (state.ownedAlbums.isNotEmpty()) {
                         item(key = "owned-header") {
                             SectionSpacer()
-                            NeedlerSectionHeader(
-                                title = "In your library",
-                                trailing = LibraryFormat.plural(
-                                    state.ownedAlbums.size.toLong(),
-                                    "album",
-                                ),
-                            )
+                            // No `trailing` count. It was the same expression as the
+                            // header's subtitle, so the screen said "6 albums" and then
+                            // "6 albums" again a hundred pixels below it; the subtitle
+                            // keeps the figure because it also says how many more there
+                            // are to pull. See [ArtistHeader].
+                            NeedlerSectionHeader(title = "In your library")
                         }
                         ownedRows(
                             albums = state.ownedAlbums,
@@ -355,30 +355,83 @@ private fun ArtistActions(
     }
 }
 
+/**
+ * The artist's name, their line of counts, and — now — their picture.
+ *
+ * ## Why there was no image, and why there is one
+ *
+ * This header drew two `Text`s and nothing else, so every artist page opened as a
+ * wall of words while `Artist.artwork` sat populated and unused — and search, one
+ * tap earlier, had already shown the same artist as a round avatar. REQUIREMENTS.md
+ * "Design system" gives artwork a shape vocabulary and the pack draws an artist as a
+ * circle wherever one appears; a screen that is *about* one artist is the last place
+ * that should be the exception.
+ *
+ * `:core:design`'s `NeedlerArtwork` is called directly rather than through a wrapper.
+ * `:feature:search` has an `ArtistAvatar` that is this one call and nothing else, and
+ * it is `internal` to that module; promoting it would put a second name on a single
+ * call, and copying it here would put a third. The arguments are what matter and they
+ * are all here: the circle from the theme, the MBID as the identity so the generated
+ * tint is the same one search drew, and no content description, because the heading
+ * beside it already says the name and TalkBack reading "K" before "Khruangbin" is
+ * noise. REQUIREMENTS.md "Accessibility" asks every *control* to carry a description;
+ * this is decoration, and marking it as such is the correct treatment rather than an
+ * omission.
+ *
+ * ## The one count, not two
+ *
+ * The section header below used to repeat this line's album count verbatim — "6
+ * albums" in the subtitle and "6 albums" again a hundred pixels down, built from the
+ * same expression. [ArtistUiState.subtitle] keeps it, because it says more: it scopes
+ * the figure with what is owned against what is still pullable. The section header
+ * now carries only its title.
+ *
+ * `state.artist` is null on the catalogue-search path, where the mirror holds no row
+ * and the screen is drawn from the name in the route. The artwork is still drawn
+ * there — as the letter placeholder, which is what `NeedlerArtwork` falls back to
+ * with no model — because that is the artist least likely to have a picture and the
+ * screen it lands on is the one that most needs not to look broken.
+ */
 @Composable
 private fun ArtistHeader(state: ArtistUiState) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            // `state.artist?.name.orEmpty()` drew a blank heading twice over: for an
-            // artist the server named with nothing, and - far more often - for an artist
-            // reached from catalogue search, who has no mirror row at all. `displayName`
-            // falls back to the name the caller passed and then to "Unknown artist", so
-            // this line is never empty. You tapped a name; the screen owes you that name.
-            text = state.displayName,
-            style = typography.display,
-            color = colors.textPrimary,
-            modifier = Modifier.semantics { heading() },
+    val spacing = NeedlerTheme.spacing
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(spacing.step7),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        NeedlerArtwork(
+            model = state.artist?.artwork,
+            // The route's MBID rather than `artist.mbid`, so an artist with no mirror
+            // row still gets a stable tint — and the same one search gave them.
+            identity = state.mbid?.value ?: state.displayName,
+            name = state.displayName,
+            contentDescription = null,
+            modifier = Modifier.size(NeedlerTheme.sizes.artworkDetail),
+            shape = NeedlerTheme.shapes.circle,
         )
-        Text(
-            text = state.subtitle,
-            style = typography.bodySmall,
-            color = colors.textSecondary,
-            modifier = Modifier.semantics {
-                contentDescription = state.subtitle.replace(" · ", ", ")
-            },
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                // `state.artist?.name.orEmpty()` drew a blank heading twice over: for an
+                // artist the server named with nothing, and - far more often - for an artist
+                // reached from catalogue search, who has no mirror row at all. `displayName`
+                // falls back to the name the caller passed and then to "Unknown artist", so
+                // this line is never empty. You tapped a name; the screen owes you that name.
+                text = state.displayName,
+                style = typography.display,
+                color = colors.textPrimary,
+                modifier = Modifier.semantics { heading() },
+            )
+            Text(
+                text = state.subtitle,
+                style = typography.bodySmall,
+                color = colors.textSecondary,
+                modifier = Modifier.semantics {
+                    contentDescription = state.subtitle.replace(" · ", ", ")
+                },
+            )
+        }
     }
 }
 

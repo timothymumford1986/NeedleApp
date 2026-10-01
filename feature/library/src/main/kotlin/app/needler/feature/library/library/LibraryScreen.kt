@@ -25,19 +25,26 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -97,6 +104,19 @@ import app.needler.feature.library.common.showsOnDeviceCheck
  * be visible rather than accidental, which is why [LibraryUiState.offline]
  * produces a plain line saying the library is on the device and plays without a
  * connection, instead of an error, a spinner, or nothing at all.
+ *
+ * ## The grid and the list are one place in the library
+ *
+ * [scrollAnchor] is the user's place in the album list, carried across the
+ * grid/list toggle. It has to live here rather than in either layout, because
+ * the toggle disposes one layout and composes the other and only their common
+ * parent outlives both. [AlbumScrollAnchor] says why it holds an album rather
+ * than a scroll offset, and what was rejected.
+ *
+ * @param scrollAnchor the album the album layouts open on. It is a parameter
+ *   with a default rather than a private `remember` so that a screenshot test
+ *   can render the library already scrolled — which is the only way to see,
+ *   rather than assert, that the grid and the list open on the same record.
  */
 @Composable
 fun LibraryScreen(
@@ -112,6 +132,7 @@ fun LibraryScreen(
     onSongPlay: (Track) -> Unit,
     onSyncNow: () -> Unit,
     modifier: Modifier = Modifier,
+    scrollAnchor: AlbumScrollAnchor = remember { AlbumScrollAnchor() },
 ) {
     val colors = NeedlerTheme.colors
     val spacing = NeedlerTheme.spacing
@@ -168,6 +189,7 @@ fun LibraryScreen(
                         albums = state.albums,
                         columns = columnsFor(widthSizeClass),
                         gutter = gutter,
+                        scrollAnchor = scrollAnchor,
                         onAlbumClick = onAlbumClick,
                         onAlbumPlay = onAlbumPlay,
                     )
@@ -175,6 +197,7 @@ fun LibraryScreen(
                 state.tab == LibraryTab.ALBUMS -> AlbumList(
                     albums = state.albums,
                     gutter = gutter,
+                    scrollAnchor = scrollAnchor,
                     onAlbumClick = onAlbumClick,
                     onAlbumPlay = onAlbumPlay,
                 )
@@ -461,18 +484,60 @@ private fun ToolbarPill(
 // Content
 // ---------------------------------------------------------------------------
 
+/**
+ * Keeps [scrollAnchor] pointing at the album at the top of the viewport.
+ *
+ * It has to be recorded continuously rather than on the way out. When the view
+ * mode flips, Compose runs the incoming layout's composition — including the
+ * `remember` that builds its scroll state from the anchor — *before* it disposes
+ * the outgoing one, so anything written in an `onDispose` would arrive one frame
+ * too late to be read.
+ *
+ * [albums] and [firstVisibleItemIndex] are read through `rememberUpdatedState`
+ * because the effect deliberately does not restart when either changes: keying
+ * it on the album list would tear down and rebuild the collector on every sync,
+ * and keying it on the lambda would do the same on every recomposition.
+ */
+@Composable
+private fun RecordScrollAnchor(
+    scrollAnchor: AlbumScrollAnchor,
+    albums: List<Album>,
+    firstVisibleItemIndex: () -> Int,
+) {
+    val currentAlbums: List<Album> by rememberUpdatedState(albums)
+    val currentIndex: () -> Int by rememberUpdatedState(firstVisibleItemIndex)
+    LaunchedEffect(scrollAnchor) {
+        snapshotFlow { currentIndex() }
+            .collect { index -> scrollAnchor.record(currentAlbums, index) }
+    }
+}
+
 @Composable
 private fun AlbumGrid(
     albums: List<Album>,
     columns: Int,
     gutter: Dp,
+    scrollAnchor: AlbumScrollAnchor,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onAlbumPlay: (ReleaseGroupMbid) -> Unit,
 ) {
     val spacing = NeedlerTheme.spacing
     val wide: Boolean = columns > 2
+    // The anchor is read once, when the state is created. `rememberLazyGridState`
+    // takes no inputs, so a later change to the anchor cannot yank the grid about
+    // under a scrolling finger; and on a rotation the state's own saved index wins
+    // over the initial value, which is what keeps the exact offset rotation
+    // already preserved.
+    val gridState: LazyGridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = scrollAnchor.indexIn(albums),
+    )
+    RecordScrollAnchor(
+        scrollAnchor = scrollAnchor,
+        albums = albums,
+    ) { gridState.firstVisibleItemIndex }
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
+        state = gridState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = gutter, end = gutter, bottom = spacing.step12),
         horizontalArrangement = Arrangement.spacedBy(
@@ -543,12 +608,23 @@ private fun AlbumGrid(
 private fun AlbumList(
     albums: List<Album>,
     gutter: Dp,
+    scrollAnchor: AlbumScrollAnchor,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onAlbumPlay: (ReleaseGroupMbid) -> Unit,
 ) {
     val colors = NeedlerTheme.colors
     val sizes = NeedlerTheme.sizes
+    // See [AlbumGrid]: the same anchor, read the same way, so the two layouts open
+    // on the same record.
+    val listState: LazyListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = scrollAnchor.indexIn(albums),
+    )
+    RecordScrollAnchor(
+        scrollAnchor = scrollAnchor,
+        albums = albums,
+    ) { listState.firstVisibleItemIndex }
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = gutter,

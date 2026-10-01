@@ -61,8 +61,10 @@ internal fun AlbumArtwork(
  *
  * Same arrangement as [AlbumArtwork] and same reason: the ref goes to Coil
  * untouched. Separate only because [app.needler.core.domain.model.Track] and
- * [Album] are separate types carrying the same [ArtworkRef], and the Songs block
- * on screen 03 draws its tiles smaller (44dp) than the album rows above it.
+ * [Album] are separate types carrying the same [ArtworkRef], and each knows a
+ * different place to find its release group. Both draw at the one thumbnail size
+ * the results list uses throughout; see the Songs row for why the pack's smaller
+ * song tile was not kept.
  *
  * The placeholder identity is the song's own release-group MBID, taken from its
  * [app.needler.core.domain.model.TrackKey], so a song and the album it is on draw

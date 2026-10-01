@@ -23,6 +23,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -51,6 +53,12 @@ import app.needler.core.design.theme.NeedlerTheme
  * @param errorText when non-null, replaces [helperText] and is announced through the `error`
  *   semantics property. The pack draws no error colour at all, so the line uses the accent - the
  *   palette's only emphasis colour. A real error treatment needs a design decision.
+ * @param focusRequester a handle on the *field*, for a screen that wants the cursor in it on
+ *   arrival. It has to be a parameter: [modifier] goes on the outer `Column`, because the label and
+ *   the helper line are part of the control and a caller sizing or padding this expects all three to
+ *   move together. A requester passed through [modifier] would therefore land on the column rather
+ *   than the editor, and raise no keyboard. [NeedlerSearchField] has no such split and puts its
+ *   [modifier] straight on the editor, which is why only this one needs the extra handle.
  */
 @Composable
 fun NeedlerLabelledTextField(
@@ -66,6 +74,7 @@ fun NeedlerLabelledTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    focusRequester: FocusRequester? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
 ) {
     val colors = NeedlerTheme.colors
@@ -94,6 +103,13 @@ fun NeedlerLabelledTextField(
             interactionSource = interactionSource,
             modifier = Modifier
                 .fillMaxWidth()
+                .then(
+                    if (focusRequester == null) {
+                        Modifier
+                    } else {
+                        Modifier.focusRequester(focusRequester)
+                    },
+                )
                 // Without this the label and the field are unrelated nodes and the field announces
                 // as unlabelled. TalkBack reads the description, then the editable text.
                 .semantics {

@@ -22,17 +22,22 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -120,6 +125,13 @@ import kotlin.math.roundToInt
  * [SearchUiState.catalogueNote] and are drawn as one line under the field. The
  * results below it are never hidden, greyed or replaced: the local lane made no
  * network call, so there is nothing about it for a connection to have broken.
+ *
+ * @param autoFocus whether to put the cursor in the field and raise the keyboard
+ *   on arrival. True everywhere in the app: this is a screen whose only purpose
+ *   is typing, and it opened with `mInputShown=false` on a device, costing a tap
+ *   before any search could start. The parameter exists so a fixture that is
+ *   about something else — the request sheet over the results — can render the
+ *   field at rest.
  */
 @Composable
 fun SearchScreen(
@@ -143,6 +155,7 @@ fun SearchScreen(
     onCancelPull: () -> Unit,
     onDismissNotice: () -> Unit,
     modifier: Modifier = Modifier,
+    autoFocus: Boolean = true,
 ) {
     val colors = NeedlerTheme.colors
     val spacing = NeedlerTheme.spacing
@@ -180,13 +193,30 @@ fun SearchScreen(
                 state = state,
                 wide = wide,
                 gutter = gutter,
+                autoFocus = autoFocus,
                 onQueryChange = onQueryChange,
                 onClearQuery = onClearQuery,
                 onSubmitQuery = onSubmitQuery,
                 onCancel = onCancel,
             )
 
+            // Every query starts at the top.
+            //
+            // A LazyColumn keeps its scroll position across a content change, and
+            // here that is wrong: the list is rebuilt for each query, so a user
+            // who had scrolled into the albums of one search arrived at the next
+            // one already past the ARTISTS block - results they never asked to
+            // skip, in the section most likely to hold what they typed. Keying
+            // the effect on the query rather than on the results means a slow
+            // catalogue page arriving later does not yank the list back under
+            // someone who has started reading.
+            val resultsState: LazyListState = rememberLazyListState()
+            LaunchedEffect(state.query) {
+                resultsState.scrollToItem(0)
+            }
+
             LazyColumn(
+                state = resultsState,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
@@ -366,12 +396,22 @@ private fun listBottomInset(chromeBelowListPx: Int): Dp {
  * ViewModel this query was meant, so it is worth remembering. That is stated in
  * the action rather than left implicit, because a `Search` key that visibly did
  * nothing would be worse than no action key at all.
+ *
+ * ## The cursor starts here
+ *
+ * [autoFocus] asks for the field once, on arrival, and `BasicTextField` raises
+ * the keyboard itself as it takes focus. Once, and keyed on nothing, because the
+ * user's own later taps — a result, Cancel, the clear button — must be able to
+ * take focus away and keep it; a request that re-fired on recomposition would
+ * drag the keyboard back up under them. Screen 03 draws the field with the
+ * accent focus border already on it, so this is also the state the pack shows.
  */
 @Composable
 private fun SearchHeader(
     state: SearchUiState,
     wide: Boolean,
     gutter: Dp,
+    autoFocus: Boolean,
     onQueryChange: (String) -> Unit,
     onClearQuery: () -> Unit,
     onSubmitQuery: () -> Unit,
@@ -380,6 +420,17 @@ private fun SearchHeader(
     val spacing = NeedlerTheme.spacing
     val colors = NeedlerTheme.colors
 
+    val fieldFocus: FocusRequester = remember { FocusRequester() }
+    if (autoFocus) {
+        LaunchedEffect(Unit) {
+            // The field is attached by the time an effect runs, but a host that
+            // disposes this screen in the same frame it composed it - a tab
+            // swap landing elsewhere - would leave the requester with nothing
+            // to give focus to, and that throws rather than returning false.
+            runCatching { fieldFocus.requestFocus() }
+        }
+    }
+
     val field: @Composable () -> Unit = {
         NeedlerSearchField(
             value = state.query,
@@ -387,6 +438,7 @@ private fun SearchHeader(
             onClear = onClearQuery,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSubmitQuery() }),
+            modifier = Modifier.focusRequester(fieldFocus),
         )
     }
 
@@ -869,8 +921,24 @@ private fun AlbumTrailing(
 }
 
 /**
- * A song result: 56dp, a 44dp cover, and the duration on the right, as screen 03
- * draws it.
+ * A song result: the same 72dp row and 56dp cover as the album rows above it,
+ * with the duration on the right.
+ *
+ * ## Why not the pack's 44dp cover
+ *
+ * Screen 03 draws the Songs block's tiles at 44dp, 12dp smaller than the album
+ * rows above them. On a device that put the album titles at `x=237` and the song
+ * titles at `x=206` — a 31px step in the one vertical line the eye follows down
+ * a list of mixed results. The pack can draw that step because its mock-up shows
+ * one block at a time; a real merged result has Artists, Albums and Songs
+ * stacked in one scroller, and there the step reads as a layout fault rather
+ * than as a hierarchy.
+ *
+ * So one thumbnail size serves every section, which is also the size the artist
+ * avatars and the loading skeleton already use. The row grows from 56dp to 72dp
+ * as a consequence: a 56dp tile plus the row's own 8dp of vertical padding is
+ * 72dp whatever the minimum says, so there is no height to be saved by keeping
+ * the smaller minimum.
  *
  * A track a part-delivered pull never brought has nothing to play, so the row
  * does not offer the tap. REQUIREMENTS.md "Partial content is a normal state":
@@ -888,7 +956,7 @@ private fun SongRow(
     NeedlerAlbumRow(
         title = track.title,
         subtitle = subtitle,
-        minHeight = SONG_ROW_MIN_HEIGHT,
+        minHeight = NeedlerTheme.sizes.albumRowMinHeight,
         isPlaying = track.key == nowPlayingTrackKey,
         onClick = if (playable) ({ onPlay(track) }) else null,
         // No ", playing" here: NeedlerAlbumRow appends that to whatever
@@ -907,7 +975,7 @@ private fun SongRow(
         artwork = {
             TrackArtwork(
                 track = track,
-                modifier = Modifier.size(SONG_ARTWORK_SIZE),
+                modifier = Modifier.size(NeedlerTheme.sizes.artworkRow),
             )
         },
         trailing = {
@@ -1118,23 +1186,30 @@ private fun QueryRow(
     }
 }
 
-/** The first-run state: no history to offer, so say what the field reaches. */
+/**
+ * The first-run state: no history to offer, so say what the field reaches.
+ *
+ * Two lines, and both are about the user's music rather than about the app's
+ * architecture. The first draft read "One field, both halves" over four
+ * sentences explaining that two lanes are queried and merged — true, and the
+ * user's problem is that they have not typed anything yet. The heading now names
+ * what they get and the body names the one thing they could not have guessed:
+ * that a result they do not own is still something they can act on.
+ */
 @Composable
 private fun IntroBlock() {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     Column(verticalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step3)) {
         Text(
-            text = "One field, both halves",
+            text = "Your music, and the rest",
             style = typography.displayCompact,
             color = colors.textPrimary,
             modifier = Modifier.semantics { heading() },
         )
         Text(
-            text = "This searches the music already on your server and the MusicBrainz " +
-                "catalogue at the same time. Your library answers instantly and works with no " +
-                "connection; anything the server does not have yet can be pulled from the " +
-                "results.",
+            text = "Your library answers as you type, online or off. Anything the server " +
+                "does not have yet turns up too — pull it from the results.",
             style = typography.body,
             color = colors.textSecondary,
         )
@@ -1248,12 +1323,6 @@ private fun NoticeLine(
 
 /** Screen 10's album grid: two cards across the content pane. */
 private const val TABLET_ALBUM_COLUMNS: Int = 2
-
-/** Screen 03's song row, which is shorter than its album row. */
-private val SONG_ROW_MIN_HEIGHT: Dp = 56.dp
-
-/** The 44px cover on a song row (03). Smaller than the 56dp on an album row. */
-private val SONG_ARTWORK_SIZE: Dp = 44.dp
 
 /** Enough skeleton rows to fill a phone screen, so the wait does not look like an empty result. */
 private const val SKELETON_ROWS: Int = 6

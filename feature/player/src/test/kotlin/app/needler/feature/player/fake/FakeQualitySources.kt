@@ -21,6 +21,7 @@ import app.needler.core.domain.model.StorageUsage
 import app.needler.core.domain.model.TrackFetchHandle
 import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.model.User
+import app.needler.core.domain.repository.DownloadedAlbumOrder
 import app.needler.core.domain.repository.PinRepository
 import app.needler.core.domain.repository.SessionRepository
 import kotlinx.coroutines.flow.Flow
@@ -54,8 +55,11 @@ internal class FakePins(
 
     override fun observeStorageUsage(): Flow<StorageUsage> = MutableStateFlow(StorageUsage.Empty)
 
-    override fun observeDownloadedAlbums(): Flow<List<DownloadedAlbum>> =
-        error("not used by :feature:player")
+    override fun observeDownloadedAlbums(
+        order: DownloadedAlbumOrder,
+        limit: Int,
+        offset: Int,
+    ): Flow<List<DownloadedAlbum>> = error("not used by :feature:player")
 
     override fun observeStoragePreferences(): Flow<StoragePreferences> =
         MutableStateFlow(StoragePreferences())

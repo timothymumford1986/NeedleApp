@@ -186,8 +186,17 @@ internal object PullsFormat {
     // ---- time ---------------------------------------------------------------
 
     /**
-     * `today`, `yesterday`, `3d ago` — the tail of the subtitle on a finished
-     * pull, as screen 06 draws it.
+     * `today`, `yesterday`, `3 days ago` — the tail of the subtitle on a
+     * finished pull.
+     *
+     * ## One register, not two
+     *
+     * This used to answer `3d ago`, which put an abbreviation in a list whose
+     * other two answers were whole words. On a device the column read "today",
+     * "yesterday", "3d ago" down three consecutive rows, and the third looked
+     * like a different kind of fact from the first two rather than the same fact
+     * further back. Days are spelled out now, which also matches the
+     * `over a month ago` this function has always ended with.
      *
      * Measured in elapsed time, not in calendar days. A calendar-correct answer
      * needs a time zone, and the only zone available to a formatter is the
@@ -204,7 +213,7 @@ internal object PullsFormat {
             seconds < 0L -> "today"
             seconds < 86_400L -> "today"
             seconds < 172_800L -> "yesterday"
-            seconds < 2_592_000L -> (seconds / 86_400L).toString() + "d ago"
+            seconds < 2_592_000L -> plural(seconds / 86_400L, "day") + " ago"
             else -> "over a month ago"
         }
     }
@@ -216,9 +225,12 @@ internal object PullsFormat {
      *
      * Screen 06 puts the *explanation* here and keeps the badge for the state's
      * one-word name: "Kisum · asking slskd" beside a "Searching" badge,
-     * "Paul Kossoff · no source found" beside no badge at all. That split is
-     * what stops the row saying the same thing twice, and it is why a failed
-     * pull's reason lives in this line rather than in the trailing column.
+     * "Paul Kossoff · no source found" beside a "Failed" one. That split is what
+     * stops the row saying the same thing twice, and it is why a failed pull's
+     * reason lives in this line rather than in the trailing column.
+     *
+     * Two states therefore say nothing here, because their name is their whole
+     * account: a completed pull and a cancelled one. The badge has it.
      */
     fun stateDetail(pull: Pull): String? = when (pull.state) {
         PullState.PENDING_APPROVAL -> "waiting for an administrator"
@@ -246,11 +258,17 @@ internal object PullsFormat {
         // third way of saying what the `Ready` badge beside it already says.
         PullState.COMPLETED -> null
 
-        PullState.PARTIAL -> "some tracks did not arrive"
+        // How far it got, which is the useful half: the `Partly delivered` badge
+        // beside it already says that some tracks are missing, so repeating the
+        // prose here would spend the line saying nothing new. The prose is kept
+        // as the fallback for a pull the server gave no counters for.
+        PullState.PARTIAL -> progressDetail(pull) ?: "some tracks did not arrive"
 
         PullState.FAILED -> failureReason(pull)
 
-        PullState.CANCELLED -> "cancelled"
+        // Nothing: the `Cancelled` badge is the word, and the line would only
+        // repeat it. Same reasoning as [PullState.COMPLETED] above.
+        PullState.CANCELLED -> null
     }
 
     /**
@@ -333,11 +351,11 @@ internal object PullsFormat {
             if (pull.artistName.isNotBlank()) add(pull.artistName)
             add(state)
             percent(pull.progress.fraction)?.let { add(it.toString() + " percent") }
-            // A cancelled pull's state and its explanation are the same word,
-            // and "cancelled, cancelled" is what a screen reader would say
-            // without this. The visible row needs both - the state is a badge
-            // there and the explanation is a line - but a spoken sentence does
-            // not.
+            // Belt and braces against a state whose explanation is its own name,
+            // which is what "cancelled, cancelled" used to be here. No state
+            // produces that today - [stateDetail] returns nothing for the two
+            // whose badge is their whole account - but the server supplies the
+            // failure reason on the failed path, and it can be any word it likes.
             addAll(detailParts(pull, now).filterNot { it.equals(state, ignoreCase = true) })
         }
         return parts.joinToString(separator = ", ")
@@ -362,10 +380,10 @@ internal object PullsFormat {
     // `GET /api/v1/requests/history`. Kept beside the queue's formatters rather
     // than in a file of its own because the two are drawn on one screen and must
     // round, separate and abbreviate identically; a second formatting home is
-    // how two lists on one screen start disagreeing about what "3d ago" means.
+    // how two lists on one screen start disagreeing about what "3 days ago" means.
 
     /**
-     * How long ago, counting **forwards**: `in 4h`, `due now`.
+     * How long ago, counting **forwards**: `in 4 hours`, `due now`.
      *
      * [relativeDay] answers "how long since", and every figure on the queue is in
      * the past, so it was all that was needed. The wanted list is the first thing
@@ -373,19 +391,24 @@ internal object PullsFormat {
      * `next_retry_at` are when the server will look again — and feeding those to
      * [relativeDay] returns "today" for everything, which is true and useless.
      *
+     * Spelled out, for the reason [relativeDay] is: these two sit in the same
+     * column on the same screen, and `3 days ago` above `in 4h` reads as two
+     * different kinds of fact.
+     *
      * Rounds down and never below a minute, so a check due in forty seconds reads
-     * "in 1m" rather than "in 0m". `due now` covers the overshoot: these are
-     * server-side schedules seen through a client clock, and a countdown that went
-     * negative would read as an error rather than as a check that is imminent.
+     * "in 1 minute" rather than "in 0 minutes". `due now` covers the overshoot:
+     * these are server-side schedules seen through a client clock, and a countdown
+     * that went negative would read as an error rather than as a check that is
+     * imminent.
      */
     fun countdown(then: Instant?, now: Instant): String? {
         val at: Instant = then ?: return null
         val seconds: Long = (at - now).inWholeSeconds
         return when {
             seconds <= 0L -> "due now"
-            seconds < 3_600L -> "in " + (seconds / 60L).coerceAtLeast(1L) + "m"
-            seconds < 86_400L -> "in " + (seconds / 3_600L) + "h"
-            seconds < 2_592_000L -> "in " + (seconds / 86_400L) + "d"
+            seconds < 3_600L -> "in " + plural((seconds / 60L).coerceAtLeast(1L), "minute")
+            seconds < 86_400L -> "in " + plural(seconds / 3_600L, "hour")
+            seconds < 2_592_000L -> "in " + plural(seconds / 86_400L, "day")
             else -> "in over a month"
         }
     }

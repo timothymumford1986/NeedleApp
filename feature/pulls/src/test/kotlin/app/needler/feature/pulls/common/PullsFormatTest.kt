@@ -57,7 +57,7 @@ class PullsFormatTest {
     @Test
     fun `a failed pull reads as its reason, not as a quality policy`() {
         assertEquals(
-            "Paul Kossoff · no source found · 3d ago",
+            "Paul Kossoff · no source found · 3 days ago",
             PullsFormat.subtitle(SamplePulls.failed, now),
         )
     }
@@ -106,9 +106,35 @@ class PullsFormatTest {
         assertEquals("today", PullsFormat.relativeDay(now + Duration.parse("2h"), now))
         assertEquals("today", PullsFormat.relativeDay(now - Duration.parse("23h"), now))
         assertEquals("yesterday", PullsFormat.relativeDay(now - Duration.parse("25h"), now))
-        assertEquals("3d ago", PullsFormat.relativeDay(now - Duration.parse("80h"), now))
+        assertEquals("2 days ago", PullsFormat.relativeDay(now - Duration.parse("49h"), now))
+        assertEquals("3 days ago", PullsFormat.relativeDay(now - Duration.parse("80h"), now))
         assertEquals("over a month ago", PullsFormat.relativeDay(now - Duration.parse("900h"), now))
         assertNull(PullsFormat.relativeDay(null, now))
+    }
+
+    /**
+     * Punch-list item 31: the column used to read "today", "yesterday", "3d
+     * ago" down three rows, mixing whole words with an abbreviation. Every
+     * answer either way along the scale is now words.
+     */
+    @Test
+    fun `dates and countdowns are written in one register`() {
+        assertEquals("due now", PullsFormat.countdown(now, now))
+        assertEquals("due now", PullsFormat.countdown(now - Duration.parse("5m"), now))
+        assertEquals("in 1 minute", PullsFormat.countdown(now + Duration.parse("40s"), now))
+        assertEquals("in 25 minutes", PullsFormat.countdown(now + Duration.parse("25m"), now))
+        assertEquals("in 1 hour", PullsFormat.countdown(now + Duration.parse("90m"), now))
+        assertEquals("in 4 hours", PullsFormat.countdown(now + Duration.parse("4h"), now))
+        assertEquals("in 1 day", PullsFormat.countdown(now + Duration.parse("30h"), now))
+        assertEquals("in over a month", PullsFormat.countdown(now + Duration.parse("900h"), now))
+        assertNull(PullsFormat.countdown(null, now))
+
+        // The two formatters answer the same question in opposite directions, so
+        // a reader seeing both in one column sees one kind of phrase.
+        assertFalse(
+            PullsFormat.relativeDay(now - Duration.parse("80h"), now)!!.contains("d ago"),
+        )
+        assertFalse(PullsFormat.countdown(now + Duration.parse("4h"), now)!!.endsWith("h"))
     }
 
     @Test
@@ -145,19 +171,46 @@ class PullsFormatTest {
             status = PullStatus.CANCELLED,
             failureReason = null,
         )
-        // Drawn: the row has no badge in the failed bucket, so the line has to
-        // carry the word. Spoken: the state already said it.
-        assertEquals("Paul Kossoff · cancelled · 3d ago", PullsFormat.subtitle(cancelled, now))
+        // Drawn: the `Cancelled` badge in the trailing column is the word, so
+        // the line carries only the artist and the date. Spoken: the state is
+        // read out in its own place and the detail parts add nothing.
+        assertNull(PullsFormat.stateDetail(cancelled))
+        assertEquals("Paul Kossoff · 3 days ago", PullsFormat.subtitle(cancelled, now))
         assertEquals(
-            "Back Street Crawler, Paul Kossoff, cancelled, 3d ago",
+            "Back Street Crawler, Paul Kossoff, cancelled, 3 days ago",
             PullsFormat.spokenRow(cancelled, now),
         )
+    }
+
+    /**
+     * The failed bucket's three outcomes are three different badges.
+     *
+     * Punch-list item 30: the failed row carried a **Retry** pill and no status
+     * label while every other row named its state in the same column. The badge
+     * names the state and the subtitle keeps the explanation, which is why
+     * neither of these rows repeats itself.
+     */
+    @Test
+    fun `a part-delivered pull says how far it got, not that it is incomplete`() {
+        // `Partly delivered` is the badge beside this; "some tracks did not
+        // arrive" here as well would be the same sentence twice.
+        assertEquals("7 of 10 files", PullsFormat.stateDetail(SamplePulls.partial))
+        assertEquals(
+            "Radiohead · 7 of 10 files · 4 days ago",
+            PullsFormat.subtitle(SamplePulls.partial, now),
+        )
+    }
+
+    @Test
+    fun `a part-delivered pull with no counters still says something`() {
+        val uncounted = SamplePulls.partial.copy(progress = PullProgress.Unknown)
+        assertEquals("some tracks did not arrive", PullsFormat.stateDetail(uncounted))
     }
 
     @Test
     fun `the spoken row says a failure as a state and a reason`() {
         assertEquals(
-            "Back Street Crawler, Paul Kossoff, failed, no source found, 3d ago",
+            "Back Street Crawler, Paul Kossoff, failed, no source found, 3 days ago",
             PullsFormat.spokenRow(SamplePulls.failed, now),
         )
     }
@@ -227,9 +280,9 @@ class PullsFormatTest {
 
     @Test
     fun `a pull with neither a title nor an artist still reads as a sentence`() {
-        assertEquals("no source found · 2d ago", PullsFormat.subtitle(SamplePulls.anonymous, now))
+        assertEquals("no source found · 2 days ago", PullsFormat.subtitle(SamplePulls.anonymous, now))
         assertEquals(
-            "Untitled album, failed, no source found, 2d ago",
+            "Untitled album, failed, no source found, 2 days ago",
             PullsFormat.spokenRow(SamplePulls.anonymous, now),
         )
     }

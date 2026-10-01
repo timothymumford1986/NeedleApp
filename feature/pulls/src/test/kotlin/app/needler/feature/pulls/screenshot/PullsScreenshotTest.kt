@@ -49,6 +49,15 @@ class PullsScreenshotTest {
         capture("pulls-queue", NeedlerDevice.Phone, PACK)
     }
 
+    /**
+     * All nine states on one list, which is also where the failed bucket's three
+     * badges can be compared.
+     *
+     * Punch-list item 30: `Failed`, `Partly delivered` and `Cancelled` now sit
+     * in the same trailing column as `Ready`, `Pulling` and `Searching`. The
+     * image is the check that three end states no longer look like one row with
+     * a Retry pill and nothing above it.
+     */
     @Test
     fun `every state a pull can be in`() {
         capture(

@@ -121,6 +121,36 @@ object PlayerFixtures {
     /** The Playing row of [crate]. */
     val playingItem: QueueItem = crate.items.first()
 
+    /**
+     * One record from end to end, which is the commonest way a crate is actually filled.
+     *
+     * The device audit found an eleven-track crate of one album printing the same artist, the same album
+     * and the same thumbnail on every row. [crate] above cannot catch that - it is the pack's own mixed
+     * queue, drawn from four records - so a one-record crate is its own fixture, and the pack's does not
+     * move.
+     */
+    val albumCrate: PlayQueue = PlayQueue(
+        items = listOf(
+            item("a1", sienna),
+            item("a2", hamptons),
+            item("a3", paranoia),
+            item("a4", track("Hush", "The Marias", "Submarine", 170_000L, SUBMARINE, 4)),
+        ),
+        currentIndex = 0,
+    )
+
+    /** The same record pressed across two discs, where "Track 1" would otherwise appear twice. */
+    val doubleAlbumCrate: PlayQueue = PlayQueue(
+        items = listOf(
+            item("d1", sienna),
+            item("d2", onDiscTwo(hamptons, trackNumber = 1)),
+        ),
+        currentIndex = 0,
+    )
+
+    private fun onDiscTwo(from: Track, trackNumber: Int): Track =
+        from.copy(key = from.key.copy(discNumber = 2, trackNumber = trackNumber))
+
     val livingRoomSpeaker: OutputTarget = OutputTarget.Bluetooth(
         id = "bt-living-room",
         displayName = "Living room speaker",

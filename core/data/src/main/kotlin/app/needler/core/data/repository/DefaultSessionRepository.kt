@@ -503,9 +503,35 @@ public class DefaultSessionRepository(
      *
      * Reconstruction rather than a stored enum, because the credentials are the truth: a process that
      * died mid-repair must resume the repair, not restart onboarding.
+     *
+     * ## The keystore is asked whether it could be read at all, first
+     *
+     * A store that would not open has no bearer and no app-password to reconstruct from, and read
+     * naively that is indistinguishable from both credentials having been revoked - which is how a
+     * transient Keystore failure used to present as a fresh install. It is not the same thing, and
+     * `ReonboardingReason.CREDENTIALS_UNREADABLE` exists for it: the secrets may still be on the
+     * disk, intact, under a key this launch could not use. REQUIREMENTS.md "Expiry, and why playback
+     * survives it" establishes that re-onboarding is required "in exactly one case: both credentials
+     * are dead"; an unreadable credential is not a dead one, and the user is told which of the two
+     * they are looking at rather than being handed onboarding and left to assume they were never
+     * signed in.
+     *
+     * The server address still comes back, because `SecureCredentialStore` keeps it outside the
+     * encrypted file precisely so that this state is not also an amnesiac one.
      */
     private fun initialState(): SessionState {
-        val url: ServerUrl = credentials.serverUrl() ?: return SessionState.NotConfigured
+        val saved: ServerUrl? = credentials.serverUrl()
+        // Guarded on there being a server, because a store that will not open on a device whose
+        // keystore is broken outright looks identical on a first run and after a year of use, and
+        // only one of those two users has anything to be told. With no address there is nothing
+        // that was lost, so this is a first run and the Connect screen owns it.
+        if (saved != null && credentials.state.savedSessionUnavailable) {
+            return SessionState.ReonboardingRequired(
+                server = ServerIdentity(baseUrl = saved.baseUrl),
+                reason = ReonboardingReason.CREDENTIALS_UNREADABLE,
+            )
+        }
+        val url: ServerUrl = saved ?: return SessionState.NotConfigured
         val identity = ServerIdentity(baseUrl = url.baseUrl)
         val bearer: String? = credentials.bearerToken()
         val appPassword: String? = credentials.appPassword()

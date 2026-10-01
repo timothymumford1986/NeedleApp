@@ -168,7 +168,13 @@ public class SecureCredentialStoreRepairTest {
 
         assertFalse(credentials.isReonboardingRequired())
         assertFalse(credentials.appPasswordRepairNeeded.value)
-        assertEquals("SecureCredentialStore(provisioned=false)", credentials.toString())
+        // The state is rendered alongside, and it is the distinction a bug report needs: an empty
+        // store that opened normally is a fresh install, while an empty one that would not open is
+        // a user whose session this launch could not unlock. Neither renders a secret.
+        assertEquals(
+            "SecureCredentialStore(provisioned=false, state=Opened)",
+            credentials.toString(),
+        )
     }
 }
 
@@ -176,7 +182,7 @@ public class SecureCredentialStoreRepairTest {
  * An in-memory [SharedPreferences]. Only the operations the store uses are meaningful; the listener
  * and multi-process members are not part of the contract being tested.
  */
-private class FakeSharedPreferences : SharedPreferences {
+internal class FakeSharedPreferences : SharedPreferences {
 
     private val values: MutableMap<String, Any?> = LinkedHashMap()
 
