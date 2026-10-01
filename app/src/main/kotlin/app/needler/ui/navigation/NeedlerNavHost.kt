@@ -4,6 +4,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -185,6 +186,16 @@ fun NeedlerNavHost(
     notificationDestination: NotificationDestination? = null,
     onNotificationDestinationHandled: () -> Unit = {},
 ) {
+    // Where "open the artist" from Now Playing lands.
+    //
+    // ROUTE_NOW_PLAYING is a sibling of ROUTE_HOME in *this* graph and
+    // ROUTE_ARTIST lives in the inner one, so this controller cannot reach it.
+    // Duplicating the route out here would draw an artist screen with no bottom
+    // bar under it, so the player records a target and pops instead; NeedlerHome
+    // already accepts a destination and routes it for notifications, and this
+    // reuses that rather than adding a second mechanism for the same job.
+    var pendingDestination: NotificationDestination? by remember { mutableStateOf(null) }
+
     NavHost(
         navController = navController,
         startDestination = if (startConnected) ROUTE_HOME else ROUTE_CONNECT,
@@ -216,8 +227,11 @@ fun NeedlerNavHost(
                 onOpenNowPlaying = {
                     navController.navigate(ROUTE_NOW_PLAYING) { launchSingleTop = true }
                 },
-                notificationDestination = notificationDestination,
-                onNotificationDestinationHandled = onNotificationDestinationHandled,
+                notificationDestination = pendingDestination ?: notificationDestination,
+                onNotificationDestinationHandled = {
+                    if (pendingDestination != null) pendingDestination = null
+                    else onNotificationDestinationHandled()
+                },
             )
         }
 
@@ -246,6 +260,12 @@ fun NeedlerNavHost(
                     navController.navigate(ROUTE_CRATE) { launchSingleTop = true }
                 },
                 onChooseOutput = { outputPickerOpen = true },
+                // Collapse first, then let Home route. Entering the artist screen
+                // from inside the scaffold is what keeps the bottom bar under it.
+                onOpenArtist = { mbid ->
+                    pendingDestination = NotificationDestination.Artist(mbid.value)
+                    navController.popBackStack()
+                },
             )
 
             if (outputPickerOpen) {
@@ -416,6 +436,10 @@ private fun NeedlerHome(
                 // would strand the listener on a screen with no way off it.
                 // Every other control in the panel is live.
                 onChooseOutput = {},
+                // Trivial here, unlike on Now Playing: the sidebar composes inside
+                // NeedlerHome, so this is the inner controller and ROUTE_ARTIST is
+                // one of its own destinations.
+                onOpenArtist = { navController.navigate(artistRoute(it.value)) },
             )
         },
     ) {

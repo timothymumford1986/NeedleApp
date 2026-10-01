@@ -185,6 +185,8 @@ fun AlbumScreen(
                     onOpenArtist = onOpenArtist,
                     onDismissNotice = onDismissNotice,
                     onToggleTrackFavourite = onToggleTrackFavourite,
+                    onOverrideQuality = onOverrideQuality,
+                    onClearQualityOverride = onClearQualityOverride,
                 )
                 else -> PhoneAlbum(
                     state = state,
@@ -201,6 +203,8 @@ fun AlbumScreen(
                     onOpenArtist = onOpenArtist,
                     onDismissNotice = onDismissNotice,
                     onToggleTrackFavourite = onToggleTrackFavourite,
+                    onOverrideQuality = onOverrideQuality,
+                    onClearQualityOverride = onClearQualityOverride,
                 )
             }
         }
@@ -238,6 +242,8 @@ private fun PhoneAlbum(
     onOpenArtist: () -> Unit,
     onDismissNotice: () -> Unit,
     onToggleTrackFavourite: (AlbumTrack) -> Unit,
+    onOverrideQuality: ((StreamRung) -> Unit)? = null,
+    onClearQualityOverride: (() -> Unit)? = null,
 ) {
     val album: Album = state.album ?: return
     val spacing = NeedlerTheme.spacing
@@ -323,6 +329,8 @@ private fun TabletAlbum(
     onOpenArtist: () -> Unit,
     onDismissNotice: () -> Unit,
     onToggleTrackFavourite: (AlbumTrack) -> Unit,
+    onOverrideQuality: ((StreamRung) -> Unit)? = null,
+    onClearQualityOverride: (() -> Unit)? = null,
 ) {
     val album: Album = state.album ?: return
     val spacing = NeedlerTheme.spacing

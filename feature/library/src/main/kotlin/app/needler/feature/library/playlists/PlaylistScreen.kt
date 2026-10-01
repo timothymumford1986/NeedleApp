@@ -48,6 +48,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.AsyncAlbumArt
+import app.needler.core.design.component.NeedlerAlbumRow
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerCheckIcon
 import app.needler.core.design.component.NeedlerIconButton

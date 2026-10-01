@@ -85,14 +85,14 @@ public class WidgetRefreshCoordinator @Inject constructor(
     public fun start(scope: CoroutineScope) {
         scope.launch {
             playbackController.observeState()
-                .map { state -> state.widgetIdentity() }
+                .map { state -> widgetIdentity(state) }
                 .distinctUntilChanged()
                 .collect { NeedlerWidgets.refreshNowPlaying(context) }
         }
 
         scope.launch {
             syncRepository.observeSyncState()
-                .map(SyncState::syncCompletionMark)
+                .map { state -> syncCompletionMark(state) }
                 .distinctUntilChanged()
                 .collect { NeedlerWidgets.refreshRecentlyAdded(context) }
         }
@@ -115,8 +115,8 @@ public class WidgetRefreshCoordinator @Inject constructor(
          * track - the same reasoning `WearPlaybackProtocol` gives for keeping position off the
          * watch's wire.
          */
-        private fun PlaybackState.widgetIdentity(): String =
-            (currentItem?.track?.key?.canonicalString ?: "none") + "/" + isPlaying
+        private fun widgetIdentity(state: PlaybackState): String =
+            (state.currentItem?.track?.key?.canonicalString ?: "none") + "/" + state.isPlaying
 
         /**
          * A value that changes exactly once per completed sync.
@@ -126,7 +126,8 @@ public class WidgetRefreshCoordinator @Inject constructor(
          * that a sync which starts, fails and leaves the timestamps untouched still settles back to a
          * distinct value rather than leaving the flow mid-sync.
          */
-        private fun SyncState.syncCompletionMark(): String =
-            lastFullSyncAt.toString() + "/" + lastDeltaSyncAt.toString() + "/" + (phase == SyncPhase.IDLE)
+        private fun syncCompletionMark(state: SyncState): String =
+            state.lastFullSyncAt.toString() + "/" + state.lastDeltaSyncAt.toString() +
+                "/" + (state.phase == SyncPhase.IDLE)
     }
 }
