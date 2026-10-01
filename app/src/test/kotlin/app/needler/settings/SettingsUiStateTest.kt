@@ -10,10 +10,12 @@ import app.needler.core.domain.model.CrossfadeDuration
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EqPreset
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.StreamRung
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -168,10 +170,39 @@ class SettingsUiStateTest {
     }
 
     @Test
-    fun `stream quality always reports Original`() {
-        // REQUIREMENTS.md, rule 1 of "Streaming". The only other value the domain models is the
-        // metered transcode, which is a separate switch.
-        assertEquals("Original", PlayingSectionState().streamQualityLabel)
+    fun `the default rungs are original on wifi and mp3 320 on mobile data`() {
+        // REQUIREMENTS.md, rule 1 of "Streaming": "Default stream quality is Original". On mobile data
+        // the default is the pair the retired MP3 320 toggle already stored.
+        val state = PlayingSectionState()
+        assertEquals("Original", state.wifiRungLabel)
+        assertEquals("MP3 320", state.dataRungLabel)
+    }
+
+    @Test
+    fun `original is never labelled FLAC`() {
+        // It means "whatever the file already is", and on an MP3 library it yields MP3. Naming a
+        // format the server may not hold would promise something the setting cannot deliver.
+        assertEquals("Original", PlayingSectionState(wifiRung = StreamRung.ORIGINAL).wifiRungLabel)
+    }
+
+    @Test
+    fun `a transcoding rung warns that its bytes are not kept and original does not`() {
+        // The cache cliff. REQUIREMENTS.md "Why transcoded bytes are never cached": only
+        // original-format bytes are ever retained, so a rung the server has to re-encode for builds no
+        // offline library at all - and nothing else in the app would ever say so.
+        assertNull(PlayingSectionState(dataRung = StreamRung.ORIGINAL).dataRungCacheNotice)
+        assertNull(PlayingSectionState(wifiRung = StreamRung.ORIGINAL).wifiRungCacheNotice)
+
+        val notice: String? = PlayingSectionState(dataRung = StreamRung.MP3_128).dataRungCacheNotice
+        assertNotNull(notice)
+        assertTrue(
+            "the notice must name the connection it applies to",
+            notice!!.contains("mobile data"),
+        )
+        assertTrue(
+            "the notice must say the bytes are not kept",
+            notice.contains("never kept on this device"),
+        )
     }
 
     // ---- storage ------------------------------------------------------------

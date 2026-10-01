@@ -146,8 +146,18 @@ public data class ActiveRequestsDto(
 @Serializable
 public data class ActiveRequestItemDto(
     @SerialName("musicbrainz_id") val musicbrainzId: String = "",
-    @SerialName("artist_name") val artistName: String = "",
-    @SerialName("album_title") val albumTitle: String = "",
+    /** See [albumTitle]: absent and blank are the same answer, and both are common. */
+    @SerialName("artist_name") val artistName: String? = null,
+    /**
+     * The album's title as the server recorded it against the request.
+     *
+     * Nullable for the reason [DownloadTaskDto.albumTitle] is: a `""` default let a missing title be
+     * stored in the `album` mirror as though the server had asserted an empty one, and the Pulls
+     * screen then drew a blank where an album name goes. Both lanes appear on the same screen —
+     * REQUIREMENTS.md, "Queue screen requirements" item 6 — so whichever of them has a title is the
+     * one that fills the mirror in; see `DefaultPullRepository.refreshPulls`.
+     */
+    @SerialName("album_title") val albumTitle: String? = null,
     @SerialName("requested_at") val requestedAt: String? = null,
     @SerialName("status") val status: String = "",
     @SerialName("artist_mbid") val artistMbid: String? = null,
@@ -193,8 +203,10 @@ public data class RequestHistoryDto(
 @Serializable
 public data class RequestHistoryItemDto(
     @SerialName("musicbrainz_id") val musicbrainzId: String = "",
-    @SerialName("artist_name") val artistName: String = "",
-    @SerialName("album_title") val albumTitle: String = "",
+    /** Nullable for the reason [DownloadTaskDto.albumTitle] is: absent and blank mean one thing. */
+    @SerialName("artist_name") val artistName: String? = null,
+    /** Nullable for the reason [DownloadTaskDto.albumTitle] is: absent and blank mean one thing. */
+    @SerialName("album_title") val albumTitle: String? = null,
     @SerialName("requested_at") val requestedAt: String? = null,
     @SerialName("status") val status: String = "",
     @SerialName("artist_mbid") val artistMbid: String? = null,
@@ -229,8 +241,10 @@ public data class WantedWatchesDto(
 @Serializable
 public data class WantedWatchItemDto(
     @SerialName("release_group_mbid") val releaseGroupMbid: String = "",
-    @SerialName("artist_name") val artistName: String = "",
-    @SerialName("album_title") val albumTitle: String = "",
+    /** Nullable for the reason [DownloadTaskDto.albumTitle] is: absent and blank mean one thing. */
+    @SerialName("artist_name") val artistName: String? = null,
+    /** Nullable for the reason [DownloadTaskDto.albumTitle] is: absent and blank mean one thing. */
+    @SerialName("album_title") val albumTitle: String? = null,
     /** `missing` | `partial`. */
     @SerialName("kind") val kind: String = "",
     /** `watching` | `dormant` | `stopped` | `fulfilled`. */
@@ -252,8 +266,10 @@ public data class WantedWatchItemDto(
 @Serializable
 public data class WantedRetryingItemDto(
     @SerialName("release_group_mbid") val releaseGroupMbid: String = "",
-    @SerialName("artist_name") val artistName: String = "",
-    @SerialName("album_title") val albumTitle: String = "",
+    /** Nullable for the reason [DownloadTaskDto.albumTitle] is: absent and blank mean one thing. */
+    @SerialName("artist_name") val artistName: String? = null,
+    /** Nullable for the reason [DownloadTaskDto.albumTitle] is: absent and blank mean one thing. */
+    @SerialName("album_title") val albumTitle: String? = null,
     @SerialName("retry_count") val retryCount: Int = 0,
     @SerialName("max_attempts") val maxAttempts: Int = 0,
     @SerialName("next_retry_at") val nextRetryAt: Double? = null,

@@ -15,14 +15,34 @@ package app.needler.core.data.settings
  *  * **"Pull on Wi-Fi only"** moves and changes meaning - see [StorageSettings].
  */
 
-/** Stream quality, as the two quality rows on screen 12 offer it. */
+/**
+ * One rung of the stream-quality ladder, as stored.
+ *
+ * The persisted half of [app.needler.core.domain.model.StreamRung]: the domain enum carries the
+ * meaning and the codec, this one carries the string that goes in `DataStore`.
+ * `DefaultPlaybackSettingsRepository` maps between the two with an exhaustive `when`, so a rung added
+ * to one and forgotten in the other fails to compile.
+ *
+ * **[storageValue] strings are frozen.** Renaming one silently resets that preference to
+ * [ORIGINAL] on every install that had it.
+ *
+ * ## Why Opus sits above MP3 here
+ *
+ * Declaration order is display order, best first, and the Opus rungs are new. Opus at a given bitrate
+ * sounds considerably better than MP3 at the same bitrate, which is the point of offering it in a
+ * data-saving mode. Nothing compares ordinals: the retention decision is made on
+ * [maxBitrateKbps] in the domain, because it is a question about bytes.
+ */
 public enum class StreamQuality(public val storageValue: String) {
     /**
-     * `stream?format=raw`: original bytes, decoded on device. The default, deliberately: the server
-     * allows one transcode per user and two in total, so a household with two listeners plus a Cast
-     * session can exhaust it.
+     * `stream?format=raw`: original bytes, decoded on device. The default for Wi-Fi, deliberately:
+     * the server allows one transcode per user and two in total, so a household with two listeners
+     * plus a Cast session can exhaust it.
      */
     ORIGINAL("original"),
+    OPUS_192("opus_192"),
+    OPUS_128("opus_128"),
+    OPUS_96("opus_96"),
     MP3_320("mp3_320"),
     MP3_256("mp3_256"),
     MP3_192("mp3_192"),
@@ -33,6 +53,9 @@ public enum class StreamQuality(public val storageValue: String) {
     public val maxBitrateKbps: Int?
         get() = when (this) {
             ORIGINAL -> null
+            OPUS_192 -> 192
+            OPUS_128 -> 128
+            OPUS_96 -> 96
             MP3_320 -> 320
             MP3_256 -> 256
             MP3_192 -> 192
@@ -139,13 +162,24 @@ public data class CrossfadeSettings(
 public data class PlaybackSettings(
     /** On by default: Media3 concatenation, no re-buffer between tracks. */
     val gaplessEnabled: Boolean = true,
+
+    /**
+     * The ceiling for streaming on an **unmetered** connection - the Wi-Fi rung.
+     *
+     * [StreamQuality.ORIGINAL] by default and stored under the same frozen `stream_quality` key it
+     * has always used, which is why widening the one-toggle setting into two pickers needed no
+     * migration of values: the key already held exactly this.
+     */
     val streamQuality: StreamQuality = StreamQuality.ORIGINAL,
 
     /**
-     * Quality requested **only while on a metered connection**, as the "Stream on mobile data" row
-     * offers. MP3 320 to match the drawn screen.
+     * The ceiling for streaming while **metered** - the Data rung.
      *
-     * The setting must be hidden entirely unless `transcoding:1` is advertised *and* the server
+     * [StreamQuality.MP3_320] by default, which is the value the retired "Stream MP3 320 on mobile
+     * data" toggle wrote when it was on. An install where the toggle was off holds
+     * [StreamQuality.ORIGINAL] here, and reads back as Original on both networks.
+     *
+     * Every rung must be hidden entirely unless `transcoding:1` is advertised *and* the server
      * reports transcoding enabled, and a `429` from a transcode falls back to the original stream
      * for that track. Neither of those is this store's business - it only remembers the choice.
      */

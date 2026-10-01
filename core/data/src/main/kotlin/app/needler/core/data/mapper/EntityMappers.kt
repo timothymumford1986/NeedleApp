@@ -355,14 +355,29 @@ public object EntityMappers {
      * [isPendingSubmission] is derived rather than passed: a row with no task id that is merely
      * queued is one the server has not seen yet, which is exactly what an offline request leaves
      * behind. A row awaiting approval also has no task id, and is not that - hence the status check.
+     *
+     * ## The title can still be blank, and callers must expect it
+     *
+     * `PullRow` is a LEFT JOIN onto `album`, which is how REQUIREMENTS.md "Identity model" intends a
+     * pull to find its name: the release-group MBID is the join key and the mirror is the one place
+     * the title lives. The join can still miss. A pull for an album nothing has mirrored yet, or one
+     * whose `album` row predates `DefaultPullRepository.refreshPulls` learning to harvest titles, has
+     * nothing on the right-hand side.
+     *
+     * So the blank is normalised rather than papered over: whitespace collapses to the empty string,
+     * which makes `isEmpty` and `isBlank` agree everywhere downstream. **No fallback wording is
+     * invented here.** `Pull` is a domain value shared by the Pulls screen, the widget, Wear and the
+     * notifications, and each of those says "no title" in its own voice - see
+     * `NotificationComposer.text` and `PullsFormat.albumTitle`. A placeholder chosen in the mapper
+     * would be a user-visible string in the data layer that no screen could override.
      */
     public fun pull(
         row: PullRow,
         isPendingSubmission: Boolean = row.taskId == null && row.status == PullStatusDb.QUEUED,
     ): Pull = Pull(
         releaseGroupMbid = ReleaseGroupMbid(row.releaseGroupMbid),
-        albumTitle = row.albumTitle.orEmpty(),
-        artistName = row.albumArtistName.orEmpty(),
+        albumTitle = row.albumTitle?.trim().orEmpty(),
+        artistName = row.albumArtistName?.trim().orEmpty(),
         taskId = row.taskId?.takeIf { it.isNotBlank() }?.let { PullTaskId(it) },
         status = serverStatus(row.status),
         searchJobId = row.searchJobId,
@@ -382,10 +397,19 @@ public object EntityMappers {
         isPendingSubmission = isPendingSubmission,
     )
 
+    /**
+     * A pull from the stored row alone, with the album's name supplied by the caller.
+     *
+     * The overload above reads a title the database joined; this one exists for callers that already
+     * hold the `album` row and can combine the two flows themselves, which is what
+     * `DefaultPullRepository.observePull` does for a single album. [title] and [artist] default to
+     * empty because a caller genuinely may not know them, and they are trimmed for the same reason the
+     * joined ones are: a blank title is an absent title, and every render site guards on `isBlank`.
+     */
     public fun pull(row: PullEntity, title: String = "", artist: String = ""): Pull = Pull(
         releaseGroupMbid = ReleaseGroupMbid(row.releaseGroupMbid),
-        albumTitle = title,
-        artistName = artist,
+        albumTitle = title.trim(),
+        artistName = artist.trim(),
         taskId = row.taskId?.takeIf { it.isNotBlank() }?.let { PullTaskId(it) },
         status = serverStatus(row.status),
         searchJobId = row.searchJobId,

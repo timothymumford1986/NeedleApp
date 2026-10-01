@@ -13,6 +13,8 @@ import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EvictionReport
+import app.needler.core.domain.model.FavouriteTarget
+import app.needler.core.domain.model.Favourites
 import app.needler.core.domain.model.FullSyncReason
 import app.needler.core.domain.model.Genre
 import app.needler.core.domain.model.LibraryStats
@@ -34,6 +36,7 @@ import app.needler.core.domain.model.RequestStatus
 import app.needler.core.domain.model.ServerCapabilities
 import app.needler.core.domain.model.ServerIdentity
 import app.needler.core.domain.model.ServerProbe
+import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
@@ -52,6 +55,7 @@ import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.core.domain.playback.PlaybackState
 import app.needler.core.domain.playback.RepeatMode
+import app.needler.core.domain.repository.FavouriteRepository
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.PinRepository
 import app.needler.core.domain.repository.PullRepository
@@ -108,6 +112,15 @@ internal class FakeLibraryRepository(
     var refreshDiscographyOutcome: Outcome<Unit> = Outcome.Ok
     var refreshedAlbums: MutableList<ReleaseGroupMbid> = mutableListOf()
 
+    /**
+     * Every artist whose discography was actually fetched.
+     *
+     * Recorded because the interesting assertion is now a *negative* one: a DroppedNeedle
+     * name-derived artist id must never reach this route, and "did not call" is only
+     * assertable if the calls are counted.
+     */
+    val refreshedDiscographies: MutableList<ArtistMbid> = mutableListOf()
+
     override fun observeArtists(): Flow<List<Artist>> = artistList
 
     override fun observeArtist(mbid: ArtistMbid): Flow<Artist?> =
@@ -149,8 +162,10 @@ internal class FakeLibraryRepository(
 
     override suspend fun getAlbum(mbid: ReleaseGroupMbid): Album? = albumsByMbid.value[mbid.value]
 
-    override suspend fun refreshArtistDiscography(mbid: ArtistMbid): Outcome<Unit> =
-        refreshDiscographyOutcome
+    override suspend fun refreshArtistDiscography(mbid: ArtistMbid): Outcome<Unit> {
+        refreshedDiscographies += mbid
+        return refreshDiscographyOutcome
+    }
 
     override suspend fun refreshAlbum(mbid: ReleaseGroupMbid): Outcome<Unit> {
         refreshedAlbums += mbid
@@ -296,6 +311,21 @@ internal class FakePullRepository : PullRepository {
     var retryOutcome: Outcome<Unit> = Outcome.Ok
 
     val albumRequests: MutableList<AlbumRequest> = mutableListOf()
+
+    /** Each `requests/batch` body, for the artist-wide pull. */
+    val batchRequests: MutableList<List<AlbumRequest>> = mutableListOf()
+
+    /**
+     * The batch receipt.
+     *
+     * `overflow` is 0 and stays 0 deliberately: REQUIREMENTS.md "Placing a request" says the
+     * server "never sets it to anything but `0`" because a 501-item body is rejected before the
+     * handler runs, and callers "must not rely on `overflow` for anything at all". A fake that
+     * set it would invite a caller to start reading it.
+     */
+    var requestAlbumsOutcome: Outcome<BatchRequestReceipt> = Outcome.Success(
+        BatchRequestReceipt(requested = emptyList(), skipped = emptyList(), overflow = 0),
+    )
     val trackRequests: MutableList<TrackRequest> = mutableListOf()
     val cancelled: MutableList<ReleaseGroupMbid> = mutableListOf()
     val retried: MutableList<ReleaseGroupMbid> = mutableListOf()
@@ -328,7 +358,10 @@ internal class FakePullRepository : PullRepository {
 
     override suspend fun requestAlbums(
         requests: List<AlbumRequest>,
-    ): Outcome<BatchRequestReceipt> = error("not used by :feature:library")
+    ): Outcome<BatchRequestReceipt> {
+        batchRequests += requests
+        return requestAlbumsOutcome
+    }
 
     override suspend fun cancelRequest(mbid: ReleaseGroupMbid): Outcome<Unit> {
         cancelled += mbid
@@ -483,5 +516,50 @@ internal class FakePlaybackController : PlaybackController {
 
     override suspend fun setPlaybackSpeed(speed: PlaybackSpeed) = Unit
 
+    /**
+     * Declared because the interface declares it with no default body.
+     *
+     * `PlaybackController.setSleepTimer` is deliberately abstract - the player service is the only
+     * thing that can evaluate a timer, and a no-op default would let a surface silently arm one that
+     * never fired. Nothing in this module calls it, so the fake records nothing; it exists so that
+     * the contract stays total.
+     */
+    override suspend fun setSleepTimer(timer: SleepTimer) = Unit
+
     override suspend fun stop() = Unit
+}
+
+/**
+ * Favourites in memory, the shape `DefaultFavouriteRepository` presents.
+ *
+ * `setFavourite` writes the local state first and only then reports, which is what the real one does
+ * — REQUIREMENTS.md "Write queue": a star is applied to the mirror at once and journalled for replay.
+ * That ordering is what lets the screens leave the star outside their busy gate, so a fake that only
+ * recorded the call would let a test pass for a control that never moved.
+ */
+internal class FakeFavouriteRepository : FavouriteRepository {
+
+    val starred = MutableStateFlow<Set<FavouriteTarget>>(emptySet())
+    val calls: MutableList<Pair<FavouriteTarget, Boolean>> = mutableListOf()
+
+    var setOutcome: Outcome<Unit> = Outcome.Ok
+
+    override fun observeFavourites(): Flow<Favourites> = error("not used by :feature:library")
+
+    override fun observeIsFavourite(target: FavouriteTarget): Flow<Boolean> =
+        starred.map { it.contains(target) }
+
+    override suspend fun setFavourite(target: FavouriteTarget, starred: Boolean): Outcome<Unit> {
+        calls += target to starred
+        if (setOutcome is Outcome.Success) {
+            this.starred.value = if (starred) {
+                this.starred.value + target
+            } else {
+                this.starred.value - target
+            }
+        }
+        return setOutcome
+    }
+
+    override suspend fun refreshFavourites(): Outcome<Unit> = Outcome.Ok
 }

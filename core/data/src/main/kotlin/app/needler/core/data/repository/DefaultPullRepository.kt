@@ -1,6 +1,7 @@
 package app.needler.core.data.repository
 
 import app.needler.core.data.background.BackgroundWorkScheduler
+import app.needler.core.data.local.SortKeys
 import app.needler.core.data.local.dao.AlbumDao
 import app.needler.core.data.local.dao.PullDao
 import app.needler.core.data.local.entity.AlbumEntity
@@ -21,21 +22,32 @@ import app.needler.core.domain.model.PullActivitySummary
 import app.needler.core.domain.model.PullBucket
 import app.needler.core.domain.model.PullTaskId
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.RequestHistoryPage
+import app.needler.core.domain.model.RequestOutcome
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.RequestStatus
 import app.needler.core.domain.model.TrackRequest
+import app.needler.core.domain.model.WantedList
 import app.needler.core.domain.model.WriteOperation
 import app.needler.core.domain.model.map
 import app.needler.core.domain.repository.PullRepository
+import app.needler.core.network.v1.RequestHistorySort
 import app.needler.core.network.v1.RequestKind
 import app.needler.core.network.v1.V1Api
+import app.needler.core.network.v1.dto.ActiveRequestItemDto
 import app.needler.core.network.v1.dto.ActiveRequestsDto
 import app.needler.core.network.v1.dto.AlbumRequestDto
 import app.needler.core.network.v1.dto.BatchAlbumItemDto
 import app.needler.core.network.v1.dto.BatchAlbumRequestDto
 import app.needler.core.network.v1.dto.BatchRequestResponseDto
 import app.needler.core.network.v1.dto.DownloadListDto
+import app.needler.core.network.v1.dto.DownloadTaskDto
+import app.needler.core.network.v1.dto.RequestHistoryDto
+import app.needler.core.network.v1.dto.RequestHistoryItemDto
 import app.needler.core.network.v1.dto.TrackRequestDto
+import app.needler.core.network.v1.dto.WantedRetryingItemDto
+import app.needler.core.network.v1.dto.WantedWatchItemDto
+import app.needler.core.network.v1.dto.WantedWatchesDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -378,10 +390,28 @@ public class DefaultPullRepository(
      * `GET /api/v1/downloads` has no `total` and no `total_pages`, so paging is blind: a full page
      * means there may be another. This walks pages until one comes back short, capped so a runaway
      * server cannot spin the poller for ever.
+     *
+     * ## Why the titles are harvested here
+     *
+     * `PullEntity` holds no title: REQUIREMENTS.md "Identity model" makes the release-group MBID the
+     * join key, so the Pulls screen's title comes from the `album` mirror through a LEFT JOIN and
+     * there is exactly one row per album to correct when it is wrong. That is the right shape, and it
+     * used to be undermined here - the title, artist, year and artist MBID that **both** lanes carry
+     * were dropped on the floor, and a pull for an album the mirror had never seen wrote a
+     * placeholder `album` row with an empty title. The screen then drew a blank where an album name
+     * goes, for every pull that had not also been placed from this device.
+     *
+     * So the hints are collected from both lanes as the pages arrive and merged field by field.
+     * REQUIREMENTS.md "Queue screen requirements" item 6 puts both lanes on this one screen, and each
+     * omits fields the other supplies - the downloads lane has the task, the requests lane has the
+     * request as the user placed it - so neither can be treated as the sole source. The alternative,
+     * asking `GET /api/v1/albums/{mbid}` for every unknown title, was rejected: it is one request per
+     * pull against a two-second poll, and the answer is already in the response we have.
      */
     override suspend fun refreshPulls(): Outcome<Unit> {
         val now: Long = nowMillis()
         val rows: MutableList<PullEntity> = ArrayList()
+        val hints: MutableMap<String, AlbumHint> = LinkedHashMap()
         var page = 1
         while (page <= MAX_PAGES) {
             val call: Outcome<DownloadListDto> = networkCall {
@@ -391,6 +421,7 @@ public class DefaultPullRepository(
                 is Outcome.Failure -> return call
                 is Outcome.Success -> call.value
             }
+            list.items.forEach { item -> hints.addHint(item.releaseGroupMbid, AlbumHint.of(item)) }
             rows.addAll(list.items.mapNotNull { CatalogueMappers.pullEntity(it, now) })
             if (list.items.size < PAGE_SIZE) break
             page++
@@ -400,16 +431,17 @@ public class DefaultPullRepository(
         // the approvals that have no download task yet, which is the only way a role-`user` request
         // is visible before an admin acts.
         val approvals: Outcome<ActiveRequestsDto> = networkCall { v1.activeRequests() }
-        val approvalRows: List<PullEntity> = when (approvals) {
-            is Outcome.Failure -> emptyList()
-            is Outcome.Success -> approvals.value.items
-                .mapNotNull { CatalogueMappers.pendingApprovalEntity(it, now) }
+        val approvalItems: List<ActiveRequestItemDto> = approvals.orNullItems()
+        val approvalRows: List<PullEntity> = approvalItems
+            .mapNotNull { CatalogueMappers.pendingApprovalEntity(it, now) }
+        approvalItems.forEach { item ->
+            hints.addHint(item.trackReleaseGroupMbid ?: item.musicbrainzId, AlbumHint.of(item))
         }
 
         val merged: List<PullEntity> = (rows + approvalRows).distinctBy { it.releaseGroupMbid }
         if (merged.isNotEmpty()) {
             pullDao.upsertAll(merged)
-            ensureAlbumRows(merged, approvals.orNullItems(), now)
+            ensureAlbumRows(merged, hints, now)
         }
         return Outcome.Ok
     }
@@ -425,6 +457,88 @@ public class DefaultPullRepository(
 
     override suspend fun markCompletionsSeen(mbids: Set<ReleaseGroupMbid>) {
         appStateStore.markPullsSeen(mbids.map { it.value }.toSet())
+    }
+
+    // ------------------------------------------------- the other request lanes
+
+    /**
+     * One page of `GET /api/v1/requests/history`.
+     *
+     * ## Paging here is the opposite of [refreshPulls]'
+     *
+     * [refreshPulls] walks `GET /api/v1/downloads` blindly, page after page, until one comes back
+     * short, because that endpoint reports neither `total` nor `total_pages`. This endpoint reports
+     * both, so it does exactly one call for exactly the page it was asked for and hands the totals
+     * back untouched for the caller to page with. Reusing the walk here would fetch a whole history
+     * to draw twenty rows of it; reusing this shape there is not possible at all. The two are
+     * deliberately not shared, and this KDoc is the note that says so on purpose.
+     *
+     * ## There is no in-band failure to unpack
+     *
+     * A read on this lane either answers or raises a status, so [networkCall] is the whole of the
+     * error handling. That is not true of its neighbours [cancelRequest] and [retryRequest], which
+     * refuse with `200` and `success=false` - see their KDoc. A reader looking for the in-band check
+     * here should not find one.
+     *
+     * The titles the page carries are folded back into the `album` mirror, for the reason
+     * [ensureAlbumRows] gives: whichever lane has a name is the one that fills the mirror in, and
+     * this lane names albums the download queue has long since forgotten. Only *blank* rows are
+     * repaired and none is created - see [repairAlbumTitles].
+     */
+    override suspend fun requestHistory(
+        page: Int,
+        pageSize: Int,
+        status: RequestOutcome?,
+        newestFirst: Boolean,
+    ): Outcome<RequestHistoryPage> {
+        val call: Outcome<RequestHistoryDto> = networkCall {
+            v1.requestHistory(
+                page = page.coerceAtLeast(1),
+                pageSize = pageSize.coerceIn(1, MAX_HISTORY_PAGE_SIZE),
+                status = status?.serverToken,
+                sort = if (newestFirst) RequestHistorySort.Newest else RequestHistorySort.Oldest,
+            )
+        }
+        return when (call) {
+            is Outcome.Failure -> call
+            is Outcome.Success -> {
+                val hints: MutableMap<String, AlbumHint> = LinkedHashMap()
+                call.value.items.forEach { item ->
+                    hints.addHint(item.trackReleaseGroupMbid ?: item.musicbrainzId, AlbumHint.of(item))
+                }
+                repairAlbumTitles(hints, nowMillis())
+                Outcome.Success(CatalogueMappers.requestHistoryPage(call.value))
+            }
+        }
+    }
+
+    /**
+     * `GET /api/v1/requests/wanted` in one call, because that is all the endpoint offers.
+     *
+     * **No paging at all.** There is no `page`, no `page_size` and no total, and the response is the
+     * whole list - the same shape as `requests/active`, and the opposite of the history call
+     * directly above. So there is no loop here and no ceiling: a `MAX_PAGES` guard like
+     * [refreshPulls]' would be guarding against a second request that cannot be made.
+     *
+     * Read-only. `/api/v1` exposes nothing to start, stop or re-schedule a watch, so this reports and
+     * offers nothing, exactly as the held-items count does.
+     */
+    override suspend fun wantedList(): Outcome<WantedList> {
+        val call: Outcome<WantedWatchesDto> = networkCall { v1.wantedRequests() }
+        return when (call) {
+            is Outcome.Failure -> call
+            is Outcome.Success -> {
+                val hints: MutableMap<String, AlbumHint> = LinkedHashMap()
+                call.value.items.forEach { item ->
+                    hints.addHint(item.releaseGroupMbid, AlbumHint.of(item))
+                }
+                call.value.retrying.forEach { item ->
+                    hints.addHint(item.releaseGroupMbid, AlbumHint.of(item))
+                }
+                repairAlbumTitles(hints, nowMillis())
+                Outcome.Success(CatalogueMappers.wantedList(call.value))
+            }
+        }
     }
 
     // ------------------------------------------------------------------ internals
@@ -520,32 +634,194 @@ public class DefaultPullRepository(
         )
     }
 
+    /**
+     * Gives every pull an `album` row to render against, and repairs the ones that say nothing.
+     *
+     * Two jobs, because doing only the first is what broke the Pulls screen. A pull placed from a
+     * catalogue search result can reach the queue before its album is mirrored, so a placeholder row
+     * is written for anything missing - that part was always here. What was missing is that the
+     * placeholder used to be written **blank**, and a blank row is indistinguishable from a known one
+     * on the next refresh: `getAlbums` returns it, the mbid is no longer "missing", and the emptiness
+     * is permanent. Every pull the user had not personally placed from this device therefore drew an
+     * empty title for ever.
+     *
+     * So an existing row whose title or artist is blank is repaired from the hints, and a row that
+     * already says something is **left alone**. That asymmetry is the whole point: the mirror knows
+     * more about an owned album than a download task ever will - track counts, format, cover art -
+     * and letting a task's summary overwrite a catalogue title would trade a visible bug for an
+     * invisible one. Only the fields the mirror has nothing for are filled in.
+     *
+     * @param hints title, artist, year and artist MBID gathered from whichever lane supplied them,
+     *   keyed on release-group MBID - the join key REQUIREMENTS.md "Identity model" mandates.
+     */
     private suspend fun ensureAlbumRows(
         pulls: List<PullEntity>,
-        approvals: List<app.needler.core.network.v1.dto.ActiveRequestItemDto>,
+        hints: Map<String, AlbumHint>,
         now: Long,
     ) {
-        val known: Set<String> = albumDao.getAlbums(pulls.map { it.releaseGroupMbid })
-            .map { it.releaseGroupMbid }
-            .toSet()
-        val hints: Map<String, app.needler.core.network.v1.dto.ActiveRequestItemDto> =
-            approvals.associateBy { it.trackReleaseGroupMbid ?: it.musicbrainzId }
-        val missing: List<AlbumEntity> = pulls
-            .map { it.releaseGroupMbid }
-            .distinct()
-            .filter { !known.contains(it) }
+        val mbids: List<String> = pulls.map { it.releaseGroupMbid }.distinct()
+        val known: Map<String, AlbumEntity> = albumDao.getAlbums(mbids)
+            .associateBy { it.releaseGroupMbid }
+
+        val missing: List<AlbumEntity> = mbids
+            .filter { !known.containsKey(it) }
             .map { mbid ->
-                val hint = hints[mbid]
+                val hint: AlbumHint = hints[mbid] ?: AlbumHint()
                 CatalogueMappers.placeholderAlbumEntity(
                     releaseGroupMbid = mbid,
-                    title = hint?.albumTitle.orEmpty(),
-                    artistName = hint?.artistName.orEmpty(),
-                    artistMbid = hint?.artistMbid,
-                    year = hint?.year,
+                    title = hint.title.orEmpty(),
+                    artistName = hint.artistName.orEmpty(),
+                    artistMbid = hint.artistMbid,
+                    year = hint.year,
                     now = now,
                 )
             }
-        if (missing.isNotEmpty()) albumDao.upsertAll(missing)
+
+        val repaired: List<AlbumEntity> = known.values.mapNotNull { row ->
+            repairedRow(row, hints[row.releaseGroupMbid], now)
+        }
+
+        val writes: List<AlbumEntity> = missing + repaired
+        if (writes.isNotEmpty()) albumDao.upsertAll(writes)
+    }
+
+    /**
+     * Fills in blank titles the mirror already has rows for, and **creates none**.
+     *
+     * The repair half of [ensureAlbumRows] without the placeholder half, which is the right trade for
+     * the two request lanes that have no queue behind them. A pull needs an `album` row because the
+     * Pulls queue left-joins one for its title; a history entry and a wanted watch carry their own
+     * title in their own payload and render without the mirror at all. Writing a placeholder for
+     * every row of an unbounded history list would grow the mirror for nothing - REQUIREMENTS.md
+     * "The metadata mirror is pruned" would collect them again later, so the only lasting effect
+     * would be the churn.
+     *
+     * What is worth doing is the repair. These two lanes name albums the download queue no longer
+     * has any record of, and an `album` row left blank by an earlier placeholder write is exactly the
+     * defect that put 34 empty title lines on a real device. So a row the mirror already holds gets
+     * its gaps filled from whichever lane supplied them, and a row that already says something is
+     * left alone, for the reason [ensureAlbumRows] sets out at length.
+     */
+    private suspend fun repairAlbumTitles(hints: Map<String, AlbumHint>, now: Long) {
+        if (hints.isEmpty()) return
+        val known: List<AlbumEntity> = albumDao.getAlbums(hints.keys.toList())
+        if (known.isEmpty()) return
+        val repaired: List<AlbumEntity> = known.mapNotNull { row ->
+            repairedRow(row, hints[row.releaseGroupMbid], now)
+        }
+        if (repaired.isNotEmpty()) albumDao.upsertAll(repaired)
+    }
+
+    /**
+     * [row] with the gaps [hint] can fill, or null when it has nothing to add.
+     *
+     * Shared by [ensureAlbumRows] and [repairAlbumTitles] so the four lanes that supply titles cannot
+     * end up with four slightly different ideas of what "blank" means. Returning null for an
+     * unchanged row is what keeps a poll from writing every album it saw back unmodified.
+     */
+    private fun repairedRow(row: AlbumEntity, hint: AlbumHint?, now: Long): AlbumEntity? {
+        if (hint == null) return null
+        val title: String = row.title.ifBlank { hint.title ?: row.title }
+        val artistName: String = row.artistName.ifBlank { hint.artistName ?: row.artistName }
+        val artistMbid: String? = row.artistMbid ?: hint.artistMbid
+        val year: Int? = row.year ?: hint.year
+        val unchanged: Boolean = title == row.title &&
+            artistName == row.artistName &&
+            artistMbid == row.artistMbid &&
+            year == row.year
+        if (unchanged) return null
+        return row.copy(
+            title = title,
+            // The sort keys are derived, so they have to move with the values they index or the
+            // repaired album files itself under its old empty name.
+            titleNormalised = SortKeys.normalise(title),
+            artistName = artistName,
+            artistNormalised = SortKeys.normalise(artistName),
+            artistMbid = artistMbid,
+            year = year,
+            updatedAt = now,
+        )
+    }
+
+    /**
+     * What one lane was able to say about an album, with blank treated as absent.
+     *
+     * A value type rather than passing a DTO around because the two lanes name these fields
+     * differently and carry them at different completeness - the downloads lane has the task, the
+     * requests lane has the request as the user placed it - and the merge has to happen field by
+     * field. Collapsing them here means [ensureAlbumRows] never has to know which endpoint an answer
+     * came from.
+     *
+     * Blank is normalised to `null` on the way in. The two are the same fact, and keeping them
+     * distinct is precisely the confusion that let an empty title be stored as though the server had
+     * asserted it; see [DownloadTaskDto.albumTitle].
+     */
+    private data class AlbumHint(
+        val title: String? = null,
+        val artistName: String? = null,
+        val artistMbid: String? = null,
+        val year: Int? = null,
+    ) {
+        /** True when this lane said nothing worth storing, so it can be skipped entirely. */
+        val isEmpty: Boolean
+            get() = title == null && artistName == null && artistMbid == null && year == null
+
+        /** [other] fills the gaps this one has. First answer wins, so no page undoes another. */
+        fun mergedWith(other: AlbumHint): AlbumHint = AlbumHint(
+            title = title ?: other.title,
+            artistName = artistName ?: other.artistName,
+            artistMbid = artistMbid ?: other.artistMbid,
+            year = year ?: other.year,
+        )
+
+        companion object {
+            fun of(dto: DownloadTaskDto): AlbumHint = AlbumHint(
+                title = dto.albumTitle.tidy(),
+                artistName = dto.artistName.tidy(),
+                artistMbid = dto.artistMbid.tidy(),
+                year = dto.year,
+            )
+
+            fun of(dto: ActiveRequestItemDto): AlbumHint = AlbumHint(
+                title = dto.albumTitle.tidy(),
+                artistName = dto.artistName.tidy(),
+                artistMbid = dto.artistMbid.tidy(),
+                year = dto.year,
+            )
+
+            /** `GET /api/v1/requests/history`: the request as the user placed it, however long ago. */
+            fun of(dto: RequestHistoryItemDto): AlbumHint = AlbumHint(
+                title = dto.albumTitle.tidy(),
+                artistName = dto.artistName.tidy(),
+                artistMbid = dto.artistMbid.tidy(),
+                year = dto.year,
+            )
+
+            /** `GET /api/v1/requests/wanted`: a standing watch, which also carries `first_release_date`. */
+            fun of(dto: WantedWatchItemDto): AlbumHint = AlbumHint(
+                title = dto.albumTitle.tidy(),
+                artistName = dto.artistName.tidy(),
+                artistMbid = dto.artistMbid.tidy(),
+                year = dto.year ?: dto.firstReleaseDate?.take(4)?.toIntOrNull(),
+            )
+
+            /** The `retrying` half of the same response. */
+            fun of(dto: WantedRetryingItemDto): AlbumHint = AlbumHint(
+                title = dto.albumTitle.tidy(),
+                artistName = dto.artistName.tidy(),
+                artistMbid = dto.artistMbid.tidy(),
+                year = dto.year,
+            )
+
+            private fun String?.tidy(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
+        }
+    }
+
+    /** Records a lane's answer for [mbid], keeping whatever an earlier lane already knew. */
+    private fun MutableMap<String, AlbumHint>.addHint(mbid: String?, hint: AlbumHint) {
+        val key: String = mbid?.trim().orEmpty()
+        if (key.isEmpty() || hint.isEmpty) return
+        this[key] = this[key]?.mergedWith(hint) ?: hint
     }
 
     private fun statusesFor(bucket: PullBucket): List<String> = when (bucket) {
@@ -554,8 +830,7 @@ public class DefaultPullRepository(
         PullBucket.FAILED -> PullStatusDb.FAILED_DB_VALUES
     }
 
-    private fun Outcome<ActiveRequestsDto>.orNullItems():
-        List<app.needler.core.network.v1.dto.ActiveRequestItemDto> = when (this) {
+    private fun Outcome<ActiveRequestsDto>.orNullItems(): List<ActiveRequestItemDto> = when (this) {
         is Outcome.Success -> value.items
         is Outcome.Failure -> emptyList()
     }
@@ -566,7 +841,19 @@ public class DefaultPullRepository(
         /**
          * A ceiling on blind paging. With no `total` there is nothing to stop at but a short page, so
          * a server that always answers full pages would otherwise spin the two-second poller.
+         *
+         * It applies to `GET /api/v1/downloads` only. `requests/history` reports `total_pages`, so it
+         * needs no ceiling; `requests/active` and `requests/wanted` do not page at all.
          */
         public const val MAX_PAGES: Int = 20
+
+        /**
+         * A ceiling on the history page size the caller may ask for.
+         *
+         * Not a server limit - the endpoint documents none - but a request for ten thousand rows is a
+         * caller's bug and would be answered with ten thousand rows over a phone connection. Fifty
+         * matches [PAGE_SIZE], so the two lanes at least ask for comparable amounts of work.
+         */
+        public const val MAX_HISTORY_PAGE_SIZE: Int = 50
     }
 }

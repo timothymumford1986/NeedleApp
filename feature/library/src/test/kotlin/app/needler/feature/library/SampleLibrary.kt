@@ -293,6 +293,88 @@ internal object SampleLibrary {
         track("blackclassical", 8, "Marching Band", "Yussef Dayes", 241_000L, format = null),
     )
 
+    // ---- what the server does not guarantee ---------------------------------
+
+    /**
+     * An album the catalogue named with nothing at all.
+     *
+     * **Every other fixture in this file supplies a title, an artist and a cover**, which is
+     * precisely why a screen that concatenated `album.title` into six accessibility labels
+     * shipped and why no screenshot caught it. This one supplies none of the three, and it is
+     * not a hypothetical: `ReleaseItemDto.title` is nullable and `CatalogueMappers.album` maps
+     * it with `.orEmpty()`, so a release group MusicBrainz has no title for arrives exactly
+     * like this.
+     */
+    val untitledAlbum: Album = Album(
+        releaseGroupMbid = ReleaseGroupMbid("e7a4b1c2-0000-4000-8000-1234567890ab"),
+        title = "",
+        artistName = "",
+        artistMbid = null,
+        state = AlbumState.NotOwned,
+    )
+
+    /** The same, with a title that is only whitespace, so `isEmpty` and `isBlank` disagree. */
+    val whitespaceTitledAlbum: Album = untitledAlbum.copy(
+        releaseGroupMbid = ReleaseGroupMbid("e7a4b1c2-0000-4000-8000-1234567890ac"),
+        title = "   ",
+        artistName = "\t ",
+    )
+
+    /** An owned album with no title, so the owned path is covered as well as the catalogue one. */
+    val untitledOwnedAlbum: Album = untitledAlbum.copy(
+        releaseGroupMbid = ReleaseGroupMbid("e7a4b1c2-0000-4000-8000-1234567890ad"),
+        state = AlbumState.Owned,
+        trackCount = 2,
+        quality = AudioQuality(format = AudioFormat.FLAC, bitrateKbps = null),
+    )
+
+    /** Every album whose title or artist is missing, for a test that sweeps all of them. */
+    val namelessAlbums: List<Album> = listOf(untitledAlbum, whitespaceTitledAlbum, untitledOwnedAlbum)
+
+    /** Tracks with no titles either - `CatalogueTrackDto.title` defaults to the empty string. */
+    val untitledTracks: List<Track> = listOf(
+        track(
+            albumSlug = "untitled",
+            number = 1,
+            title = "",
+            artistName = "",
+            durationMs = 0L,
+            format = null,
+        ),
+        track(
+            albumSlug = "untitled",
+            number = 2,
+            title = "  ",
+            artistName = "",
+            durationMs = 181_000L,
+            format = null,
+        ),
+    )
+
+    /**
+     * An artist whose id DroppedNeedle derived from their name: a UUID v5.
+     *
+     * The id is the one from the device log. Third group `5e80`, so version 5, which means the
+     * catalogue discography route answers
+     * `400 Use the local library artist route for a DroppedNeedle artist ID` for it - for ever.
+     */
+    val nameDerivedArtist: Artist = Artist(
+        mbid = ArtistMbid("8cfce742-445e-5e80-93a8-d8f924d56984"),
+        name = "Some Local Band",
+        ownedAlbumCount = 1,
+    )
+
+    /**
+     * An artist known only from catalogue search: a real MBID, and no mirror row anywhere.
+     *
+     * The device case. `refreshArtistDiscography` writes album rows and never an artist row, so
+     * this artist is what the screen has to render from route hints alone. There is deliberately
+     * no `Artist` object for them - having one would defeat the fixture.
+     */
+    const val CATALOGUE_ONLY_ARTIST_MBID: String = "1b2d8b3a-5c41-4f22-9a10-88d0c6f22e9a"
+
+    const val CATALOGUE_ONLY_ARTIST_NAME: String = "My Friend the Chocolate Cake"
+
     // ---- the header figures on screens 02, 09 and 13 ------------------------
 
     /** The pack's own instant, so "last scan 47m ago" renders deterministically. */

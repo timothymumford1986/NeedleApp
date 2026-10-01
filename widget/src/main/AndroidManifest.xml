@@ -4,11 +4,11 @@
 
   REQUIREMENTS.md "Surfaces beyond the app > Widgets" names three widgets drawn
   on screens 15 (phone) and 18 (tablet): now playing, recently added, and the
-  active pull with its percentage. Only the first is declared here, because only
-  the first has a class yet; the other two land with theirs. Declaring a
-  <receiver> that names a class which does not exist merges fine and then fails
-  lint's MissingClass check, which is the same reason app/src/main/AndroidManifest.xml
-  deliberately declares none of these itself.
+  active pull with its percentage. All three are declared here, and each landed
+  with its class. Declaring a <receiver> that names a class which does not exist
+  merges fine and then fails lint's MissingClass check, which is the same reason
+  app/src/main/AndroidManifest.xml deliberately declares none of these itself —
+  so a fourth receiver belongs here only once the class it names is written.
 
   Nothing else belongs in this file. The widgets need no permission of their own:
   they read the running Media3 session through PlaybackController and fetch
@@ -48,6 +48,57 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_now_playing_info" />
+        </receiver>
+
+
+        <!--
+          The recently added widget's AppWidgetProvider.
+
+          Same shape as the now-playing receiver above and for the same reasons:
+          not exported, because an app-widget provider only ever receives
+          broadcasts the platform addresses to it by explicit component;
+          APPWIDGET_UPDATE only, because Glance routes the Play disc's tap
+          through its own ActionCallbackBroadcastReceiver, which the
+          glance-appwidget manifest declares; and a label that is the product's
+          own name for the widget, because it is what the picker prints.
+
+          A receiver of its own, not a size of the one above. A receiver is how
+          Android identifies a kind of widget in the picker and in its own
+          bookkeeping, and the appwidget-provider metadata that gives this card
+          its square cell block hangs off it.
+        -->
+        <receiver
+            android:name=".recent.RecentlyAddedWidgetReceiver"
+            android:exported="false"
+            android:label="@string/widget_recently_added_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_recently_added_info" />
+        </receiver>
+
+        <!--
+          The pull widget's AppWidgetProvider.
+
+          The pull card has no buttons at all — the pack draws none, and
+          cancelling a pull is only legal in some of its states, so a widget
+          control for it would sometimes be a no-op on a surface that cannot say
+          why. Tapping the card opens Pulls. APPWIDGET_UPDATE is therefore not
+          just the only action declared but the only one there could be; see
+          PullWidget's KDoc.
+        -->
+        <receiver
+            android:name=".pulls.PullWidgetReceiver"
+            android:exported="false"
+            android:label="@string/widget_pulls_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_pull_info" />
         </receiver>
 
     </application>

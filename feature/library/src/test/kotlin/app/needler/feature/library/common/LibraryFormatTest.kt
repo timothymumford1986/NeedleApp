@@ -156,4 +156,139 @@ class LibraryFormatTest {
             ).showsOnDeviceCheck,
         )
     }
+
+    // ---- names the server did not send --------------------------------------
+
+    /**
+     * The device fault this section exists for.
+     *
+     * The album screen built six accessibility labels by concatenating `album.title`, and
+     * `Album.title` can be blank: `ReleaseItemDto.title` is nullable and
+     * `CatalogueMappers.album` maps it with `.orEmpty()`. With a blank title those read out as
+     * "Cancel the pull of ", "Play ", "Remove  from this device" - a dangling preposition and
+     * no identity at all, which is exactly what the audit found by reading the accessibility
+     * tree.
+     *
+     * It shipped because **every existing fixture supplied a title**. These do not.
+     */
+    @Test
+    fun `a title to draw falls back to a name, never to nothing`() {
+        assertEquals("Untitled album", LibraryFormat.albumTitle(null))
+        assertEquals("Untitled album", LibraryFormat.albumTitle(""))
+        assertEquals("Untitled album", LibraryFormat.albumTitle("   "))
+        assertEquals("Submarine", LibraryFormat.albumTitle("Submarine"))
+    }
+
+    @Test
+    fun `a title inside a sentence falls back to a phrase`() {
+        assertEquals("this album", LibraryFormat.albumLabel(null))
+        assertEquals("this album", LibraryFormat.albumLabel(""))
+        assertEquals("this album", LibraryFormat.albumLabel(" \t "))
+        assertEquals("Submarine", LibraryFormat.albumLabel("Submarine"))
+    }
+
+    /** Trimmed first, so `isEmpty` and `isBlank` cannot disagree about the same string. */
+    @Test
+    fun `a title is trimmed before it is judged and before it is returned`() {
+        assertEquals("Submarine", LibraryFormat.albumTitle("  Submarine  "))
+        assertEquals("Submarine", LibraryFormat.albumLabel("  Submarine  "))
+        assertEquals("The Marias", LibraryFormat.artistName("  The Marias "))
+        assertEquals("Sienna", LibraryFormat.trackTitle("\tSienna\n"))
+    }
+
+    @Test
+    fun `an artist and a track get the same treatment`() {
+        assertEquals("Unknown artist", LibraryFormat.artistName(""))
+        assertEquals("this artist", LibraryFormat.artistLabel("  "))
+        assertEquals("Untitled track", LibraryFormat.trackTitle(null))
+        assertEquals("this track", LibraryFormat.trackLabel(""))
+    }
+
+    /**
+     * No label built from any nameless fixture is blank, untrimmed, or ends in a preposition.
+     *
+     * A sweep rather than a list of cases, because the fault was never one label: it was six,
+     * and the seventh would have been added without a guard. Every sentence the album screen
+     * builds is reproduced here in the shape it is built in.
+     */
+    @Test
+    fun `no label built from a nameless album is blank, untrimmed or dangling`() {
+        val danglers: List<String> = listOf("of", "of ", "to", "by", "Play", "Remove", "Pull")
+        SampleLibrary.namelessAlbums.forEach { album ->
+            val label: String = LibraryFormat.albumLabel(album.title)
+            val sentences: List<String> = listOf(
+                "Play " + label,
+                "Shuffle " + label,
+                "Pull " + label,
+                "Cancel the pull of " + label,
+                "Retry the pull of " + label,
+                "On device. Remove " + label + " from this device",
+                "Pull local. Download " + label + " to this device",
+                "Go to " + LibraryFormat.artistLabel(album.artistName),
+            )
+            sentences.forEach { sentence ->
+                assertTrue("blank: '" + sentence + "'", sentence.isNotBlank())
+                assertEquals("untrimmed: '" + sentence + "'", sentence.trim(), sentence)
+                danglers.forEach { tail ->
+                    assertFalse(
+                        "ends in '" + tail + "': '" + sentence + "'",
+                        sentence.trimEnd().endsWith(" " + tail) || sentence.trimEnd() == tail,
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `a row subtitle names an unknown artist rather than starting with a separator`() {
+        SampleLibrary.namelessAlbums.forEach { album ->
+            val subtitle: String = LibraryFormat.albumRowSubtitle(album)
+            assertTrue(subtitle.isNotBlank())
+            assertFalse("starts with a separator: '" + subtitle + "'", subtitle.startsWith(" ·"))
+            assertTrue(subtitle.startsWith("Unknown artist"))
+        }
+    }
+
+    /**
+     * A song row is the one place a blank part is dropped rather than replaced.
+     *
+     * Its subtitle is optional context beside a title that is drawn anyway, so an empty one
+     * costs nothing - where "Unknown artist" on every row of a badly-tagged library would be
+     * noise on every line.
+     */
+    @Test
+    fun `a song row subtitle drops what it does not know`() {
+        assertEquals("", LibraryFormat.songRowSubtitle(SampleLibrary.untitledTracks.first()))
+    }
+
+    // ---- the format label, which no longer rests on hue ---------------------
+
+    /**
+     * REQUIREMENTS.md's palette table lists the positive green's uses as including "the FLAC
+     * badge", and on screen 13 the same green also means on-device - so lossless had no channel
+     * but hue, a WCAG 1.4.1 failure. The chip border carries it on screen; these are the words
+     * that carry it to a screen reader, because a border is nothing at all to one.
+     */
+    @Test
+    fun `the spoken format label says lossless or lossy in words`() {
+        assertEquals(
+            "FLAC, lossless",
+            albumFormatSpokenLabel(AudioQuality(AudioFormat.FLAC, null), onDevice = false),
+        )
+        assertEquals(
+            "MP3 320, lossy",
+            albumFormatSpokenLabel(AudioQuality(AudioFormat.MP3, 320), onDevice = false),
+        )
+        assertEquals(
+            "FLAC, lossless, on device",
+            albumFormatSpokenLabel(AudioQuality(AudioFormat.FLAC, null), onDevice = true),
+        )
+    }
+
+    @Test
+    fun `an unknown format has nothing to say and says nothing`() {
+        assertNull(albumFormatSpokenLabel(null, onDevice = false))
+        assertNull(albumFormatSpokenLabel(AudioQuality.Unknown, onDevice = true))
+        assertNull(albumFormatSpokenLabel(AudioQuality(AudioFormat.UNKNOWN, null), onDevice = false))
+    }
 }

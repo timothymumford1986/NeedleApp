@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
@@ -140,6 +141,34 @@ fun NeedlerNavigationScaffold(
                         WindowInsets.safeDrawing.only(
                             WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
                         ),
+                    )
+                    // The bottom safe area belongs to the chrome below, and this
+                    // line is what tells the content so.
+                    //
+                    // Window insets are measured from the *window*, not from the
+                    // composable reading them. This Box is weighted, so it ends
+                    // where the update banner begins - several hundred pixels
+                    // above the window's bottom edge - and yet a descendant
+                    // calling safeDrawingPadding() still saw the full
+                    // navigation-bar and IME inset and padded itself by it. The
+                    // region was therefore reserved twice: once by the banner,
+                    // mini-player and nav bar that physically occupy it, and
+                    // again inside the content.
+                    //
+                    // The visible cost was a dead band above the keyboard on
+                    // Search *and* a viewport short by the same amount, so the
+                    // last row rendered clipped through its own button and could
+                    // not be reached. Nine other destinations call
+                    // safeDrawingPadding() inside this slot and carried the same
+                    // band; it was only noticed where a keyboard made it large.
+                    //
+                    // consumeWindowInsets, not windowInsetsPadding: the padding
+                    // is already applied by the chrome. This only records that
+                    // fact for descendants, so the same safeDrawingPadding()
+                    // call now contributes nothing at the bottom and stays
+                    // correct on a screen composed outside this scaffold.
+                    .consumeWindowInsets(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom),
                     ),
             ) {
                 content()

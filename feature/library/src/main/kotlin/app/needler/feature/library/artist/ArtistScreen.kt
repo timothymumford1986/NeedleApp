@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalLayoutApi::class)
+
 package app.needler.feature.library.artist
 
 import app.needler.core.domain.model.NeedlerError
@@ -6,6 +8,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,19 +35,30 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumRow
+import app.needler.core.design.component.NeedlerButtonSize
+import app.needler.core.design.component.NeedlerButtonTone
 import app.needler.core.design.component.NeedlerIconButton
+import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerPullButton
+import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerSectionHeader
 import app.needler.core.design.component.NeedlerStateBadge
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.PathChevronLeft
+import app.needler.core.design.component.PathPlay
+import app.needler.core.design.component.PathPull
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.feature.library.common.AlbumArtwork
+import app.needler.feature.library.common.AlbumFormatLabel
+import app.needler.feature.library.common.FavouriteButton
 import app.needler.feature.library.common.LibraryFormat
+import app.needler.feature.library.common.RequestSheet
+import app.needler.feature.library.common.RequestSheetState
 import app.needler.feature.library.common.albumBadge
+import app.needler.feature.library.common.albumFormatSpokenLabel
 import app.needler.feature.library.common.showsOnDeviceCheck
 
 /**
@@ -57,6 +72,35 @@ import app.needler.feature.library.common.showsOnDeviceCheck
  * When the catalogue half cannot be fetched the first half is still drawn, with
  * one line saying why the rest is missing. Failing the whole screen because the
  * optional half of it needs a connection would defeat the mirror.
+ *
+ * ## Play, Shuffle and a star
+ *
+ * This screen had none of the three. The album screen had Play, Shuffle and Pull
+ * local, which the device audit noted made the omission starker rather than
+ * smaller. Play and Shuffle act on every playable track of every owned album, in
+ * the order this screen lists them; the star is the same binary favourite an album
+ * and a track now carry, and `getStarred2` returns starred artists alongside both.
+ *
+ * Pull local is deliberately **not** here. Pinning is per album - `PinRepository`
+ * is keyed on a release group and REQUIREMENTS.md's storage rules are written per
+ * album - so an artist-wide pin would be a new concept rather than a missing
+ * button, and it would silently commit a listener to however many gigabytes that
+ * artist happens to be.
+ *
+ * ## An un-owned artist is not a dead end
+ *
+ * Catalogue search returns artists the library has never heard of, labels them "Not in
+ * your library yet", and invites the tap. That tap used to land on "That artist is not
+ * here" - a screen with the artist unnamed, no action but Back, and a sentence blaming
+ * the network for a catalogue lookup that had plainly succeeded seconds earlier.
+ *
+ * Three things follow from fixing it, and they are the same three for an owned artist
+ * whose DroppedNeedle id can never be an MBID, because both are "the discography could
+ * not be listed" and differ only in why. The artist is **named** from the route when the
+ * mirror has no row. The reason is **stated honestly**, never as a network failure unless
+ * it was one. And a **Pull all** stays on screen wherever there is an un-owned release
+ * to ask for, because REQUIREMENTS.md "Scope" lists requesting missing albums as one of
+ * v1's four jobs and this is the screen that job starts from.
  */
 @Composable
 fun ArtistScreen(
@@ -65,6 +109,15 @@ fun ArtistScreen(
     onBack: () -> Unit,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onPull: (Album) -> Unit,
+    onPullArtist: () -> Unit,
+    onRetryDiscography: () -> Unit,
+    onPlay: () -> Unit,
+    onShuffle: () -> Unit,
+    onPlayAlbum: (ReleaseGroupMbid) -> Unit,
+    onToggleFavourite: () -> Unit,
+    onMonitorArtistChange: (Boolean) -> Unit,
+    onConfirmRequest: () -> Unit,
+    onDismissRequestSheet: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = NeedlerTheme.colors
@@ -72,97 +125,232 @@ fun ArtistScreen(
     val wide: Boolean = widthSizeClass == WindowWidthSizeClass.Expanded
     val gutter: Dp = if (wide) spacing.tabletGutter else spacing.phoneGutter
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(colors.canvas)
-            .safeDrawingPadding(),
-    ) {
-        Row(
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = gutter - 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxSize()
+                .background(colors.canvas)
+                .safeDrawingPadding(),
         ) {
-            NeedlerIconButton(contentDescription = "Back", onClick = onBack) {
-                NeedlerStrokeIcon(
-                    pathData = PathChevronLeft,
-                    tint = colors.textPrimary,
-                    size = 24.dp,
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = gutter - 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NeedlerIconButton(contentDescription = "Back", onClick = onBack) {
+                    NeedlerStrokeIcon(
+                        pathData = PathChevronLeft,
+                        tint = colors.textPrimary,
+                        size = 24.dp,
+                    )
+                }
+                // Only for an artist the mirror actually has. `star` on an artist the server
+                // has never heard of would be a write it cannot key, and `getStarred2` would
+                // never return it - so the control is absent rather than present and futile.
+                if (state.artist != null) {
+                    FavouriteButton(
+                        isFavourite = state.isFavourite,
+                        name = state.spokenName,
+                        onToggle = onToggleFavourite,
+                        visualSize = 44.dp,
+                        glyphSize = 22.dp,
+                    )
+                }
+            }
+
+            when {
+                state.loading -> ArtistSkeleton(gutter = gutter)
+                state.notFound -> ArtistNotFound(
+                    gutter = gutter,
+                    reason = if (state.discographyUnavailable) {
+                        catalogueNoticeMessage(
+                            error = state.discographyError,
+                            offline = state.offline,
+                            notInCatalogue = state.artistNotInCatalogue,
+                        )
+                    } else {
+                        null
+                    },
                 )
+                else -> LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = gutter,
+                        end = gutter,
+                        bottom = spacing.step12,
+                    ),
+                ) {
+                    item(key = "header") { ArtistHeader(state) }
+
+                    if (state.canPlay || state.canPullArtist || state.canRetryDiscography) {
+                        item(key = "actions") {
+                            Spacer(modifier = Modifier.height(NeedlerTheme.spacing.step5))
+                            ArtistActions(
+                                state = state,
+                                onPlay = onPlay,
+                                onShuffle = onShuffle,
+                                onPullArtist = onPullArtist,
+                                onRetryDiscography = onRetryDiscography,
+                            )
+                        }
+                    }
+
+                    if (state.notice != null) {
+                        item(key = "notice") { NoticeLine(message = state.notice.message) }
+                    }
+
+                    if (state.ownedAlbums.isNotEmpty()) {
+                        item(key = "owned-header") {
+                            SectionSpacer()
+                            NeedlerSectionHeader(
+                                title = "In your library",
+                                trailing = LibraryFormat.plural(
+                                    state.ownedAlbums.size.toLong(),
+                                    "album",
+                                ),
+                            )
+                        }
+                        ownedRows(
+                            albums = state.ownedAlbums,
+                            onAlbumClick = onAlbumClick,
+                            onPlayAlbum = onPlayAlbum,
+                        )
+                    }
+
+                    if (state.catalogueAlbums.isNotEmpty()) {
+                        item(key = "catalogue-header") {
+                            SectionSpacer()
+                            NeedlerSectionHeader(title = "More from this artist")
+                        }
+                        catalogueRows(
+                            albums = state.catalogueAlbums,
+                            busy = state.busy,
+                            onAlbumClick = onAlbumClick,
+                            onPull = onPull,
+                        )
+                    }
+
+                    if (state.discographyUnavailable) {
+                        item(key = "catalogue-unavailable") {
+                            SectionSpacer()
+                            NoticeLine(
+                                message = catalogueNoticeMessage(
+                                    error = state.discographyError,
+                                    offline = state.offline,
+                                    notInCatalogue = state.artistNotInCatalogue,
+                                ),
+                            )
+                        }
+                    }
+
+                    if (state.hasNothing && !state.discographyUnavailable) {
+                        item(key = "empty") {
+                            SectionSpacer()
+                            Text(
+                                text = "Nothing by this artist has been synced or found yet.",
+                                style = NeedlerTheme.typography.body,
+                                color = NeedlerTheme.colors.textSecondary,
+                            )
+                        }
+                    }
+                }
             }
         }
 
-        when {
-            state.loading -> ArtistSkeleton(gutter = gutter)
-            state.notFound -> ArtistNotFound(gutter = gutter)
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(
-                    start = gutter,
-                    end = gutter,
-                    bottom = spacing.step12,
-                ),
-            ) {
-                item(key = "header") { ArtistHeader(state) }
+        val sheet: RequestSheetState? = state.requestSheet
+        if (sheet != null) {
+            RequestSheet(
+                sheet = sheet,
+                busy = state.busy,
+                onMonitorArtistChange = onMonitorArtistChange,
+                onConfirm = onConfirmRequest,
+                onCancel = onDismissRequestSheet,
+            )
+        }
+    }
+}
 
-                if (state.notice != null) {
-                    item(key = "notice") { NoticeLine(message = state.notice.message) }
-                }
-
-                if (state.ownedAlbums.isNotEmpty()) {
-                    item(key = "owned-header") {
-                        SectionSpacer()
-                        NeedlerSectionHeader(
-                            title = "In your library",
-                            trailing = LibraryFormat.plural(
-                                state.ownedAlbums.size.toLong(),
-                                "album",
-                            ),
-                        )
-                    }
-                    ownedRows(
-                        albums = state.ownedAlbums,
-                        onAlbumClick = onAlbumClick,
-                    )
-                }
-
-                if (state.catalogueAlbums.isNotEmpty()) {
-                    item(key = "catalogue-header") {
-                        SectionSpacer()
-                        NeedlerSectionHeader(title = "More from this artist")
-                    }
-                    catalogueRows(
-                        albums = state.catalogueAlbums,
-                        busy = state.busy,
-                        onAlbumClick = onAlbumClick,
-                        onPull = onPull,
-                    )
-                }
-
-                if (state.discographyUnavailable) {
-                    item(key = "catalogue-unavailable") {
-                        SectionSpacer()
-                        NoticeLine(
-                            message = catalogueNoticeMessage(
-                                error = state.discographyError,
-                                offline = state.offline,
-                            ),
-                        )
-                    }
-                }
-
-                if (state.hasNothing && !state.discographyUnavailable) {
-                    item(key = "empty") {
-                        SectionSpacer()
-                        Text(
-                            text = "Nothing by this artist has been synced or found yet.",
-                            style = NeedlerTheme.typography.body,
-                            color = NeedlerTheme.colors.textSecondary,
-                        )
-                    }
-                }
-            }
+/**
+ * Everything this screen can do about the artist as a whole.
+ *
+ * Three actions, each present only when it can succeed, and between them they mean this
+ * screen is never a dead end: **Play** and **Shuffle** when there is something owned to
+ * play, **Pull all** when the catalogue knows un-owned releases to ask for, and **Try
+ * again** when the discography could not be listed but might be next time.
+ *
+ * The one case with none of them is an artist whose whole discography is already in the
+ * library and whose id can never reach the catalogue — and that screen is a full list of
+ * their records, which is not a dead end either.
+ *
+ * A `FlowRow` for the same reason the library's controls are one: at 200% text the
+ * labels no longer fit across a 390dp phone, and REQUIREMENTS.md "Accessibility"
+ * requires text to scale to 200% without clipping. Every button is the album screen's
+ * own `Medium` size, so the two screens' primary actions are the same shape and weight.
+ */
+@Composable
+private fun ArtistActions(
+    state: ArtistUiState,
+    onPlay: () -> Unit,
+    onShuffle: () -> Unit,
+    onPullArtist: () -> Unit,
+    onRetryDiscography: () -> Unit,
+) {
+    val spacing = NeedlerTheme.spacing
+    val name: String = state.spokenName
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing.step4),
+        verticalArrangement = Arrangement.spacedBy(spacing.step4),
+    ) {
+        if (state.canPlay) {
+            NeedlerPrimaryButton(
+                text = "Play",
+                onClick = onPlay,
+                size = NeedlerButtonSize.Medium,
+                enabled = !state.busy,
+                leadingIcon = { tint ->
+                    NeedlerStrokeIcon(pathData = PathPlay, tint = tint, size = 18.dp, filled = true)
+                },
+                contentDescription = "Play everything by " + name + " in your library",
+            )
+            NeedlerSecondaryButton(
+                text = "Shuffle",
+                onClick = onShuffle,
+                size = NeedlerButtonSize.Medium,
+                enabled = !state.busy,
+                contentDescription = "Shuffle everything by " + name + " in your library",
+            )
+        }
+        // The pack's one filled green button is the pull, and it is green because acquiring
+        // music is not playback. On an artist nobody owns this is the only primary action
+        // there is, which is the point: the route used to end here with a Back button.
+        if (state.canPullArtist) {
+            NeedlerPrimaryButton(
+                text = "Pull all",
+                onClick = onPullArtist,
+                tone = NeedlerButtonTone.Positive,
+                size = NeedlerButtonSize.Medium,
+                enabled = !state.busy,
+                leadingIcon = { tint ->
+                    NeedlerStrokeIcon(pathData = PathPull, tint = tint, size = 18.dp)
+                },
+                contentDescription = "Pull all " + state.pullableAlbums.size +
+                    " albums by " + name + " that you do not own",
+            )
+        }
+        // Offered only where retrying could work. An artist whose id can never reach the
+        // catalogue is excluded, because a button that re-issues a request the server answers
+        // 400 to is worse than no button.
+        if (state.canRetryDiscography) {
+            NeedlerSecondaryButton(
+                text = "Try again",
+                onClick = onRetryDiscography,
+                size = NeedlerButtonSize.Medium,
+                enabled = !state.busy,
+                contentDescription = "Look up " + name + " in the catalogue again",
+            )
         }
     }
 }
@@ -173,7 +361,12 @@ private fun ArtistHeader(state: ArtistUiState) {
     val typography = NeedlerTheme.typography
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            text = state.artist?.name.orEmpty(),
+            // `state.artist?.name.orEmpty()` drew a blank heading twice over: for an
+            // artist the server named with nothing, and - far more often - for an artist
+            // reached from catalogue search, who has no mirror row at all. `displayName`
+            // falls back to the name the caller passed and then to "Unknown artist", so
+            // this line is never empty. You tapped a name; the screen owes you that name.
+            text = state.displayName,
             style = typography.display,
             color = colors.textPrimary,
             modifier = Modifier.semantics { heading() },
@@ -189,44 +382,54 @@ private fun ArtistHeader(state: ArtistUiState) {
     }
 }
 
+/**
+ * The owned half: one row per album in the library, each with a play button.
+ *
+ * The play button is here for the same reason the library's list rows gained one -
+ * "same content, different capability" was the device audit's phrase - and these
+ * rows draw exactly the content the library's list view draws. Both now use
+ * [AlbumFormatLabel] and both put a 48dp-target play control in the trailing slot,
+ * so an album row behaves the same way whichever screen it is on.
+ */
 private fun LazyListScope.ownedRows(
     albums: List<Album>,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
+    onPlayAlbum: (ReleaseGroupMbid) -> Unit,
 ) {
     items(
         count = albums.size,
         key = { index -> "owned-" + albums[index].releaseGroupMbid.value },
     ) { index ->
         val album: Album = albums[index]
-        val format: String? = LibraryFormat.quality(album.quality)
         val onDevice: Boolean = album.showsOnDeviceCheck
+        val title: String = LibraryFormat.albumTitle(album.title)
         NeedlerAlbumRow(
-            title = album.title,
+            title = title,
             subtitle = LibraryFormat.albumRowSubtitle(album),
             onClick = { onAlbumClick(album.releaseGroupMbid) },
             showDivider = true,
             contentDescription = buildString {
-                append(album.title)
+                append(title)
                 append(", ")
                 append(LibraryFormat.albumRowSubtitle(album))
-                if (format != null) {
+                albumFormatSpokenLabel(album.quality, onDevice)?.let {
                     append(", ")
-                    append(format)
+                    append(it)
                 }
-                if (onDevice) append(", on device")
             },
             artwork = { AlbumRowArtwork(album) },
             trailing = {
-                if (format != null) {
-                    Text(
-                        text = format,
-                        style = NeedlerTheme.typography.caption,
-                        color = if (onDevice) {
-                            NeedlerTheme.colors.positive
-                        } else {
-                            NeedlerTheme.colors.textMuted
-                        },
-                        maxLines = 1,
+                AlbumFormatLabel(quality = album.quality, onDevice = onDevice)
+                NeedlerIconButton(
+                    contentDescription = "Play " + title,
+                    onClick = { onPlayAlbum(album.releaseGroupMbid) },
+                    visualSize = 32.dp,
+                ) {
+                    NeedlerStrokeIcon(
+                        pathData = PathPlay,
+                        tint = NeedlerTheme.colors.accent,
+                        size = 16.dp,
+                        filled = true,
                     )
                 }
             },
@@ -245,8 +448,9 @@ private fun LazyListScope.catalogueRows(
         key = { index -> "catalogue-" + albums[index].releaseGroupMbid.value },
     ) { index ->
         val album: Album = albums[index]
+        val title: String = LibraryFormat.albumTitle(album.title)
         NeedlerAlbumRow(
-            title = album.title,
+            title = title,
             subtitle = LibraryFormat.albumRowSubtitle(album),
             onClick = { onAlbumClick(album.releaseGroupMbid) },
             showDivider = true,
@@ -259,7 +463,9 @@ private fun LazyListScope.catalogueRows(
                 if (album.state == AlbumState.NotOwned) {
                     NeedlerPullButton(
                         onClick = { onPull(album) },
-                        albumTitle = album.title,
+                        // The pill builds "Pull <title>" from this, so a blank title
+                        // would have read out as "Pull ".
+                        albumTitle = LibraryFormat.albumLabel(album.title),
                         enabled = !busy,
                     )
                 } else {
@@ -270,11 +476,25 @@ private fun LazyListScope.catalogueRows(
     }
 }
 
+/**
+ * The row thumbnail, sized to the row it sits in.
+ *
+ * `artworkRow` (56dp), not `artworkThumbLarge` (52dp). The pack pairs each row
+ * height with one artwork size — 64dp crate row to 48dp artwork, 76dp library list
+ * row to 52dp, 72dp search-result row to 56dp — and these rows are the 72dp
+ * search-result row, which `NeedlerAlbumRow`'s default `minHeight` gives them. Using
+ * the library list's 52dp inside it produced a fourth ratio that exists nowhere in
+ * the design, and on a device it reads as the thumbnails stepping between this
+ * screen and the library's list view for no reason a user could name.
+ *
+ * The 10dp `artworkThumb` corner covers 48-56dp thumbnails, so the radius is right
+ * for both and does not change with the size.
+ */
 @Composable
 private fun AlbumRowArtwork(album: Album) {
     AlbumArtwork(
         album = album,
-        modifier = Modifier.size(NeedlerTheme.sizes.artworkThumbLarge),
+        modifier = Modifier.size(NeedlerTheme.sizes.artworkRow),
         shape = NeedlerTheme.shapes.artworkThumb,
         decorative = true,
     )
@@ -335,8 +555,10 @@ private fun ArtistSkeleton(gutter: Dp) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
+                    // The same 56dp the real rows draw, so the layout does not step when
+                    // the mirror answers. See [AlbumRowArtwork].
                     modifier = Modifier
-                        .size(NeedlerTheme.sizes.artworkThumbLarge)
+                        .size(NeedlerTheme.sizes.artworkRow)
                         .clip(NeedlerTheme.shapes.artworkThumb)
                         .background(colors.surface),
                 )
@@ -352,8 +574,22 @@ private fun ArtistSkeleton(gutter: Dp) {
     }
 }
 
+/**
+ * Nothing at all: no mirror row, no name from the caller, no albums either way.
+ *
+ * ## The sentence this replaces was untrue
+ *
+ * It read "They are not in the mirror on this device, and the catalogue could not be reached to look
+ * them up", and it said so unconditionally. Reached from catalogue search that is false twice over:
+ * the catalogue had been reached seconds earlier - that is how search found the artist - and the
+ * screen was blaming a network failure for a lookup that had in fact succeeded. Only [reason] can say
+ * the catalogue was unreachable, and it is only non-null when it actually was.
+ *
+ * @param reason the catalogue's own explanation when there is one, from [catalogueNoticeMessage].
+ *   Null means the catalogue answered and simply had nothing, which is a different sentence.
+ */
 @Composable
-private fun ArtistNotFound(gutter: Dp) {
+private fun ArtistNotFound(gutter: Dp, reason: String?) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     Column(
@@ -369,13 +605,21 @@ private fun ArtistNotFound(gutter: Dp) {
             modifier = Modifier.semantics { heading() },
         )
         Text(
-            text = "They are not in the mirror on this device, and the catalogue could not be " +
-                "reached to look them up.",
+            text = reason ?: ARTIST_NOT_LISTED,
             style = typography.body,
             color = colors.textSecondary,
         )
     }
 }
+
+/**
+ * What to say when the catalogue answered and had nothing.
+ *
+ * It states what is true - nothing on this device is by them, and no discography came back - and it
+ * names neither the network nor the mirror as the culprit, because on this path neither failed.
+ */
+internal const val ARTIST_NOT_LISTED: String =
+    "Nothing on this device is by them, and no discography came back for them either."
 
 internal const val CATALOGUE_OFFLINE: String =
     "The rest of this artist's discography needs a connection. What you own is listed above " +
@@ -393,13 +637,34 @@ internal const val CATALOGUE_OFFLINE: String =
  * its KDoc says it is never shown raw to the user; it belongs in the log, which is where
  * [ArtistViewModel] now writes it.
  */
-internal fun catalogueNoticeMessage(error: NeedlerError?, offline: Boolean): String = when {
+internal fun catalogueNoticeMessage(
+    error: NeedlerError?,
+    offline: Boolean,
+    notInCatalogue: Boolean = false,
+): String = when {
+    // First, and ahead of `offline`, because this one does not change when the
+    // connection comes back. Telling someone to try again later about a discography
+    // that will never be fetchable is the failure this sentence replaces.
+    notInCatalogue -> CATALOGUE_NO_MBID
     offline || error is NeedlerError.Offline -> CATALOGUE_OFFLINE
     error is NeedlerError.NotFound -> CATALOGUE_NOT_IN_CATALOGUE
     error is NeedlerError.ServerError -> CATALOGUE_SERVER_ERROR
     error is NeedlerError.RateLimited -> CATALOGUE_RATE_LIMITED
     else -> CATALOGUE_UNAVAILABLE
 }
+
+/**
+ * The sentence for an artist whose id was never a MusicBrainz one.
+ *
+ * It says what is true — the server matched this artist by name, so there is no
+ * discography to fetch — and it does not invite a retry, because there is nothing to
+ * retry. The wording deliberately avoids "MBID" and "UUID": the fact that matters to
+ * a listener is that their server could not identify this artist, not which flavour
+ * of identifier it minted instead.
+ */
+internal const val CATALOGUE_NO_MBID: String =
+    "Your server matched this artist by name rather than to MusicBrainz, so there is no full " +
+        "discography to look up. Everything you own by them is listed above."
 
 internal const val CATALOGUE_NOT_IN_CATALOGUE: String =
     "The catalogue has nothing else for this artist. What you own is listed above."

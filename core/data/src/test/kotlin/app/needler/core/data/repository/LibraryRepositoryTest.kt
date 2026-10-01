@@ -31,7 +31,9 @@ import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.ArtworkRef
 import app.needler.core.domain.model.Genre
 import app.needler.core.domain.model.LibraryStats
+import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineDownloadState
+import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.StatsSource
 import app.needler.core.domain.model.Track
@@ -92,6 +94,17 @@ public class LibraryRepositoryTest {
     )
 
     private val catalogueOnly = "11111111-2222-3333-4444-555555555555"
+
+    /**
+     * The id from the device log: a UUID v5, third group `5e80`.
+     *
+     * DroppedNeedle derived it from the artist's name, so the catalogue lane refuses it and
+     * always will.
+     */
+    private val NAME_DERIVED_ARTIST = "8cfce742-445e-5e80-93a8-d8f924d56984"
+
+    /** A version 4 UUID, which is what MusicBrainz mints. */
+    private val REAL_ARTIST_MBID = "b3d01a12-9d1d-4e4e-9b1a-7a2f2b49a2c9"
 
     // -------------------------------------------------------------------- reading
 
@@ -496,6 +509,112 @@ public class LibraryRepositoryTest {
             assertTrue(result is app.needler.core.domain.model.Outcome.Failure)
             assertEquals(1, repository.observeOwnedAlbumsByArtist(ArtistMbid(ARTIST_MBID)).first().size)
         }
+
+    /**
+     * A DroppedNeedle name-derived artist id never reaches the catalogue.
+     *
+     * The device log was full of
+     * `Rejected 400: Use the local library artist route for a DroppedNeedle artist ID` for
+     * `8cfce742-445e-5e80-93a8-d8f924d56984` - a UUID v5, so name-derived, so permanently
+     * unacceptable to a route that resolves against MusicBrainz. The fix is not to handle the
+     * 400 more gracefully; it is not to make the call. `v1.calls` being empty is the assertion
+     * that matters.
+     */
+    @Test
+    public fun `a name-derived artist id never reaches the catalogue route`(): Unit = runTest {
+        albumDao.rows[RG] = albumRow()
+
+        val result = repository.refreshArtistDiscography(ArtistMbid(NAME_DERIVED_ARTIST))
+
+        assertTrue(result is Outcome.Failure)
+        val error = (result as Outcome.Failure).error
+        assertTrue(error is NeedlerError.CapabilityUnavailable)
+        // Not retryable, so a write-queue entry carrying it is dropped rather than replayed
+        // against a route that will refuse it for ever.
+        assertFalse(error.isRetryable)
+        assertTrue("the catalogue was called anyway: " + v1.calls, v1.calls.isEmpty())
+        // And the owned half is untouched, exactly as for any other discography failure.
+        assertEquals(1, repository.observeOwnedAlbumsByArtist(ArtistMbid(ARTIST_MBID)).first().size)
+    }
+
+    @Test
+    public fun `a real MusicBrainz artist id does reach the catalogue route`(): Unit = runTest {
+        repository.refreshArtistDiscography(ArtistMbid(REAL_ARTIST_MBID))
+
+        assertTrue(v1.calls.any { it.startsWith("artistReleases(") })
+    }
+
+    // ------------------------------------------------------------------ favourites
+
+    /**
+     * A track row carries its starred state.
+     *
+     * It did not, and the absence was invisible in the worst way: `Track.isFavourite` defaults
+     * to false, so every track on album detail read as un-starred whatever the mirror held, and
+     * a star the user had tapped came back off next time the screen opened. REQUIREMENTS.md
+     * "Playlists" makes binary favourites the supported mechanism; a read path that drops the
+     * answer cannot offer it honestly.
+     */
+    @Test
+    public fun `album tracks carry whether each one is starred`(): Unit = runTest {
+        albumDao.rows[RG] = albumRow()
+        trackDao.rows["$RG/1/1"] = trackRow(track = 1)
+        trackDao.rows["$RG/1/2"] = trackRow(track = 2)
+        favouriteDao.rows["track/$RG/1/2"] = FavouriteEntity(
+            entityType = FavouriteTypeDb.TRACK,
+            entityId = "$RG/1/2",
+            starredAt = NOW,
+            releaseGroupMbid = RG,
+            discNo = 1,
+            trackNo = 2,
+        )
+
+        val tracks: List<Track> = repository.observeAlbumTracks(ReleaseGroupMbid(RG)).first()
+
+        assertEquals(2, tracks.size)
+        assertFalse(tracks.first { it.key.trackNumber == 1 }.isFavourite)
+        assertTrue(tracks.first { it.key.trackNumber == 2 }.isFavourite)
+    }
+
+    /** A star on a track of a *different* album must not leak onto this one. */
+    @Test
+    public fun `a star on another album's track does not mark this one`(): Unit = runTest {
+        albumDao.rows[RG] = albumRow()
+        trackDao.rows["$RG/1/1"] = trackRow(track = 1)
+        favouriteDao.rows["track/$catalogueOnly/1/1"] = FavouriteEntity(
+            entityType = FavouriteTypeDb.TRACK,
+            entityId = "$catalogueOnly/1/1",
+            starredAt = NOW,
+            releaseGroupMbid = catalogueOnly,
+            discNo = 1,
+            trackNo = 1,
+        )
+
+        val tracks: List<Track> = repository.observeAlbumTracks(ReleaseGroupMbid(RG)).first()
+
+        assertFalse(tracks.single().isFavourite)
+    }
+
+    /** Disc and track are both part of the key, so track 1 of disc 2 is not track 1 of disc 1. */
+    @Test
+    public fun `a star is matched on disc as well as track number`(): Unit = runTest {
+        albumDao.rows[RG] = albumRow()
+        trackDao.rows["$RG/1/1"] = trackRow(disc = 1, track = 1)
+        trackDao.rows["$RG/2/1"] = trackRow(disc = 2, track = 1)
+        favouriteDao.rows["track/$RG/2/1"] = FavouriteEntity(
+            entityType = FavouriteTypeDb.TRACK,
+            entityId = "$RG/2/1",
+            starredAt = NOW,
+            releaseGroupMbid = RG,
+            discNo = 2,
+            trackNo = 1,
+        )
+
+        val tracks: List<Track> = repository.observeAlbumTracks(ReleaseGroupMbid(RG)).first()
+
+        assertFalse(tracks.first { it.key.discNumber == 1 }.isFavourite)
+        assertTrue(tracks.first { it.key.discNumber == 2 }.isFavourite)
+    }
 
     // ------------------------------------------------------------------- refresh
 

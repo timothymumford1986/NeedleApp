@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The picture the Android 12+ widget picker shows before the pull widget is
+  placed.
+
+  A static layout, not a Glance composition, for the reason
+  widget_recently_added_preview.xml gives: the picker has no app process, no Hilt
+  graph and no mirror to read.
+
+  It draws the **resting card** — the muted glyph, an em dash, "Nothing pulling"
+  and the empty track. That is the honest preview twice over: it is what the card
+  shows nearly all the time (REQUIREMENTS.md "Widgets": no network and no
+  activity "is their most common state"), and a picker advertising "62%" would be
+  showing progress on a pull the user has not placed. The green is absent for the
+  same reason it is absent on the resting card — it means the server is working.
+
+  Only views RemoteViews supports are used, because a preview layout has the same
+  restrictions as the widget itself.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_card"
+    android:minHeight="140dp"
+    android:orientation="vertical"
+    android:padding="14dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:contentDescription="@null"
+            android:src="@drawable/widget_ic_pull_idle" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="end"
+            android:maxLines="1"
+            android:text="@string/widget_pulls_eyebrow"
+            android:textColor="@color/needler_widget_text_secondary"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+
+    <!-- The pack's `justify-content: space-between`, as a weighted gap. -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxLines="1"
+        android:text="@string/widget_pull_unknown_percent"
+        android:textColor="@color/needler_widget_text_muted"
+        android:textSize="36sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:maxLines="1"
+        android:text="@string/widget_pull_idle"
+        android:textColor="@color/needler_widget_text_primary"
+        android:textSize="13sp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="4dp"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/widget_progress_track" />
+
+</LinearLayout>

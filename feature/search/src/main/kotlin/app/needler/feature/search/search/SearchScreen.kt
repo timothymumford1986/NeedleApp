@@ -9,14 +9,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.text.KeyboardActions
@@ -24,9 +28,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -34,6 +45,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumBadge
@@ -42,6 +54,7 @@ import app.needler.core.design.component.NeedlerChevronRightIcon
 import app.needler.core.design.component.NeedlerHairline
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerPullButton
+import app.needler.core.design.component.NeedlerRequestSheetOverlay
 import app.needler.core.design.component.NeedlerSearchField
 import app.needler.core.design.component.NeedlerSearchIcon
 import app.needler.core.design.component.NeedlerSectionHeader
@@ -54,6 +67,7 @@ import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.SearchSuggestion
 import app.needler.core.domain.model.SuggestionKind
 import app.needler.core.domain.model.Track
@@ -65,6 +79,7 @@ import app.needler.feature.search.common.TrackArtwork
 import app.needler.feature.search.common.albumBadge
 import app.needler.feature.search.common.hasPlayableFile
 import app.needler.feature.search.common.showsOnDeviceCheck
+import kotlin.math.roundToInt
 
 /**
  * The Search screen: `design/html/03-Search.html` on a phone and
@@ -88,9 +103,13 @@ import app.needler.feature.search.common.showsOnDeviceCheck
  * on this screen asks which server lane it came from. That is REQUIREMENTS.md's
  * identity model doing its job: "an album found by catalogue search and an album
  * already in the library are the same domain object at different states". So the
- * four different trailing treatments screen 03 shows in one block — **On
- * device**, **In library**, **Pulling**, and a **Pull** button — are four values
- * of [AlbumState] and not four kinds of result.
+ * four different trailing treatments screen 03 shows — **On device**, **In
+ * library**, **Pulling**, and a **Pull** button — are four values of
+ * [AlbumState] and not four kinds of result.
+ *
+ * The albums are drawn in two blocks all the same, split on that state and never
+ * on the lane: what the server has, above the songs, and what would have to be
+ * pulled, below them. See [SearchUiState] for why the un-split list had to go.
  *
  * ## What the screen says when half of it is missing
  *
@@ -117,6 +136,11 @@ fun SearchScreen(
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
     onPlayTrack: (Track) -> Unit,
+    onShowAll: (SearchBucket) -> Unit,
+    onLoadMore: (SearchBucket) -> Unit,
+    onMonitorArtistChange: (Boolean) -> Unit,
+    onConfirmPull: () -> Unit,
+    onCancelPull: () -> Unit,
     onDismissNotice: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -130,91 +154,199 @@ fun SearchScreen(
     val sectionGap: Dp = if (wide) spacing.step12 else spacing.step11
     val headerGap: Dp = if (wide) spacing.step6 else spacing.step5
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(colors.canvas)
-            .safeDrawingPadding(),
-    ) {
-        SearchHeader(
-            state = state,
-            wide = wide,
-            gutter = gutter,
-            onQueryChange = onQueryChange,
-            onClearQuery = onClearQuery,
-            onSubmitQuery = onSubmitQuery,
-            onCancel = onCancel,
-        )
+    // How much of the window's bottom safe area is actually underneath the list.
+    // See listBottomInset: this is the measurement Compose's own inset modifiers
+    // cannot make, and without it the keyboard costs this screen 200px of dead
+    // space and half a row.
+    val chromeBelowList = remember { mutableStateOf(0) }
+    val bottomInset: Dp = listBottomInset(chromeBelowList.value)
 
-        LazyColumn(
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentPadding = PaddingValues(
-                start = gutter,
-                end = gutter,
-                top = if (wide) spacing.step12 else spacing.step10,
-                bottom = spacing.step12,
-            ),
+                .fillMaxSize()
+                .background(colors.canvas)
+                // Top and sides only. The bottom is this screen's own business and is
+                // handled on the list, because whatever the host has put below this
+                // screen - a mini-player, a bottom navigation bar - already stands
+                // between the list and the bottom of the window.
+                .windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
+                    ),
+                ),
         ) {
-            // Read out of the state once, into locals: `catalogueNote` is a
-            // computed property, so re-reading it inside an item lambda would
-            // both recompute it and defeat the null check above it.
-            val notice: SearchNotice? = state.notice
-            val catalogueNote: String? = state.catalogueNote
+            SearchHeader(
+                state = state,
+                wide = wide,
+                gutter = gutter,
+                onQueryChange = onQueryChange,
+                onClearQuery = onClearQuery,
+                onSubmitQuery = onSubmitQuery,
+                onCancel = onCancel,
+            )
 
-            if (notice != null) {
-                item(key = "notice") {
-                    NoticeLine(
-                        message = notice.message,
-                        isProblem = notice.isProblem,
-                        onDismiss = onDismissNotice,
-                    )
-                    Spacer(modifier = Modifier.height(headerGap))
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .onGloballyPositioned { coordinates ->
+                        val root: LayoutCoordinates = coordinates.findRootCoordinates()
+                        val listBottom: Float =
+                            coordinates.positionInRoot().y + coordinates.size.height
+                        chromeBelowList.value =
+                            (root.size.height - listBottom).roundToInt().coerceAtLeast(0)
+                    },
+                contentPadding = PaddingValues(
+                    start = gutter,
+                    end = gutter,
+                    top = if (wide) spacing.step12 else spacing.step10,
+                    // The list's own trailing space, plus however much of the window's
+                    // bottom safe area - the keyboard, above all - is underneath it.
+                    bottom = spacing.step12 + bottomInset,
+                ),
+            ) {
+                // Read out of the state once, into locals: `catalogueNote` is a
+                // computed property, so re-reading it inside an item lambda would
+                // both recompute it and defeat the null check above it.
+                val notice: SearchNotice? = state.notice
+                val catalogueNote: String? = state.catalogueNote
+
+                if (notice != null) {
+                    item(key = "notice") {
+                        NoticeLine(
+                            message = notice.message,
+                            isProblem = notice.isProblem,
+                            onDismiss = onDismissNotice,
+                        )
+                        Spacer(modifier = Modifier.height(headerGap))
+                    }
                 }
-            }
 
-            if (catalogueNote != null) {
-                item(key = "catalogue-note") {
-                    NoticeLine(
-                        message = catalogueNote,
-                        isProblem = state.catalogueNoteIsProblem,
-                        onDismiss = null,
-                    )
-                    Spacer(modifier = Modifier.height(headerGap))
+                if (catalogueNote != null) {
+                    item(key = "catalogue-note") {
+                        NoticeLine(
+                            message = catalogueNote,
+                            isProblem = state.catalogueNoteIsProblem,
+                            onDismiss = null,
+                        )
+                        Spacer(modifier = Modifier.height(headerGap))
+                    }
                 }
-            }
 
-            when {
-                state.isIdle -> idleBlock(
-                    state = state,
-                    headerGap = headerGap,
-                    onRecentQuerySelect = onRecentQuerySelect,
-                    onClearRecentQueries = onClearRecentQueries,
-                )
+                when {
+                    state.isIdle -> idleBlock(
+                        state = state,
+                        headerGap = headerGap,
+                        onRecentQuerySelect = onRecentQuerySelect,
+                        onClearRecentQueries = onClearRecentQueries,
+                    )
 
-                state.searching -> item(key = "skeleton") { SearchSkeleton() }
+                    state.searching -> item(key = "skeleton") { SearchSkeleton() }
 
-                state.showEmptyResult -> emptyResultBlock(
-                    state = state,
-                    sectionGap = sectionGap,
-                    headerGap = headerGap,
-                    onSuggestionSelect = onSuggestionSelect,
-                )
+                    state.showEmptyResult -> emptyResultBlock(
+                        state = state,
+                        sectionGap = sectionGap,
+                        headerGap = headerGap,
+                        onSuggestionSelect = onSuggestionSelect,
+                    )
 
-                else -> resultBlocks(
-                    state = state,
-                    wide = wide,
-                    sectionGap = sectionGap,
-                    headerGap = headerGap,
-                    onArtistClick = onArtistClick,
-                    onAlbumClick = onAlbumClick,
-                    onPull = onPull,
-                    onPlayTrack = onPlayTrack,
-                )
+                    else -> resultBlocks(
+                        state = state,
+                        wide = wide,
+                        sectionGap = sectionGap,
+                        headerGap = headerGap,
+                        onArtistClick = onArtistClick,
+                        onAlbumClick = onAlbumClick,
+                        onPull = onPull,
+                        onPlayTrack = onPlayTrack,
+                        onShowAll = onShowAll,
+                        onLoadMore = onLoadMore,
+                    )
+                }
             }
         }
+        // The request sheet, over everything, when a Pull has been tapped.
+        // REQUIREMENTS.md "Placing a request": the `monitor_artist` flag is "a
+        // secondary toggle on the request sheet", and this is `:core:design`'s
+        // sheet rather than one built here - the same sheet the library screens
+        // open, so a pull looks and behaves identically wherever it starts.
+        val sheetAlbum: Album? = state.pullSheetAlbum
+        if (sheetAlbum != null) {
+            NeedlerRequestSheetOverlay(
+                // Renamed from albumTitle/artistName when the same sheet gained
+                // the artist-wide batch request: "everything by X" has no album
+                // title, so the old names would have been a lie at one of the
+                // two call sites.
+                //
+                // Both are guarded. A catalogue album can arrive with a blank
+                // title - `title` defaults to the empty string on the wire and
+                // nothing upstream fills it in - and an unguarded blank here
+                // renders a sheet whose confirm button says "Pull" over an empty
+                // line, which is the same defect that made the Pulls screen
+                // unusable on a device.
+                title = SearchFormat.albumTitle(sheetAlbum.title),
+                subtitle = sheetAlbum.artistName.takeIf { it.isNotBlank() },
+                monitorArtist = state.monitorArtist,
+                onMonitorArtistChange = onMonitorArtistChange,
+                onConfirm = onConfirmPull,
+                onCancel = onCancelPull,
+                // The server's own `quality_snapshot_summary` when it sent one,
+                // which is the only account of what will be downloaded that is
+                // guaranteed to be true. Null falls back to the sheet's own line.
+                qualityNote = sheetAlbum.qualityPolicySummary,
+                busy = state.busy,
+                artwork = {
+                    AlbumArtwork(
+                        album = sheetAlbum,
+                        modifier = Modifier.size(NeedlerTheme.sizes.artworkRow),
+                    )
+                },
+            )
+        }
     }
+}
+
+/**
+ * How much bottom padding the results list needs: the part of the window's bottom
+ * safe area that is genuinely underneath *this list*, and not a pixel more.
+ *
+ * ## Why `safeDrawingPadding()` was wrong here
+ *
+ * Compose's inset modifiers are not position-aware. They apply the window's inset
+ * wherever they are used, and track only what a parent has already *consumed* -
+ * they cannot know that something else is drawn below the element. This screen is
+ * hosted inside a scaffold that consumes the top and the sides and then draws an
+ * update banner, a mini-player and the bottom navigation bar *below* the content
+ * slot, so the list's bottom edge already sits ~200px above the bottom of the
+ * window. `safeDrawingPadding()` on the content then applied the whole keyboard
+ * inset again, measured from the window: the list ended 200px above the keyboard,
+ * and because the padding shrank the viewport instead of extending the scroll, the
+ * last row was clipped through the middle of its Pull button and could not be
+ * scrolled into view at all. Both halves of that were the same bug.
+ *
+ * ## What this does instead
+ *
+ * [chromeBelowListPx] is measured: the distance from the bottom of the list to the
+ * bottom of the window, which is exactly the height of whatever the host drew
+ * below. Subtracting it from the window's bottom safe inset leaves the overlap -
+ * the keyboard's own encroachment on this list - and that goes on the list as
+ * *content* padding, so the last row scrolls clear of the keyboard rather than the
+ * viewport losing height it could have drawn in.
+ *
+ * It is `safeDrawing` and not `ime`, so the gesture area is still cleared on a
+ * surface with nothing under the list at all - the tablet layout, where the rail
+ * and the player sidebar are beside the content and nothing is below it.
+ *
+ * Returns zero while the list has never been positioned, and in the screenshot
+ * tests, which render with no insets at all.
+ */
+@Composable
+private fun listBottomInset(chromeBelowListPx: Int): Dp {
+    val density: Density = LocalDensity.current
+    val safeBottomPx: Int = WindowInsets.safeDrawing.getBottom(density)
+    val overlapPx: Int = (safeBottomPx - chromeBelowListPx).coerceAtLeast(0)
+    return with(density) { overlapPx.toDp() }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,12 +439,19 @@ private fun SearchHeader(
 // ---------------------------------------------------------------------------
 
 /**
- * The three blocks screen 03 draws, in the order it draws them: Artist, Albums,
- * Songs.
+ * The blocks, in the order the user needs them: Artists, the albums already in the
+ * library, Songs, then the albums that would have to be pulled.
+ *
+ * Screen 03 draws Artist, Albums, Songs and knows nothing of the fourth block
+ * because the pack's mock-up shows four albums, not twenty-four. On a real server
+ * the catalogue half of that one Albums block ran to twenty rows and put the Songs
+ * block sixteen swipes below the fold — the user's own music ranked below a
+ * shopping list. The library leads now: the first three blocks are all things the
+ * user has and can play, and everything un-owned is last, capped, and paged.
  *
  * A block with nothing in it is omitted entirely rather than drawn empty, which
  * is what makes a one-artist search look like screen 03 and a song-only search
- * look like a song list instead of two blank headings and a list.
+ * look like a song list instead of three blank headings and a list.
  */
 private fun LazyListScope.resultBlocks(
     state: SearchUiState,
@@ -323,73 +462,63 @@ private fun LazyListScope.resultBlocks(
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
     onPlayTrack: (Track) -> Unit,
+    onShowAll: (SearchBucket) -> Unit,
+    onLoadMore: (SearchBucket) -> Unit,
 ) {
     var first = true
 
-    if (state.artists.isNotEmpty()) {
+    // Read out of the state once: these are derived, and re-reading them from
+    // inside an item or a key lambda would filter the whole result per row.
+    val artists: List<Artist> = state.visibleArtists
+    val libraryAlbums: List<Album> = state.libraryAlbums
+    val tracks: List<Track> = state.tracks
+    val catalogueAlbums: List<Album> = state.visibleCatalogueAlbums
+
+    if (artists.isNotEmpty()) {
         blockHeader(
             key = "artists",
             title = state.artistsHeader,
             trailing = null,
-            topGap = if (first) 0.dp else sectionGap,
+            topGap = 0.dp,
             headerGap = headerGap,
         )
         first = false
         items(
-            count = state.artists.size,
-            key = { index -> "artist-" + state.artists[index].mbid.value },
+            count = artists.size,
+            key = { index -> "artist-" + artists[index].mbid.value },
         ) { index ->
-            ArtistRow(artist = state.artists[index], wide = wide, onClick = onArtistClick)
+            ArtistRow(artist = artists[index], wide = wide, onClick = onArtistClick)
         }
+        moreRowItem(
+            bucket = SearchBucket.ARTISTS,
+            row = state.moreRow(SearchBucket.ARTISTS),
+            onShowAll = onShowAll,
+            onLoadMore = onLoadMore,
+        )
     }
 
-    if (state.albums.isNotEmpty()) {
+    if (libraryAlbums.isNotEmpty()) {
         blockHeader(
-            key = "albums",
-            title = "Albums",
-            // "from MusicBrainz" once the catalogue has answered, "in your
-            // library" while it has not or cannot. See SearchUiState.
-            trailing = state.albumsSourceNote,
+            key = "albums-library",
+            title = LIBRARY_ALBUMS_HEADER,
+            // Always "in your library": that is what every row in this block is,
+            // whatever lane found it.
+            trailing = FROM_LIBRARY,
             topGap = if (first) 0.dp else sectionGap,
             headerGap = headerGap,
         )
         first = false
-
-        if (wide) {
-            // Screen 10 lays the albums out as a two-column grid of cards. A
-            // LazyVerticalGrid cannot be nested inside this LazyColumn, and
-            // splitting the screen into two scrollers to get one would scroll
-            // the Artist block independently of the albums under it, which the
-            // pack does not do. Chunking into rows of two keeps one scroller and
-            // one scroll position.
-            val pairs: List<List<Album>> = state.albums.chunked(TABLET_ALBUM_COLUMNS)
-            items(
-                count = pairs.size,
-                key = { index -> "album-row-" + pairs[index].first().releaseGroupMbid.value },
-            ) { index ->
-                AlbumCardRow(
-                    albums = pairs[index],
-                    busy = state.busy,
-                    onAlbumClick = onAlbumClick,
-                    onPull = onPull,
-                )
-            }
-        } else {
-            items(
-                count = state.albums.size,
-                key = { index -> "album-" + state.albums[index].releaseGroupMbid.value },
-            ) { index ->
-                AlbumRow(
-                    album = state.albums[index],
-                    busy = state.busy,
-                    onClick = onAlbumClick,
-                    onPull = onPull,
-                )
-            }
-        }
+        albumRows(
+            keyPrefix = "owned",
+            albums = libraryAlbums,
+            wide = wide,
+            busy = state.busy,
+            onAlbumClick = onAlbumClick,
+            onPull = onPull,
+        )
     }
 
-    if (state.tracks.isNotEmpty()) {
+    if (tracks.isNotEmpty()) {
         blockHeader(
             key = "songs",
             title = "Songs",
@@ -399,17 +528,152 @@ private fun LazyListScope.resultBlocks(
             topGap = if (first) 0.dp else sectionGap,
             headerGap = headerGap,
         )
+        first = false
         items(
-            count = state.tracks.size,
-            key = { index -> "track-" + state.tracks[index].key.canonicalString },
+            count = tracks.size,
+            key = { index -> "track-" + tracks[index].key.canonicalString },
         ) { index ->
             SongRow(
-                track = state.tracks[index],
+                track = tracks[index],
                 nowPlayingTrackKey = state.nowPlayingTrackKey,
                 onPlay = onPlayTrack,
             )
         }
     }
+
+    if (catalogueAlbums.isNotEmpty()) {
+        blockHeader(
+            key = "albums-catalogue",
+            title = CATALOGUE_ALBUMS_HEADER,
+            // "from MusicBrainz" once the catalogue has answered, "in your
+            // library" while it has not or cannot — these rows are then cached
+            // catalogue records the mirror happens to hold. See SearchUiState.
+            trailing = state.albumsSourceNote,
+            topGap = if (first) 0.dp else sectionGap,
+            headerGap = headerGap,
+        )
+        albumRows(
+            keyPrefix = "pull",
+            albums = catalogueAlbums,
+            wide = wide,
+            busy = state.busy,
+            onAlbumClick = onAlbumClick,
+            onPull = onPull,
+        )
+        moreRowItem(
+            bucket = SearchBucket.ALBUMS,
+            row = state.moreRow(SearchBucket.ALBUMS),
+            onShowAll = onShowAll,
+            onLoadMore = onLoadMore,
+        )
+    }
+}
+
+/**
+ * One block of album rows: a list on a phone, a two-column grid of cards on a
+ * tablet.
+ *
+ * @param keyPrefix distinguishes the two album blocks. A `LazyColumn` key must be
+ *   unique across the whole list, and the two blocks hold disjoint sets of release
+ *   groups today; the prefix means a future row that appears in both cannot crash
+ *   the list.
+ */
+private fun LazyListScope.albumRows(
+    keyPrefix: String,
+    albums: List<Album>,
+    wide: Boolean,
+    busy: Boolean,
+    onAlbumClick: (Album) -> Unit,
+    onPull: (Album) -> Unit,
+) {
+    if (wide) {
+        // Screen 10 lays the albums out as a two-column grid of cards. A
+        // LazyVerticalGrid cannot be nested inside this LazyColumn, and
+        // splitting the screen into two scrollers to get one would scroll
+        // the Artist block independently of the albums under it, which the
+        // pack does not do. Chunking into rows of two keeps one scroller and
+        // one scroll position.
+        val pairs: List<List<Album>> = albums.chunked(TABLET_ALBUM_COLUMNS)
+        items(
+            count = pairs.size,
+            key = { index ->
+                keyPrefix + "-album-row-" + pairs[index].first().releaseGroupMbid.value
+            },
+        ) { index ->
+            AlbumCardRow(
+                albums = pairs[index],
+                busy = busy,
+                onAlbumClick = onAlbumClick,
+                onPull = onPull,
+            )
+        }
+    } else {
+        items(
+            count = albums.size,
+            key = { index -> keyPrefix + "-album-" + albums[index].releaseGroupMbid.value },
+        ) { index ->
+            AlbumRow(
+                album = albums[index],
+                busy = busy,
+                onClick = onAlbumClick,
+                onPull = onPull,
+            )
+        }
+    }
+}
+
+/**
+ * The one row under a capped block, when there is one.
+ *
+ * It is a `LazyListScope` extension rather than a composable inside the last item
+ * so that it keeps its own key and animates as its own row when it changes from
+ * "Show all 14 albums" to "Looking for more…" to nothing.
+ */
+private fun LazyListScope.moreRowItem(
+    bucket: SearchBucket,
+    row: SearchMoreRow?,
+    onShowAll: (SearchBucket) -> Unit,
+    onLoadMore: (SearchBucket) -> Unit,
+) {
+    if (row == null) return
+    item(key = "more-" + bucket.name) {
+        MoreRow(
+            row = row,
+            onClick = {
+                when (row.action) {
+                    SearchMoreAction.SHOW_ALL -> onShowAll(bucket)
+                    SearchMoreAction.LOAD_MORE -> onLoadMore(bucket)
+                }
+            },
+        )
+    }
+}
+
+/**
+ * "Show all 14 albums", "More from MusicBrainz", "Looking for more…", or why the
+ * last page failed.
+ *
+ * One control for all four, because they occupy the same place and only one of
+ * them can be true at a time — [SearchUiState.moreRow] decides which. A disabled
+ * [NeedlerTextButton] already draws in the muted colour, which is exactly right
+ * for the two states that are statements rather than offers.
+ *
+ * A polite live region, so a screen reader hears "Looking for more" and then the
+ * answer without being thrown back to the top of the results.
+ */
+@Composable
+private fun MoreRow(row: SearchMoreRow, onClick: () -> Unit) {
+    val colors = NeedlerTheme.colors
+    NeedlerTextButton(
+        text = row.label,
+        onClick = onClick,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        enabled = row.enabled,
+        // The palette has one emphasis colour and no error colour, so a problem is
+        // drawn in the primary text colour rather than in a red this design system
+        // does not have. Same decision as NoticeLine.
+        color = if (row.isProblem) colors.textPrimary else colors.accent,
+    )
 }
 
 private fun LazyListScope.blockHeader(
@@ -642,7 +906,7 @@ private fun SongRow(
         },
         artwork = {
             TrackArtwork(
-                artwork = track.artwork,
+                track = track,
                 modifier = Modifier.size(SONG_ARTWORK_SIZE),
             )
         },

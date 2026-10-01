@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.feature.player.PlayerUiState
 import app.needler.feature.player.PlayerViewModel
@@ -20,10 +21,16 @@ import app.needler.feature.player.crate.CrateViewModel
  * reorder does not invalidate the transport and a play/pause does not re-diff the list. They are
  * scoped to whatever host composes this - the navigation scaffold - so the panel keeps its state
  * across destination changes, which is what "permanent" means on screen 09.
+ *
+ * @param onOpenArtist opens the artist's page, with no default for the same reason `onChooseOutput`
+ *   has none: an inert callback here is an accent-blue link that does nothing. This one is the easier
+ *   of the two halves of that wiring - the panel is composed inside the same scaffold as the artist
+ *   destination, so the caller navigates without leaving its own graph.
  */
 @Composable
 fun PlayerSidebarRoute(
     onChooseOutput: () -> Unit,
+    onOpenArtist: (ArtistMbid) -> Unit,
     modifier: Modifier = Modifier,
     playerViewModel: PlayerViewModel = hiltViewModel(),
     crateViewModel: CrateViewModel = hiltViewModel(),
@@ -43,8 +50,14 @@ fun PlayerSidebarRoute(
         onToggleShuffle = playerViewModel::toggleShuffle,
         onCycleRepeat = playerViewModel::cycleRepeat,
         onChooseOutput = onChooseOutput,
+        onToggleFavourite = playerViewModel::toggleFavourite,
+        onChooseSleepTimer = playerViewModel::setSleepTimer,
+        onOpenArtist = onOpenArtist,
         onPlayItem = crateViewModel::skipTo,
         onMove = crateViewModel::moveItem,
+        onRemove = crateViewModel::removeItem,
         modifier = modifier,
+        onOverrideQuality = playerViewModel::overridePlayingTrackQuality,
+        onClearQualityOverride = playerViewModel::clearPlayingTrackQualityOverride,
     )
 }

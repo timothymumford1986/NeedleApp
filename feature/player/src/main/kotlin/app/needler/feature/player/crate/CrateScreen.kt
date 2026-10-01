@@ -49,6 +49,18 @@ import app.needler.core.domain.model.QueueItem
  * that is what `PlaybackController.moveQueueItem` takes and what
  * `PlayQueue.withItemMoved` reasons about.
  *
+ * ## Removing one track
+ *
+ * Every row carries a remove button, the Playing row included. Before it, the only edits the crate
+ * offered were a reorder and Clear, so dropping one track meant dragging it to the bottom or emptying the
+ * whole queue. Removal is addressed by [QueueItem.id] and never by index - the same track may legitimately
+ * appear twice, and a skip can move a row between the tap and the command - which is what
+ * `PlayQueue.withItemRemoved` and `PlaybackController.removeQueueItem` both take.
+ *
+ * Removing the Playing row is allowed, because `PlayQueue.withItemRemoved` already defines what it means:
+ * the row that followed becomes the current one, and removing the last row while it plays stops the
+ * session rather than wrapping round to the top.
+ *
  * ## Empty
  *
  * The crate spends most of its life empty, so that is drawn rather than left blank, and Clear
@@ -61,6 +73,7 @@ fun CrateScreen(
     onClear: () -> Unit,
     onPlayItem: (String) -> Unit,
     onMove: (fromIndex: Int, toIndex: Int) -> Unit,
+    onRemove: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val listState: LazyListState = rememberLazyListState()
@@ -105,6 +118,7 @@ fun CrateScreen(
                         onClick = { onPlayItem(playing.id) },
                         onMoveUp = null,
                         onMoveDown = null,
+                        onRemove = { onRemove(playing.id) },
                     )
                 }
             }
@@ -135,6 +149,7 @@ fun CrateScreen(
                     } else {
                         null
                     },
+                    onRemove = { onRemove(item.id) },
                 )
             }
         }

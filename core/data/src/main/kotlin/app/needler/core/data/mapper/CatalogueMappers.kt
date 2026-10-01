@@ -16,23 +16,37 @@ import app.needler.core.domain.model.PullProgress
 import app.needler.core.domain.model.PullStatus
 import app.needler.core.domain.model.PullTaskId
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.RequestHistoryEntry
+import app.needler.core.domain.model.RequestHistoryPage
+import app.needler.core.domain.model.RequestOutcome
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.RequestStatus
+import app.needler.core.domain.model.RequestTarget
 import app.needler.core.domain.model.SearchSuggestion
 import app.needler.core.domain.model.ServiceStatus
 import app.needler.core.domain.model.StatsSource
 import app.needler.core.domain.model.SuggestionKind
 import app.needler.core.domain.model.User
 import app.needler.core.domain.model.UserRole
+import app.needler.core.domain.model.WantedGap
+import app.needler.core.domain.model.WantedList
+import app.needler.core.domain.model.WantedRetry
+import app.needler.core.domain.model.WantedWatch
+import app.needler.core.domain.model.WantedWatchState
 import app.needler.core.network.v1.dto.ActiveRequestItemDto
 import app.needler.core.network.v1.dto.DownloadActivitySummaryDto
 import app.needler.core.network.v1.dto.DownloadTaskDto
 import app.needler.core.network.v1.dto.LibraryStatsDto
 import app.needler.core.network.v1.dto.ReleaseItemDto
 import app.needler.core.network.v1.dto.RequestAcceptedDto
+import app.needler.core.network.v1.dto.RequestHistoryDto
+import app.needler.core.network.v1.dto.RequestHistoryItemDto
 import app.needler.core.network.v1.dto.SearchResultDto
 import app.needler.core.network.v1.dto.SuggestResultDto
 import app.needler.core.network.v1.dto.UserDto
+import app.needler.core.network.v1.dto.WantedRetryingItemDto
+import app.needler.core.network.v1.dto.WantedWatchItemDto
+import app.needler.core.network.v1.dto.WantedWatchesDto
 
 /**
  * The catalogue lane: `/api/v1` DTOs to domain objects and mirror rows.
@@ -325,6 +339,124 @@ public object CatalogueMappers {
         username = dto.username ?: dto.usernameDisplay ?: dto.displayName,
         displayName = dto.displayName.takeIf { it.isNotBlank() },
         role = UserRole.fromServerToken(dto.role),
+    )
+
+    // --------------------------------------------------- history and the wanted list
+
+    /**
+     * One entry of `GET /api/v1/requests/history`.
+     *
+     * Three details of this lane are not shared with the one next to it.
+     *
+     * 1. **The timestamps are ISO-8601 strings.** `requested_at`, `completed_at` and `reviewed_at`
+     *    all go through [WireTime.fromIso]; the wanted list, in the same `/api/v1/requests`
+     *    namespace, sends epoch seconds as floats and goes through [WireTime.fromEpochSeconds]
+     *    instead. Neither convention can be inferred from the path.
+     * 2. **The status is kept raw as well as mapped.** REQUIREMENTS.md, "Placing a request", requires
+     *    the server's own status to be rendered rather than inferred, so an unmodelled token is
+     *    carried through to the screen rather than rounded to the nearest member.
+     * 3. **The key is the release group, even for a track request.** A track request reports
+     *    `track_release_group_mbid`; that is the join key REQUIREMENTS.md "Identity model" mandates,
+     *    and `musicbrainz_id` on such a row is the recording. [pendingApprovalEntity] resolves it the
+     *    same way for the same reason.
+     *
+     * Titles are trimmed and a blank one is kept as blank rather than turned into a placeholder here:
+     * the domain's contract is that a title may be empty and that every *render* site guards on it
+     * (`PullsFormat.albumTitle`). Inventing "Untitled album" in a mapper would put an untranslatable
+     * English string into the data layer and make a real title of a missing one.
+     */
+    public fun requestHistoryEntry(dto: RequestHistoryItemDto): RequestHistoryEntry? {
+        val mbid: String = (dto.trackReleaseGroupMbid ?: dto.musicbrainzId).trim()
+        if (mbid.isEmpty()) return null
+        return RequestHistoryEntry(
+            releaseGroupMbid = ReleaseGroupMbid(mbid),
+            albumTitle = dto.albumTitle?.trim().orEmpty(),
+            artistName = dto.artistName?.trim().orEmpty(),
+            status = RequestOutcome.fromServerToken(dto.status),
+            statusToken = dto.status.trim(),
+            target = RequestTarget.fromServerToken(dto.requestKind),
+            trackTitle = dto.trackTitle?.trim()?.takeIf { it.isNotEmpty() },
+            requestedAt = WireTime.fromIso(dto.requestedAt),
+            completedAt = WireTime.fromIso(dto.completedAt),
+            inLibrary = dto.inLibrary,
+            reviewedByName = dto.reviewedByName?.trim()?.takeIf { it.isNotEmpty() },
+            reviewedAt = WireTime.fromIso(dto.reviewedAt),
+            year = dto.year,
+        )
+    }
+
+    /**
+     * A page of request history, with the totals the endpoint actually reports.
+     *
+     * `page`, `page_size`, `total` and `total_pages` are all echoed rather than recomputed, because
+     * this is the one list in the lane where the server knows them: `GET /api/v1/downloads` reports
+     * no total at all and its paging is blind. The one thing not taken on trust is `page_size` - a
+     * zero there would make [RequestHistoryPage.hasMore] undecidable, so the number of items
+     * returned stands in for it.
+     */
+    public fun requestHistoryPage(dto: RequestHistoryDto): RequestHistoryPage {
+        val entries: List<RequestHistoryEntry> = dto.items.mapNotNull { requestHistoryEntry(it) }
+        return RequestHistoryPage(
+            entries = entries,
+            page = dto.page.coerceAtLeast(1),
+            pageSize = if (dto.pageSize > 0) dto.pageSize else dto.items.size,
+            total = dto.total.coerceAtLeast(0),
+            totalPages = dto.totalPages.coerceAtLeast(0),
+        )
+    }
+
+    /**
+     * One standing watch from `GET /api/v1/requests/wanted`.
+     *
+     * Every `*_at` on this endpoint is **epoch seconds as a float**, which is the `/downloads`
+     * convention rather than the one its `/requests` neighbours use. That is the whole reason this
+     * mapper and [requestHistoryEntry] cannot share a timestamp helper.
+     */
+    public fun wantedWatch(dto: WantedWatchItemDto): WantedWatch? {
+        val mbid: String = dto.releaseGroupMbid.trim()
+        if (mbid.isEmpty()) return null
+        return WantedWatch(
+            releaseGroupMbid = ReleaseGroupMbid(mbid),
+            albumTitle = dto.albumTitle?.trim().orEmpty(),
+            artistName = dto.artistName?.trim().orEmpty(),
+            gap = WantedGap.fromServerToken(dto.kind),
+            state = WantedWatchState.fromServerToken(dto.state),
+            stateToken = dto.state.trim(),
+            checkCount = dto.checkCount.coerceAtLeast(0),
+            newCandidateCount = dto.newCandidateCount.coerceAtLeast(0),
+            lastCheckedAt = WireTime.fromEpochSeconds(dto.lastCheckedAt),
+            nextCheckAt = WireTime.fromEpochSeconds(dto.nextCheckAt),
+            lastOutcome = dto.lastOutcome?.trim()?.takeIf { it.isNotEmpty() },
+            createdAt = WireTime.fromEpochSeconds(dto.createdAt),
+            year = dto.year ?: dto.firstReleaseDate?.take(4)?.toIntOrNull(),
+        )
+    }
+
+    /** One actively retrying item. `next_retry_at` is epoch seconds, like the rest of this lane. */
+    public fun wantedRetry(dto: WantedRetryingItemDto): WantedRetry? {
+        val mbid: String = dto.releaseGroupMbid.trim()
+        if (mbid.isEmpty()) return null
+        return WantedRetry(
+            releaseGroupMbid = ReleaseGroupMbid(mbid),
+            albumTitle = dto.albumTitle?.trim().orEmpty(),
+            artistName = dto.artistName?.trim().orEmpty(),
+            retryCount = dto.retryCount.coerceAtLeast(0),
+            maxAttempts = dto.maxAttempts.coerceAtLeast(0),
+            nextRetryAt = WireTime.fromEpochSeconds(dto.nextRetryAt),
+            year = dto.year,
+        )
+    }
+
+    /**
+     * The whole wanted list.
+     *
+     * `count` on the response is deliberately ignored: it counts `items` only and not `retrying`, so
+     * a caller that trusted it would under-report the list it is about to draw. The sizes of the two
+     * lists are the only totals this endpoint can be held to.
+     */
+    public fun wantedList(dto: WantedWatchesDto): WantedList = WantedList(
+        watches = dto.items.mapNotNull { wantedWatch(it) },
+        retrying = dto.retrying.mapNotNull { wantedRetry(it) },
     )
 
     private fun heldNotice(dto: DownloadTaskDto): String? =

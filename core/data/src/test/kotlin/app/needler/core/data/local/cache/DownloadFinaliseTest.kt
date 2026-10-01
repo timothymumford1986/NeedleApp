@@ -97,7 +97,9 @@ public class DownloadFinaliseTest {
         val slot: AudioDownloadSlot.Open = slotFrom(store)
         fillPart(slot, HALF_TRACK)
 
-        val streaming: AudioCacheWriteHandle = requireNotNull(store.openWrite(stream()))
+        val streaming: AudioCacheWriteHandle = requireNotNull(
+            store.openWrite(stream(), declaredLengthBytes = TRACK_BYTES),
+        )
         streaming.write(ByteArray(8) { 1 })
         streaming.abandon()
 
@@ -132,7 +134,9 @@ public class DownloadFinaliseTest {
             // it - a file the user explicitly asked to keep, removed by a policy REQUIREMENTS.md
             // says may never touch it.
             val store: AudioCacheStoreWriter = writer()
-            val streaming: AudioCacheWriteHandle = requireNotNull(store.openWrite(stream()))
+            val streaming: AudioCacheWriteHandle = requireNotNull(
+                store.openWrite(stream(), declaredLengthBytes = TRACK_BYTES),
+            )
 
             val slot: AudioDownloadSlot.Open = slotFrom(store)
             fillPart(slot, TRACK_BYTES)

@@ -42,6 +42,14 @@ public class FakePlaylistDao : PlaylistDao() {
     override fun observePlaylists(): Flow<List<PlaylistEntity>> =
         changes.map { playlists.values.sortedBy { it.nameNormalised } }
 
+    override fun observePlaylistsPaged(limit: Int, offset: Int): Flow<List<PlaylistEntity>> =
+        changes.map {
+            playlists.values
+                .sortedBy { it.nameNormalised }
+                .drop(offset.coerceAtLeast(0))
+                .take(limit.coerceAtLeast(0))
+        }
+
     override fun observePlaylist(playlistId: String): Flow<PlaylistEntity?> =
         changes.map { playlists[playlistId] }
 
@@ -140,6 +148,9 @@ public class FakeFavouriteDao : FavouriteDao {
         changes.map { rows.values.sortedByDescending { it.starredAt ?: 0L } }
 
     override fun observeStarredAlbums(): Flow<List<AlbumEntity>> = changes.map { albums }
+
+    override fun observeStarredAlbumsPaged(limit: Int, offset: Int): Flow<List<AlbumEntity>> =
+        changes.map { albums.drop(offset.coerceAtLeast(0)).take(limit.coerceAtLeast(0)) }
 
     override fun observeStarredArtists(): Flow<List<ArtistEntity>> = changes.map { artists }
 

@@ -6,21 +6,32 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.needler.core.domain.model.Album
+import app.needler.core.domain.model.ConnectivityState
+import app.needler.core.domain.model.FavouriteTarget
 import app.needler.core.domain.model.OfflineDownloadState
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RemovedDownload
 import app.needler.core.domain.model.RequestReceipt
+import app.needler.core.domain.model.ServerCapabilities
+import app.needler.core.domain.model.StreamFormat
+import app.needler.core.domain.model.StreamOverrideScope
+import app.needler.core.domain.model.StreamRung
+import app.needler.core.domain.model.StreamRungs
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.model.TrackRequest
 import app.needler.core.domain.playback.PlaybackController
+import app.needler.core.domain.repository.FavouriteRepository
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.PinRepository
+import app.needler.core.domain.repository.PlaybackSettingsRepository
 import app.needler.core.domain.repository.PullRepository
 import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.domain.usecase.PinAlbumForOfflineUseCase
 import app.needler.core.domain.usecase.RequestAlbumUseCase
+import app.needler.core.domain.usecase.ResolvePlayableSourceUseCase
+import app.needler.feature.library.common.RequestSheetState
 import app.needler.feature.library.common.hasPlayableFile
 import app.needler.feature.library.common.problemMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -63,7 +74,9 @@ class AlbumViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val pulls: PullRepository,
     private val pins: PinRepository,
+    private val favourites: FavouriteRepository,
     private val sessions: SessionRepository,
+    private val playbackSettings: PlaybackSettingsRepository,
     private val playback: Optional<PlaybackController>,
 ) : ViewModel() {
 
@@ -84,6 +97,7 @@ class AlbumViewModel @Inject constructor(
 
     private val busy = MutableStateFlow(false)
     private val notice = MutableStateFlow<AlbumNotice?>(null)
+    private val requestSheet = MutableStateFlow<RequestSheetState?>(null)
 
     private val nowPlayingKey: Flow<TrackKey?> =
         playback.orElse(null)
@@ -107,7 +121,12 @@ class AlbumViewModel @Inject constructor(
         pins.observePin(releaseGroupMbid),
         sessions.observeCapabilities(),
         sessions.observeConnectivity(),
-    ) { pin, capabilities, connectivity ->
+        playbackSettings.observePlaybackPreferences(),
+        playbackSettings.observeStreamOverride(
+            scope = StreamOverrideScope.ALBUM,
+            id = releaseGroupMbid.value,
+        ),
+    ) { pin, capabilities, connectivity, preferences, override ->
         Environment(
             download = pin?.download,
             // Unknown capabilities are treated as "allowed" rather than
@@ -116,6 +135,13 @@ class AlbumViewModel @Inject constructor(
             // would be handled honestly anyway.
             downloadAllowed = capabilities?.libraryDownloadAllowed ?: true,
             offline = !connectivity.isOnline,
+            streamRungs = preferences.streamRungs,
+            qualityOverride = override,
+            // Held rather than resolved here: the rule needs the album's own quality, which arrives on
+            // the other flow. Resolving it in the state combine keeps both halves of one decision in
+            // one place - see [resolveServerFormat].
+            capabilities = capabilities,
+            connectivity = connectivity,
         )
     }
 
@@ -124,7 +150,8 @@ class AlbumViewModel @Inject constructor(
         environment,
         busy,
         notice,
-    ) { current, env, isBusy, currentNotice ->
+        requestSheet,
+    ) { current, env, isBusy, currentNotice, sheet ->
         AlbumUiState(
             loading = false,
             album = current.album,
@@ -135,6 +162,9 @@ class AlbumViewModel @Inject constructor(
             offline = env.offline,
             busy = isBusy,
             notice = currentNotice,
+            requestSheet = sheet,
+            serverFormat = resolveServerFormat(current.album, env),
+            qualityOverride = env.qualityOverride,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -179,10 +209,57 @@ class AlbumViewModel @Inject constructor(
 
     // ---- pulls --------------------------------------------------------------
 
+    /**
+     * Open the pull sheet.
+     *
+     * The request itself is [onConfirmRequest]. Two steps rather than one because
+     * REQUIREMENTS.md "Placing a request" puts the `monitor_artist` toggle "on
+     * the request sheet", and one tap straight to the server leaves nowhere to
+     * put it — which is exactly why no caller in this app has ever passed that
+     * flag. The requirements' "Requesting is one tap on any un-owned album" is
+     * still honoured: this is that tap, and the sheet's own confirm is the
+     * second.
+     *
+     * A sheet with nothing to request is not opened, so there is no state in
+     * which the confirm button acts on a null album.
+     */
     fun onPull() {
+        val album: Album = state.value.album ?: return
+        requestSheet.value = RequestSheetState.forAlbum(album)
+    }
+
+    /** The sheet's toggle. Hoisted here so it survives a rotation mid-decision. */
+    fun onMonitorArtistChange(monitorArtist: Boolean) {
+        requestSheet.value = requestSheet.value?.copy(monitorArtist = monitorArtist)
+    }
+
+    fun onDismissRequestSheet() {
+        requestSheet.value = null
+    }
+
+    /**
+     * Place the request the sheet was opened for, carrying its `monitor_artist` flag.
+     *
+     * The sheet is closed before the call rather than after it. The pull is a 202
+     * — the server has accepted the request, not completed it — so there is
+     * nothing to wait on the sheet for, and leaving it up over the notice that
+     * says "Pulling" would hide the one thing the user is now waiting to read.
+     *
+     * The album is taken from the sheet rather than re-read, so a sync landing
+     * between the tap and the confirm cannot make this request a different
+     * record from the one whose title the sheet is showing.
+     */
+    fun onConfirmRequest() {
+        val sheet: RequestSheetState = requestSheet.value ?: return
+        val album: Album = sheet.albums.singleOrNull() ?: return
+        requestSheet.value = null
         runExclusively {
-            val album: Album? = state.value.album
-            when (val result: Outcome<RequestReceipt> = requestAlbum(releaseGroupMbid, known = album)) {
+            val result: Outcome<RequestReceipt> = requestAlbum(
+                releaseGroupMbid = releaseGroupMbid,
+                monitorArtist = sheet.monitorArtist,
+                known = album,
+            )
+            when (result) {
                 is Outcome.Success -> AlbumNotice.forRequest(result.value.status)
                 is Outcome.Failure -> AlbumNotice.Problem(problemMessage(result.error))
             }
@@ -270,11 +347,110 @@ class AlbumViewModel @Inject constructor(
         }
     }
 
+    // ---- favourites ---------------------------------------------------------
+
+    /**
+     * Star or unstar this album.
+     *
+     * REQUIREMENTS.md "Playlists": "`setRating` is a deliberate no-op on this
+     * server … Binary favourites via `star`/`unstar` do persist and are the
+     * supported mechanism." This is the only mechanism there is, which is also
+     * why the library's "Starred" sort had nothing to sort by until now.
+     *
+     * Deliberately **not** inside [runExclusively]. That gate exists because
+     * every other action here is a server write behind a button a thumb can hit
+     * twice, and two unpins race over the same files. A star is different on
+     * both counts: `FavouriteRepository.setFavourite` writes the mirror first and
+     * journals the server call, so the flow this screen reads has already
+     * changed by the time the call goes out, and starring twice lands on the same
+     * value either way. Greying the star out for a network round trip would make
+     * the most trivial control on the screen the slowest.
+     */
+    fun onToggleFavourite() {
+        val album: Album = state.value.album ?: return
+        setFavourite(
+            target = FavouriteTarget.OfAlbum(album.releaseGroupMbid),
+            starred = !album.isFavourite,
+        )
+    }
+
+    /**
+     * Star or unstar one track.
+     *
+     * Keyed on [TrackKey] and never on the file id — REQUIREMENTS.md "Track
+     * identity is not stable": DroppedNeedle replaces files in place on a quality
+     * upgrade, so a favourite keyed on `file_id` would come unstuck from its
+     * track the first time the server found a better copy. [FavouriteTarget.OfTrack]
+     * takes the stable key for exactly that reason.
+     */
+    fun onToggleTrackFavourite(row: AlbumTrack) {
+        setFavourite(
+            target = FavouriteTarget.OfTrack(row.key),
+            starred = !row.track.isFavourite,
+        )
+    }
+
     fun onDismissNotice() {
         notice.value = null
     }
 
+    // ---- stream quality -----------------------------------------------------
+
+    /**
+     * Pins a stream rung to this record - what tapping the `Server:` tag writes.
+     *
+     * **Absolute, not per-network.** One value, applied on Wi-Fi and on mobile data alike: the mode
+     * defaults answer "what do I usually want on this connection", and an override answers "this record
+     * is different". A record worth hearing lossless is worth it on the train too, and two per-network
+     * overrides per album would be four numbers to reason about for one record, three of which nothing
+     * on screen shows.
+     *
+     * It is kept when the album is downloaded rather than cleared - a local copy wins while it exists,
+     * so the override is dormant, and freeing disk space must not silently revoke a preference nobody
+     * withdrew. See [app.needler.core.domain.model.StreamOverride], where that decision is recorded as
+     * reversible.
+     *
+     * No notice on success: the tag itself changes under the finger, which is the whole feedback the
+     * action needs.
+     */
+    fun onOverrideQuality(rung: StreamRung) {
+        viewModelScope.launch {
+            playbackSettings.setStreamOverride(
+                scope = StreamOverrideScope.ALBUM,
+                id = releaseGroupMbid.value,
+                rung = rung,
+            )
+        }
+    }
+
+    /** Drops this record's override, returning it to the rung for whichever connection is in use. */
+    fun onClearQualityOverride() {
+        viewModelScope.launch {
+            playbackSettings.clearStreamOverride(
+                scope = StreamOverrideScope.ALBUM,
+                id = releaseGroupMbid.value,
+            )
+        }
+    }
+
     // ---- internals ----------------------------------------------------------
+
+    /**
+     * Apply one star, and say so only if it failed.
+     *
+     * Nothing is reported on success: the star itself has already moved, which is
+     * the whole feedback the action needs. A queued-offline star is a success —
+     * the write queue replays it — and a notice announcing that would appear on
+     * every tap made on a train.
+     */
+    private fun setFavourite(target: FavouriteTarget, starred: Boolean) {
+        viewModelScope.launch {
+            val result: Outcome<Unit> = favourites.setFavourite(target, starred)
+            if (result is Outcome.Failure) {
+                notice.value = AlbumNotice.Problem(problemMessage(result.error))
+            }
+        }
+    }
 
     /**
      * Run one action at a time, disabling the buttons while it is in flight.
@@ -314,6 +490,30 @@ class AlbumViewModel @Inject constructor(
         )
     }
 
+    /**
+     * What the server would send for this album right now: the `Server:` half of the tag pair.
+     *
+     * Through [ResolvePlayableSourceUseCase.resolveStreamFormat] and nothing else, because the tag has
+     * to be the same answer playback will give. Reimplementing "is the rung below the source" here -
+     * which is the obvious three-line version - is how the tag comes to say `MP3 192` for a record
+     * that in fact streams untouched, and there is no way to notice from either side.
+     *
+     * Null until the album is known: before that there is no source to cap the rung against, and a tag
+     * showing the raw rung would be a guess presented as a fact.
+     */
+    private fun resolveServerFormat(album: Album?, environment: Environment): StreamFormat? {
+        if (album == null) return null
+        return ResolvePlayableSourceUseCase.resolveStreamFormat(
+            rungs = environment.streamRungs,
+            connectivity = environment.connectivity,
+            capabilities = environment.capabilities,
+            source = album.quality,
+            // No track override: this is the record's own tag. A per-track override still applies when
+            // that track plays - the resolver checks it first - and the player's tag shows it.
+            albumOverride = environment.qualityOverride,
+        )
+    }
+
     private data class Content(
         val album: Album?,
         val tracks: List<AlbumTrack>,
@@ -324,6 +524,10 @@ class AlbumViewModel @Inject constructor(
         val download: OfflineDownloadState?,
         val downloadAllowed: Boolean,
         val offline: Boolean,
+        val streamRungs: StreamRungs,
+        val qualityOverride: StreamRung?,
+        val capabilities: ServerCapabilities?,
+        val connectivity: ConnectivityState,
     )
 
     companion object {

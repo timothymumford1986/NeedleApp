@@ -42,7 +42,21 @@ public value class ReleaseGroupMbid(public val value: String) {
     }
 }
 
-/** A MusicBrainz artist MBID. Subsonic exposes it as `ar-<mbid>`; `/api/v1/artists/{id}` takes it bare. */
+/**
+ * A MusicBrainz artist MBID. Subsonic exposes it as `ar-<mbid>`; `/api/v1/artists/{id}` takes it bare.
+ *
+ * ## Not every one of these is a MusicBrainz identifier
+ *
+ * DroppedNeedle mints an id for every artist it imports, and when it cannot match one to MusicBrainz
+ * it derives a **version 5** UUID from the artist's name instead. That id is a perfectly good primary
+ * key for the mirror and for `getArtist`, and it is useless to anything upstream: the catalogue lane
+ * rejects it with `400 Use the local library artist route for a DroppedNeedle artist ID`.
+ *
+ * [isNameDerived] is that distinction, and it lives here because the requirements' "Identity model"
+ * is the thing it qualifies - the MBID is the join key "the single most load-bearing fact in the
+ * architecture", and this is the one case where an id shaped like one is not one. Callers must check
+ * before entering the catalogue lane rather than after; see [isCatalogueIdentifier].
+ */
 @JvmInline
 public value class ArtistMbid(public val value: String) {
     init {
@@ -52,10 +66,42 @@ public value class ArtistMbid(public val value: String) {
     /** The Subsonic artist ID for this artist, i.e. `ar-<mbid>`. */
     public val subsonicArtistId: String get() = SUBSONIC_PREFIX + value
 
+    /**
+     * True when DroppedNeedle derived this id from the artist's *name* rather than matching them to
+     * MusicBrainz, i.e. it is a UUID version 5.
+     *
+     * MusicBrainz mints version 4 UUIDs - random - for artists, releases and recordings alike. A
+     * version 5 UUID is a SHA-1 of a namespace and a name, so it can only have been computed by
+     * whoever held the name: the server. There is therefore no chance of a false positive here, and
+     * no need to ask the server which kind of id it handed over.
+     *
+     * Version 3 is the same construction over MD5 and is treated the same way, because a
+     * name-derived id is name-derived whichever digest produced it.
+     */
+    public val isNameDerived: Boolean
+        get() {
+            val version: Int = uuidVersionOf(value) ?: return false
+            return version in NAME_DERIVED_UUID_VERSIONS
+        }
+
+    /**
+     * True when this id may be handed to a `/api/v1` route that resolves artists against MusicBrainz -
+     * the discography route above all.
+     *
+     * Deliberately **not** `uuidVersionOf(value) == 4`: an id of an unexpected shape is given the
+     * benefit of the doubt and tried, because the failure mode of trying is one rejected request and
+     * the failure mode of refusing is a discography silently withheld from an artist who has one.
+     * Only the shape that is *known* to be rejected is excluded.
+     */
+    public val isCatalogueIdentifier: Boolean get() = !isNameDerived
+
     override fun toString(): String = value
 
     public companion object {
         public const val SUBSONIC_PREFIX: String = "ar-"
+
+        /** The UUID versions built from a name: 3 (MD5) and 5 (SHA-1). See [isNameDerived]. */
+        private val NAME_DERIVED_UUID_VERSIONS: Set<Int> = setOf(3, 5)
 
         /** Parses a Subsonic artist ID (`ar-<mbid>`) or a bare MBID. Returns null for anything empty. */
         public fun fromSubsonicArtistId(id: String): ArtistMbid? {
@@ -64,6 +110,40 @@ public value class ArtistMbid(public val value: String) {
         }
     }
 }
+
+/**
+ * The version nibble of a canonical `8-4-4-4-12` UUID, or `null` when [value] is not one.
+ *
+ * The version is the first character of the third group - character 14 of the 36 - which is why a
+ * one-line substring is enough and `java.util.UUID` is not needed. That matters twice over: this
+ * module is a pure Kotlin/JVM library with no Android on the classpath, and `UUID.fromString` is
+ * lenient in ways that would let a malformed id through with a plausible-looking version.
+ *
+ * Anything that is not exactly 36 characters of hex and hyphens in the right places returns `null`,
+ * which callers must read as "not a UUID at all", never as "not the version I was asking about" -
+ * [ArtistMbid.isCatalogueIdentifier] documents which way that ambiguity is resolved and why.
+ */
+public fun uuidVersionOf(value: String): Int? {
+    if (value.length != UUID_LENGTH) return null
+    value.forEachIndexed { index, character ->
+        val expectHyphen: Boolean = index in UUID_HYPHEN_POSITIONS
+        if (expectHyphen) {
+            if (character != '-') return null
+        } else {
+            if (character.digitToIntOrNull(radix = 16) == null) return null
+        }
+    }
+    return value[UUID_VERSION_INDEX].digitToIntOrNull(radix = 16)
+}
+
+/** Length of a canonical UUID: 32 hex digits plus four hyphens. */
+private const val UUID_LENGTH: Int = 36
+
+/** Where the four hyphens sit in a canonical UUID. */
+private val UUID_HYPHEN_POSITIONS: Set<Int> = setOf(8, 13, 18, 23)
+
+/** The version nibble: the first character of the third group. */
+private const val UUID_VERSION_INDEX: Int = 14
 
 /**
  * A MusicBrainz recording MBID. Optional metadata on a [Track], and the key taken by

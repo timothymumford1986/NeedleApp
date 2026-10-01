@@ -35,8 +35,109 @@
     <string name="widget_action_play">Play</string>
     <string name="widget_action_pause">Pause</string>
 
+    <!--
+      What a title slot says when the server sent no album title, and what a
+      label says in its place.
+
+      Not cosmetic. The downloads lane's `album_title` was being discarded
+      rather than read, so on a real device 34 of 35 pulls arrived with a blank
+      title; the data path is fixed, but a blank line on a home screen looks
+      like a broken widget and gives the user nothing to act on, so every title
+      slot in this module falls back rather than drawing nothing.
+
+      Two strings because they sit in different sentences. A title slot is a
+      noun on its own line, so it takes the capitalised form; a label or a
+      content description is read inside a phrase, so it takes "this album" and
+      never ends on a dangling preposition — "Play this album", not "Play ".
+
+      The wording matches what the Pulls screen uses for the same absence, so
+      the home screen and the app agree about the same pull.
+    -->
+    <string name="widget_untitled_album">Untitled album</string>
+    <string name="widget_this_album">this album</string>
+    <!--
+      And the same for an artist the server did not name. Named rather than
+      dropped, so the recently added card keeps the three lines the pack draws
+      and does not change shape on a thin sync.
+    -->
+    <string name="widget_unknown_artist">Unknown artist</string>
+
     <!-- Artwork alt text when there is no album to name, matching albumArtContentDescription's null case. -->
     <string name="widget_artwork">Album artwork</string>
+
+    <!--
+      The recently added card, the left-hand square on screens 15 and 18.
+
+      "Recently added" is the same heading the library screens use for the same
+      list, so the widget picker, the home screen and the app all name it once.
+    -->
+    <string name="widget_recently_added_label">Needler · Recently added</string>
+    <string name="widget_recently_added_description">The newest album in your library. Tap to open it.</string>
+    <string name="widget_recently_added_eyebrow">RECENTLY ADDED</string>
+
+    <!--
+      The empty state: a library the mirror has nothing in yet, which is what a
+      fresh install shows until the first sync finishes. Wording follows
+      widget_nothing_playing above — what is true, then what to do about it —
+      and the card taps through to Library rather than to an album that does not
+      exist.
+    -->
+    <string name="widget_recently_added_empty">Nothing yet</string>
+    <string name="widget_recently_added_empty_detail">Tap to open your library</string>
+
+    <!--
+      The Play disc's spoken label. It names the record because "Play" on a home
+      screen of widgets says nothing about which one; the app's own album screen
+      speaks the same phrase.
+    -->
+    <string name="widget_action_play_album">Play %1$s</string>
+
+    <!--
+      The pull card, the right-hand square on screens 15 and 18.
+
+      "Pull" is the product's word for asking the server to acquire an album you
+      do not own (REQUIREMENTS.md "Vocabulary"). The card must never say
+      "download": that word belongs to "pull local", which is getting an album
+      you already own onto this device.
+    -->
+    <string name="widget_pulls_label">Needler · Pulls</string>
+    <string name="widget_pulls_description">How far along your active pull is. Tap to open Pulls.</string>
+    <string name="widget_pulls_eyebrow">PULLS</string>
+    <!--
+      The eyebrow above one active pull. The card draws one pull out of however
+      many, and the count is what stops it misreporting the queue it is a glance
+      at; it goes in the eyebrow because that slot is empty in the drawing, so
+      nothing moves to make room. Only shown above one.
+    -->
+    <string name="widget_pulls_eyebrow_count">PULLS · %1$d</string>
+
+    <!--
+      The percentage slot with no number to put in it: an active pull the server
+      has not reported progress for, or nothing pulling at all.
+
+      An em dash rather than 0%. Zero percent claims something is underway and
+      has got nowhere; a pull still searching for sources has not started. Same
+      call as widget_unknown_time below.
+    -->
+    <string name="widget_pull_unknown_percent">—</string>
+
+    <!-- The resting card. Not an error: it is what the card shows nearly all the time. -->
+    <string name="widget_pull_idle">Nothing pulling</string>
+
+    <!--
+      Stage words for a pull with no percentage, as :core:design's
+      NeedlerAlbumBadge labels the same states. Two differ because a 166dp card
+      is not a 390dp row: "Needs attention" is the badge's "Needs attention on
+      the server" cut to fit, and "Importing" is the word the Pulls screen's own
+      subtitle uses for PROCESSING, which is more use here than a second
+      "Pulling". See PullWidget.stageLabel.
+    -->
+    <string name="widget_pull_stage_waiting">Waiting</string>
+    <string name="widget_pull_stage_searching">Searching</string>
+    <string name="widget_pull_stage_needs_attention">Needs attention</string>
+    <string name="widget_pull_stage_queued">Queued</string>
+    <string name="widget_pull_stage_pulling">Pulling</string>
+    <string name="widget_pull_stage_importing">Importing</string>
 
     <!-- A timecode that is not known yet, as PlayerFormat.timecode prints it. -->
     <string name="widget_unknown_time">--:--</string>

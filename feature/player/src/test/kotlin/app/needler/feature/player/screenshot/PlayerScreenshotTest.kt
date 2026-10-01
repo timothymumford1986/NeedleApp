@@ -4,12 +4,16 @@ import android.app.Application
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineCause
 import app.needler.core.domain.model.PlayQueue
+import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.core.domain.playback.RepeatMode
 import app.needler.feature.player.PlayerUiState
@@ -19,6 +23,8 @@ import app.needler.feature.player.fake.PlayerFixtures
 import app.needler.feature.player.nowplaying.MiniPlayer
 import app.needler.feature.player.nowplaying.NowPlayingScreen
 import app.needler.feature.player.sidebar.PlayerSidebarContent
+import app.needler.feature.player.ui.SleepTimerChoice
+import app.needler.feature.player.ui.SleepTimerChoices
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -57,6 +63,9 @@ class PlayerScreenshotTest {
                 onToggleShuffle = {},
                 onCycleRepeat = {},
                 onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
             )
         }
     }
@@ -80,6 +89,9 @@ class PlayerScreenshotTest {
                 onToggleShuffle = {},
                 onCycleRepeat = {},
                 onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
             )
         }
     }
@@ -99,6 +111,9 @@ class PlayerScreenshotTest {
                 onToggleShuffle = {},
                 onCycleRepeat = {},
                 onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
             )
         }
     }
@@ -122,6 +137,9 @@ class PlayerScreenshotTest {
                 onToggleShuffle = {},
                 onCycleRepeat = {},
                 onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
             )
         }
     }
@@ -137,6 +155,7 @@ class PlayerScreenshotTest {
                 onClear = {},
                 onPlayItem = {},
                 onMove = { _, _ -> },
+                onRemove = {},
             )
         }
     }
@@ -150,6 +169,7 @@ class PlayerScreenshotTest {
                 onClear = {},
                 onPlayItem = {},
                 onMove = { _, _ -> },
+                onRemove = {},
             )
         }
     }
@@ -169,6 +189,7 @@ class PlayerScreenshotTest {
                 onClear = {},
                 onPlayItem = {},
                 onMove = { _, _ -> },
+                onRemove = {},
             )
         }
     }
@@ -231,8 +252,12 @@ class PlayerScreenshotTest {
                 onToggleShuffle = {},
                 onCycleRepeat = {},
                 onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
                 onPlayItem = {},
                 onMove = { _, _ -> },
+                onRemove = {},
             )
         }
     }
@@ -251,8 +276,12 @@ class PlayerScreenshotTest {
                 onToggleShuffle = {},
                 onCycleRepeat = {},
                 onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
                 onPlayItem = {},
                 onMove = { _, _ -> },
+                onRemove = {},
             )
         }
     }
@@ -279,6 +308,9 @@ class PlayerScreenshotTest {
                 onToggleShuffle = {},
                 onCycleRepeat = {},
                 onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
             )
         }
     }
@@ -292,6 +324,7 @@ class PlayerScreenshotTest {
                 onClear = {},
                 onPlayItem = {},
                 onMove = { _, _ -> },
+                onRemove = {},
             )
         }
     }
@@ -301,6 +334,78 @@ class PlayerScreenshotTest {
         capture("player-mini-large-text", PlayerDevice.Bar, fontScale = 2f) {
             Box(modifier = Modifier.fillMaxSize().background(NeedlerTheme.colors.canvas)) {
                 MiniPlayer(state = PLAYING, onExpand = {}, onPlayPause = {}, onNext = {})
+            }
+        }
+    }
+
+    // ---- The landscape sidebar (not drawn; the P0 this file exists to catch) ----
+
+    @Test
+    fun `the sidebar at a landscape phone's height keeps its controls`() {
+        capture("player-sidebar-short", PlayerDevice.SidebarShort) {
+            PlayerSidebarContent(
+                state = PLAYING.copy(output = PlayerFixtures.thisPhone, upNextCount = 4),
+                crate = CrateUiState(queue = PlayerFixtures.crate, isPlaying = true),
+                progress = { PROGRESS },
+                onPlayPause = {},
+                onNext = {},
+                onPrevious = {},
+                onSeek = {},
+                onToggleShuffle = {},
+                onCycleRepeat = {},
+                onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
+                onPlayItem = {},
+                onMove = { _, _ -> },
+                onRemove = {},
+            )
+        }
+    }
+
+    // ---- The controls the pack does not draw --------------------------------
+
+    @Test
+    fun `now playing with the track favourited and a sleep timer running`() {
+        capture("player-now-playing-favourited", PlayerDevice.Phone) {
+            NowPlayingScreen(
+                state = PLAYING.copy(
+                    isFavourite = true,
+                    // EndOfTrack rather than a timed stop: a timed stop's label is a countdown against
+                    // the wall clock, and an image recorded from one would differ by a minute depending
+                    // on when it was taken. The countdown's wording is asserted in PlayerFormatTest,
+                    // where a fixed clock makes it arithmetic.
+                    sleepTimer = SleepTimer.EndOfTrack,
+                ),
+                progress = { PROGRESS },
+                onClose = {},
+                onOpenCrate = {},
+                onPlayPause = {},
+                onNext = {},
+                onPrevious = {},
+                onSeek = {},
+                onToggleShuffle = {},
+                onCycleRepeat = {},
+                onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
+            )
+        }
+    }
+
+    @Test
+    fun `the sleep timer's choices`() {
+        capture("player-sleep-timer-choices", PlayerDevice.Phone) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(NeedlerTheme.colors.canvas)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SleepTimerChoices(selected = SleepTimerChoice.MINUTES_30, onChoose = {})
             }
         }
     }

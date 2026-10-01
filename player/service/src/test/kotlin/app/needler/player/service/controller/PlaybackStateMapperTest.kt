@@ -4,6 +4,7 @@ import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OutputTarget
 import app.needler.core.domain.model.PlaybackSpeed
 import app.needler.core.domain.model.QueueItem
+import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.playback.RepeatMode
 import app.needler.player.service.Fixtures
 import app.needler.player.service.media.MediaId
@@ -157,6 +158,27 @@ class PlaybackStateMapperTest {
         assertNotEquals(rows[0].id, rows[1].id)
         assertEquals(Fixtures.key(), MediaId.toTrackKey(rows[0].id))
         assertEquals(Fixtures.key(), MediaId.toTrackKey(rows[1].id))
+    }
+
+    /**
+     * The sleep timer is carried, not derived.
+     *
+     * Media3 has no sleep timer to read, so the armed value comes from `PlaybackSettingsRepository` and
+     * passes straight through onto the state every surface renders - which is the whole reason it is on
+     * `PlaybackState` rather than only in the preferences flow the player service collects.
+     */
+    @Test
+    fun `the armed sleep timer passes through onto the state`() {
+        assertEquals(
+            SleepTimer.Off,
+            PlaybackStateMapper.toState(SessionSnapshot(currentItem = row)).sleepTimer,
+        )
+        assertEquals(
+            SleepTimer.EndOfTrack,
+            PlaybackStateMapper.toState(
+                SessionSnapshot(currentItem = row, sleepTimer = SleepTimer.EndOfTrack),
+            ).sleepTimer,
+        )
     }
 
     @Test

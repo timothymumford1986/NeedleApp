@@ -13,6 +13,10 @@ import app.needler.core.network.NeedlerHttpClient
 import app.needler.core.network.subsonic.SubsonicApi
 import app.needler.image.buildArtworkImageLoader
 import dagger.hilt.android.HiltAndroidApp
+import app.needler.widgets.WidgetRefreshCoordinator
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import javax.inject.Inject
 
 /**
@@ -57,6 +61,19 @@ class NeedlerApplication : Application(), SingletonImageLoader.Factory, Configur
 
     @Inject lateinit var notifier: NeedlerNotifier
 
+    @Inject lateinit var widgetRefresh: WidgetRefreshCoordinator
+
+    /**
+     * The scope the widget pushes run in.
+     *
+     * An application scope rather than a view model's, because a home-screen widget going stale is
+     * precisely what happens after the user leaves the app - a scope tied to a screen would be
+     * cancelled at the moment the pushes start to matter. `SupervisorJob` so one failing collector
+     * does not silently take the other two down with it.
+     */
+    private val applicationScope: CoroutineScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     /**
      * Read by WorkManager the first time `getInstance` is called, which is long
      * after Hilt has injected [workerFactory].
@@ -79,6 +96,13 @@ class NeedlerApplication : Application(), SingletonImageLoader.Factory, Configur
         // Idempotent, and the only thing standing between a posted notification
         // and it being discarded without a trace.
         notifier.ensureChannels()
+        // Starts three collectors and does no I/O of its own, so the cold-start
+        // budget is unaffected: each one suspends immediately on a flow that has
+        // nothing to say until the session, a sync or the pull poller moves.
+        // Until this line existed `NeedlerWidgets.refresh` had no caller at all,
+        // so a placed widget kept whatever it last drew for as long as the
+        // process stayed dead.
+        widgetRefresh.start(applicationScope)
     }
 
     /**

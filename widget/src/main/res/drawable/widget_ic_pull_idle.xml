@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The pull glyph with nothing in flight: widget_ic_pull.xml in
+  NeedlerColors.textMuted instead of the positive green.
+
+  Two drawables rather than one tinted at runtime, for the reason
+  widget_ic_previous.xml gives: a tint is a RemoteViews action the launcher has
+  to replay on every rebind, and this glyph only ever appears in these two
+  colours.
+
+  The colour is the card's whole resting signal. REQUIREMENTS.md "Design system"
+  reserves #bbdb9b for progress and ready states, so the pull card shows green
+  only while the server is actually acquiring something; a glance at the home
+  screen answers "is anything happening" before a character is read. See
+  PullCardModel.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:pathData="M12,4 v11 M7,10 l5,5 l5,-5"
+        android:strokeColor="@color/needler_widget_text_muted"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <path
+        android:pathData="M4,19 h16"
+        android:strokeColor="@color/needler_widget_text_muted"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round" />
+
+</vector>

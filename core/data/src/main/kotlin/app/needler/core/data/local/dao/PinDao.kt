@@ -89,6 +89,66 @@ public interface PinDao {
     )
     public fun observeDownloadedAlbums(): Flow<List<DownloadedAlbumRow>>
 
+    /**
+     * One window of [observeDownloadedAlbums], same order, same rows.
+     *
+     * The Storage screen reads the unwindowed form; this is for a caller that draws a page. The
+     * correlated sum runs per candidate row either way, so the window is what stops a browser paying
+     * for every download in order to show twenty - REQUIREMENTS.md "Performance budgets".
+     */
+    @Query(
+        """
+        SELECT
+            pin.release_group_mbid AS release_group_mbid,
+            album.title AS title,
+            album.artist_name AS artist_name,
+            pin.pinned_at AS pinned_at,
+            (
+                SELECT COALESCE(SUM(ac.size_bytes), 0) FROM audio_cache ac
+                WHERE ac.release_group_mbid = pin.release_group_mbid AND ac.pinned = 1
+            ) AS size_bytes
+        FROM pin
+        JOIN album ON album.release_group_mbid = pin.release_group_mbid
+        ORDER BY size_bytes DESC, album.title ASC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public fun observeDownloadedAlbumsPaged(limit: Int, offset: Int): Flow<List<DownloadedAlbumRow>>
+
+    /**
+     * Downloaded albums alphabetically by title, windowed: what a browse list wants.
+     *
+     * A separate statement rather than an ordering the caller applies afterwards, because sorting a
+     * page taken in size order gives a page of the wrong albums - page one would be the twenty largest
+     * downloads, alphabetised, and its membership would change as a download grew. Android Auto's
+     * "On device" node reads this; see `PinRepository.observeDownloadedAlbums`.
+     *
+     * Ordered on `album.title_normalised`, which is the lower-cased, article-stripped, indexed column,
+     * rather than on `album.title`: sorting on the raw title would file "The Wall" under T in a list
+     * the rest of the app files under W.
+     */
+    @Query(
+        """
+        SELECT
+            pin.release_group_mbid AS release_group_mbid,
+            album.title AS title,
+            album.artist_name AS artist_name,
+            pin.pinned_at AS pinned_at,
+            (
+                SELECT COALESCE(SUM(ac.size_bytes), 0) FROM audio_cache ac
+                WHERE ac.release_group_mbid = pin.release_group_mbid AND ac.pinned = 1
+            ) AS size_bytes
+        FROM pin
+        JOIN album ON album.release_group_mbid = pin.release_group_mbid
+        ORDER BY album.title_normalised ASC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public fun observeDownloadedAlbumsByTitlePaged(
+        limit: Int,
+        offset: Int,
+    ): Flow<List<DownloadedAlbumRow>>
+
     @Query(
         """
         SELECT

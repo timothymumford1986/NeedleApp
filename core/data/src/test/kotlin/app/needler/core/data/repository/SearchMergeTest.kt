@@ -70,6 +70,53 @@ public class SearchMergeTest {
         assertTrue(v1.calls.isEmpty())
     }
 
+    /**
+     * The artist half of the bug that shipped.
+     *
+     * Searching "wonder" returned four catalogue strangers and not "Oh Wonder", three of whose albums
+     * were on the device. The artist index is a prefix `LIKE` on `sort_name_normalised`, and
+     * "oh wonder" does not begin with "wonder", so the mirror's own artist could not be found by the
+     * one word anybody would type to find them. `album_fts` indexes the artist name beside the album
+     * title, so the query that finds the albums now also finds their artist.
+     */
+    @Test
+    public fun `local search finds an owned artist the query does not begin`(): Unit = runTest {
+        albumDao.rows["rg-ultralife"] = albumRow(
+            mbid = "rg-ultralife",
+            title = "Ultralife",
+            artist = "Oh Wonder",
+            artistMbid = "ar-oh-wonder",
+        )
+        artistDao.rows["ar-oh-wonder"] = artistRow(mbid = "ar-oh-wonder", name = "Oh Wonder")
+
+        val results: LocalSearchResults = repository.searchLocal("wonder").first()
+
+        assertEquals("Oh Wonder", results.artists.single().name)
+        // Still the fast lane: rule 1 means no network call at all.
+        assertTrue(v1.calls.isEmpty())
+    }
+
+    /**
+     * The other side of that guard: `album_fts` matches an album on its *title* too, and the artist of
+     * an album that merely shares a word with the query has no business in the artist block.
+     */
+    @Test
+    public fun `an album matched by title does not put its artist in the artist results`(): Unit =
+        runTest {
+            albumDao.rows["rg-wonderland"] = albumRow(
+                mbid = "rg-wonderland",
+                title = "Wonderland",
+                artist = "Taylor Swift",
+                artistMbid = "ar-swift",
+            )
+            artistDao.rows["ar-swift"] = artistRow(mbid = "ar-swift", name = "Taylor Swift")
+
+            val results: LocalSearchResults = repository.searchLocal("wonder").first()
+
+            assertEquals(1, results.albums.size)
+            assertTrue("Taylor Swift does not answer \"wonder\"", results.artists.isEmpty())
+        }
+
     @Test
     public fun `a blank query is an empty result rather than a whole-library scan`(): Unit = runTest {
         albumDao.rows[RG] = albumRow()
@@ -227,6 +274,50 @@ public class SearchMergeTest {
         assertEquals(CatalogueLaneState.Loading, merged.catalogue)
     }
 
+    /**
+     * The whole of the "wonder" bug, end to end through the real mappers.
+     *
+     * On the device this returned "Jr. Wonder", "Wonder", "wonder", "wonder" - four rows, two of them
+     * the same string twice, all subtitled "Not in your library yet" - and no "Oh Wonder" at all. All
+     * three defects are asserted here at once: the owned artist is present, it leads, and the
+     * byte-identical catalogue names have collapsed to one row.
+     */
+    @Test
+    public fun `an owned artist leads and byte-identical catalogue names collapse`() {
+        val local = LocalSearchResults(
+            query = "wonder",
+            artists = listOf(
+                app.needler.core.data.mapper.EntityMappers.artist(
+                    artistRow(mbid = "ar-oh-wonder", name = "Oh Wonder"),
+                ),
+            ),
+        )
+        val catalogue = CatalogueSearchResults(
+            query = "wonder",
+            // MusicBrainz's own order, which is what put the worst match first on the device.
+            artists = listOfNotNull(
+                catalogueArtist("ar-jr-wonder", "Jr. Wonder"),
+                catalogueArtist("ar-wonder-1", "Wonder"),
+                catalogueArtist("ar-wonder-2", "wonder"),
+                catalogueArtist("ar-wonder-3", "wonder"),
+            ),
+        )
+
+        val merged: UnifiedSearchResults = UnifiedSearchUseCase.merge(
+            query = "wonder",
+            local = local,
+            catalogue = catalogue,
+            lane = CatalogueLaneState.Ready(),
+        )
+
+        assertEquals(
+            listOf("Oh Wonder", "Wonder", "Jr. Wonder"),
+            merged.artists.map { it.name },
+        )
+        // The leading row is the mirror's, so it knows how much of them is on the server.
+        assertEquals(2, merged.artists.first().ownedAlbumCount)
+    }
+
     @Test
     public fun `the merge is idempotent for a duplicate MBID within the catalogue half`() {
         val duplicate = app.needler.core.data.mapper.CatalogueMappers.album(
@@ -257,6 +348,12 @@ public class SearchMergeTest {
 
         assertEquals(listOf("Slint", "spiderland"), repository.observeRecentQueries().first())
     }
+
+    /** One catalogue artist hit, through the mapper the repository itself uses. */
+    private fun catalogueArtist(mbid: String, name: String) =
+        app.needler.core.data.mapper.CatalogueMappers.artist(
+            SearchResultDto(type = "artist", title = name, musicbrainzId = mbid),
+        )
 
     @Test
     public fun `clearing the recent list empties it`(): Unit = runTest {

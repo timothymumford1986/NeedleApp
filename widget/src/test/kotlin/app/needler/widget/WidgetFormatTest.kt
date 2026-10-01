@@ -63,4 +63,49 @@ class WidgetFormatTest {
         // No album: the artist is still worth saying.
         assertEquals("Khruangbin", WidgetFormat.artworkDescription(WidgetFixtures.untitledAlbum))
     }
+
+    @Test
+    fun `a percentage is the pack's own number`() {
+        // design/html/15-Widget.html draws the pull card at 62%.
+        assertEquals("62%", WidgetFormat.percent(0.62f))
+        assertEquals("0%", WidgetFormat.percent(0f))
+        assertEquals("100%", WidgetFormat.percent(1f))
+    }
+
+    @Test
+    fun `a percentage rounds the way the Pulls screen rounds it`() {
+        // PullsFormat.percent rounds rather than truncating, so 61.6 must not read 61 on one
+        // surface and 62 on the other.
+        assertEquals("62%", WidgetFormat.percent(0.616f))
+        assertEquals("61%", WidgetFormat.percent(0.614f))
+    }
+
+    @Test
+    fun `a percentage outside the range is clamped rather than printed`() {
+        // The server has reported over a hundred percent before; a bar cannot overfill and neither
+        // can the number beside it.
+        assertEquals("100%", WidgetFormat.percent(1.4f))
+        assertEquals("0%", WidgetFormat.percent(-0.2f))
+    }
+
+    @Test
+    fun `no reported progress is not zero percent`() {
+        // A pull still searching for sources has not started, so there is no number to print. The
+        // card draws an em dash and the stage word instead; see PullCardModel.
+        assertNull(WidgetFormat.percent(null))
+    }
+
+    @Test
+    fun `the separator joins whichever halves are there`() {
+        assertEquals(
+            "Searching · Black Classical Music",
+            WidgetFormat.withSeparator("Searching", "Black Classical Music"),
+        )
+        assertEquals("Black Classical Music", WidgetFormat.withSeparator(null, "Black Classical Music"))
+        assertEquals("Searching", WidgetFormat.withSeparator("Searching", null))
+        // Blank is treated as absent, so a server that returned an empty album title does not leave
+        // a card reading "Searching ·".
+        assertEquals("Searching", WidgetFormat.withSeparator("Searching", "   "))
+        assertEquals("", WidgetFormat.withSeparator(null, null))
+    }
 }

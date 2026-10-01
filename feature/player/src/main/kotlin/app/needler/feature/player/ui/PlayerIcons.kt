@@ -73,6 +73,33 @@ const val PathRepeat: String =
 /** The dot that marks "repeat this track" rather than "repeat the crate". */
 const val PathRepeatOneDot: String = "M13.2 12a1.2 1.2 0 1 1-2.4 0 1.2 1.2 0 1 1 2.4 0"
 
+/**
+ * The favourite heart.
+ *
+ * The pack draws no heart anywhere, because it draws no favourite control anywhere - which is why the
+ * player had none. REQUIREMENTS.md is nevertheless explicit that binary favourites via `star` and
+ * `unstar` are the supported mechanism (and that star *ratings* must never be offered, since
+ * `setRating` on this server validates its input and persists nothing), so the glyph is drawn in the
+ * pack's idiom: one path on the same 24x24 viewport, stroked at 1.8 when the track is not starred and
+ * filled with the same path when it is.
+ *
+ * One path for both states rather than an outline and a solid variant, so the filled heart is exactly
+ * the shape the outline encloses and the control does not appear to change size when it is tapped.
+ */
+const val PathHeart: String =
+    "M12 20.6l-7.1-7.1a4.8 4.8 0 0 1 0-6.8 4.8 4.8 0 0 1 6.8 0l0.3 0.3 0.3-0.3" +
+        "a4.8 4.8 0 0 1 6.8 0 4.8 4.8 0 0 1 0 6.8z"
+
+/**
+ * The sleep timer's crescent moon.
+ *
+ * The other glyph with no counterpart in the pack. A moon rather than a clock: `NeedlerClockIcon`
+ * already means "Searching" on the pull rows, and one shape meaning two things in one app is worse than
+ * one new shape. Same 24x24 viewport, same 1.8 stroke, so it sits beside the output chip's speaker
+ * without looking imported.
+ */
+const val PathMoon: String = "M20.5 14.2A8.6 8.6 0 0 1 9.8 3.5 7.2 7.2 0 1 0 20.5 14.2z"
+
 @Composable
 fun PlayerShuffleIcon(tint: Color, modifier: Modifier = Modifier, size: Dp = 22.dp) =
     NeedlerStrokeIcon(PathShuffle, tint, modifier, size)
@@ -121,6 +148,27 @@ fun PlayerNextIcon(tint: Color, modifier: Modifier = Modifier, size: Dp = 32.dp)
  * Off and All are the same glyph in two colours, which is how every player distinguishes them; the
  * state is also spoken, because colour alone is not an accessible difference.
  */
+/**
+ * The favourite heart, filled when [filled] is true.
+ *
+ * Fill is the state, not colour alone: REQUIREMENTS.md's accessibility section asks for a content
+ * description on every control, and the control around this icon says "Favourite" or "Remove from
+ * favourites" - but a filled shape is also the difference a person who cannot separate pale blue from
+ * pale grey can still see.
+ */
+@Composable
+fun PlayerHeartIcon(
+    tint: Color,
+    modifier: Modifier = Modifier,
+    size: Dp = 22.dp,
+    filled: Boolean = false,
+) = NeedlerStrokeIcon(PathHeart, tint, modifier, size, filled = filled)
+
+/** The sleep timer's moon. */
+@Composable
+fun PlayerMoonIcon(tint: Color, modifier: Modifier = Modifier, size: Dp = 16.dp) =
+    NeedlerStrokeIcon(PathMoon, tint, modifier, size)
+
 @Composable
 fun PlayerRepeatIcon(
     tint: Color,

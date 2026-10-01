@@ -7,6 +7,7 @@ package app.needler.settings
 import app.needler.core.domain.model.CrossfadeDuration
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EqPreset
+import app.needler.core.domain.model.StreamRung
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -117,10 +118,22 @@ data class SettingsUiState(
  * that change either.
  *
  * Screen 12 draws the first two rows with chevrons, as though each opened something. Neither does,
- * and neither can: there is no server-detail screen in the pack and no sync-history screen either,
- * and REQUIREMENTS.md puts "multiple server profiles" and the diagnostics log outside v1. A chevron
- * on a row that goes nowhere is the same lie as an inert tap target, so both rows are drawn without
- * one and are not clickable.
+ * and neither can: REQUIREMENTS.md's "Out of scope" table lists "Multiple server profiles", so there
+ * is no server detail to open, and the pack has no sync-history artboard, so there is nothing for the
+ * "Last synced" row to lead to either. A chevron on a row that goes nowhere is the same lie as an
+ * inert tap target, so both rows are drawn without one and are not clickable.
+ *
+ * **The diagnostics log is a different matter, and this comment used to get it wrong.** It said the
+ * log was outside v1 alongside multiple server profiles. It is not: REQUIREMENTS.md "Observability"
+ * requires "a local, user-viewable diagnostics log covering the last session … shareable as a file
+ * for bug reports", and it appears nowhere in the "Out of scope" table. The Server block therefore
+ * has a third row, drawn by `ServerSection` and wired through
+ * [SettingsCallbacks.onOpenDiagnostics], and it is the one row in that block with a chevron.
+ *
+ * Nothing about that row is state, which is why it appears nowhere in this type. It is always
+ * available - the log exists from process start whether or not a server is configured, and a user
+ * who cannot connect to a server at all is the person who needs it most - so there is no
+ * `canOpenDiagnostics` here to go stale.
  */
 data class ServerSectionState(
     /** The saved server's host, e.g. `music.yourhome.net`. Null before onboarding. */
@@ -191,13 +204,18 @@ data class PlayingSectionState(
     val scrobbleTargets: List<String> = emptyList(),
 
     /**
-     * Whether a metered connection gets MP3 320 instead of original bytes.
+     * The ceiling for streaming on Wi-Fi. [StreamRung.ORIGINAL] by default and normally left there.
      *
-     * The domain models this as one preference with two values rather than as the two separate rows
-     * screen 12 draws - `StreamQualityPreference.MP3_320_ON_METERED` already means "original on
-     * unmetered, MP3 320 while metered" - so there is one control here, not two.
+     * Two rungs rather than one switch, because the product has two connections and one answer for
+     * both is not what anyone wants: the whole point of the setting is that mobile data is different.
+     * There is deliberately no third rung for downloads - a download is always original bytes, since
+     * REQUIREMENTS.md "Why transcoded bytes are never cached" makes a transcoded download a lossy
+     * copy that becomes "that track's **permanent** offline version".
      */
-    val transcodeOnMobileData: Boolean = false,
+    val wifiRung: StreamRung = StreamRung.ORIGINAL,
+
+    /** The ceiling while metered. [StreamRung.MP3_320] by default. */
+    val dataRung: StreamRung = StreamRung.MP3_320,
 
     /**
      * True only when `transcoding:1` is advertised **and** the server reports transcoding enabled.
@@ -206,7 +224,9 @@ data class PlayingSectionState(
      * appears in `getOpenSubsonicExtensions` and the server reports transcoding enabled. Neither is
      * guaranteed; ffmpeg may be absent." Hidden, not disabled: a greyed row invites a user to go
      * hunting for the thing that would enable it, and on a server with no ffmpeg there is nothing
-     * to find.
+     * to find. It applies to both rung pickers now rather than to one switch, because on such a
+     * server every rung resolves to original bytes and a picker would be seven ways to change
+     * nothing.
      */
     val transcodingAvailable: Boolean = false,
 ) {
@@ -240,14 +260,41 @@ data class PlayingSectionState(
             }
         }
 
+    /** `Original`, `MP3 320`, `Opus 128` - whichever rung Wi-Fi is set to. */
+    val wifiRungLabel: String get() = SettingsFormat.rung(wifiRung)
+
+    /** The same for mobile data. */
+    val dataRungLabel: String get() = SettingsFormat.rung(dataRung)
+
     /**
-     * Always `Original`.
+     * The sentence under the Wi-Fi picker warning that this rung builds no offline library, or null.
      *
-     * REQUIREMENTS.md, rule 1 of "Streaming": "Default stream quality is Original, matching screen
-     * 12", and the only other value the domain models is the metered transcode, which is the
-     * separate control below. So the row reports rather than offering, and carries no chevron.
+     * **This is the cache cliff, said out loud.** REQUIREMENTS.md "Why transcoded bytes are never
+     * cached": only original-format bytes are ever retained, because retaining a 320 kbps rendering
+     * of a FLAC would make it "that track's **permanent** offline version". The rule is right and is
+     * not negotiable. Its consequence is not obvious from anywhere else in the app: on a rung below
+     * the library's own quality, "stream on the train and build up offline music" silently never
+     * happens, the Storage figures stay at `0 B`, and nothing says why.
+     *
+     * Worded around the re-encode rather than around the user's library, deliberately. Whether a
+     * given rung is actually below the source varies record by record - the resolver caps every rung
+     * against each track's own quality - so a flat claim about "your library" would be wrong for part
+     * of it. What is always true is the conditional: whatever the server re-encodes is not kept.
      */
-    val streamQualityLabel: String get() = "Original"
+    val wifiRungCacheNotice: String? get() = cacheNotice(wifiRung, "Wi-Fi")
+
+    /** The same for mobile data, which is the picker a data-saving rung is usually set on. */
+    val dataRungCacheNotice: String? get() = cacheNotice(dataRung, "mobile data")
+
+    private fun cacheNotice(rung: StreamRung, connection: String): String? =
+        if (!rung.isTranscode) {
+            null
+        } else {
+            "Anything the server re-encodes is never kept on this device, so music played on " +
+                connection + " at this setting does not build up an offline library. Records " +
+                "already at " + SettingsFormat.rung(rung) + " or below are sent untouched and are " +
+                "kept as normal."
+        }
 
     /**
      * `Scrobble to ListenBrainz`, or `Report plays to your server` when the destinations are not

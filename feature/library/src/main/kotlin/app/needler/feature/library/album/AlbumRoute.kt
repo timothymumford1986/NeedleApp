@@ -47,6 +47,13 @@ fun AlbumRoute(
         onRetryTrack = viewModel::onRetryTrack,
         onOpenArtist = { state.album?.artistMbid?.let(onOpenArtist) },
         onDismissNotice = viewModel::onDismissNotice,
+        onToggleFavourite = viewModel::onToggleFavourite,
+        onToggleTrackFavourite = viewModel::onToggleTrackFavourite,
+        onMonitorArtistChange = viewModel::onMonitorArtistChange,
+        onConfirmRequest = viewModel::onConfirmRequest,
+        onDismissRequestSheet = viewModel::onDismissRequestSheet,
         modifier = modifier,
+        onOverrideQuality = viewModel::onOverrideQuality,
+        onClearQualityOverride = viewModel::onClearQualityOverride,
     )
 }

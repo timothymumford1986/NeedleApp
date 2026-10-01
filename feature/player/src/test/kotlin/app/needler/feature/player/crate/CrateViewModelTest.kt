@@ -151,6 +151,46 @@ class CrateViewModelTest {
     }
 
     @Test
+    fun `one row can be dropped without emptying the crate`() = runTest {
+        val viewModel = CrateViewModel(controller)
+
+        viewModel.state.test {
+            var state: CrateUiState = awaitItem()
+            if (state.isEmpty) state = awaitItem()
+            val before: Int = state.queue.items.size
+
+            viewModel.removeItem("q5")
+
+            val after: CrateUiState = awaitItem()
+            assertEquals(before - 1, after.queue.items.size)
+            assertNull(after.queue.items.firstOrNull { it.id == "q5" })
+            // The Playing row is untouched: a removal from Up next cannot change what is playing.
+            assertEquals("Sienna", after.playing?.track?.title)
+        }
+        // By id, not by index. The same track may appear twice in the crate, and a skip between the tap
+        // and the command shifts every index but no id.
+        assertEquals(listOf("removeQueueItem(q5)"), controller.commands)
+    }
+
+    @Test
+    fun `removing the playing row hands the crate to the track that followed`() = runTest {
+        val viewModel = CrateViewModel(controller)
+
+        viewModel.state.test {
+            var state: CrateUiState = awaitItem()
+            if (state.isEmpty) state = awaitItem()
+
+            viewModel.removeItem("q1")
+
+            val after: CrateUiState = awaitItem()
+            // PlayQueue.withItemRemoved defines this: the index stays put, so the row that followed is
+            // now the current one.
+            assertEquals("Hamptons", after.playing?.track?.title)
+        }
+        assertEquals(listOf("removeQueueItem(q1)"), controller.commands)
+    }
+
+    @Test
     fun `clear empties the crate and stops`() = runTest {
         val viewModel = CrateViewModel(controller)
 

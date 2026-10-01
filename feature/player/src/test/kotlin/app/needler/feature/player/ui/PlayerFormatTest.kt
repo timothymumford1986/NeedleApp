@@ -1,10 +1,20 @@
+// kotlinx.datetime.Instant is a typealias for kotlin.time.Instant; the note at the top of
+// LibraryFormat.kt explains why the opt-in is declared rather than risked.
+@file:OptIn(ExperimentalTime::class)
+
 package app.needler.feature.player.ui
 
 import app.needler.core.domain.model.AudioFormat
 import app.needler.core.domain.model.AudioQuality
 import app.needler.core.domain.model.CastAvailability
+import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OutputTarget
+import app.needler.core.domain.model.SleepTimer
 import app.needler.feature.player.fake.PlayerFixtures
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -131,5 +141,144 @@ class PlayerFormatTest {
         assertEquals("The Marias", PlayerFormat.artistAndAlbum(item))
         assertEquals("The Marias · Submarine", PlayerFormat.artistAndAlbum(PlayerFixtures.playingItem))
         assertEquals("", PlayerFormat.artistAndAlbum(null))
+    }
+
+    // ---- the sleep timer ----------------------------------------------------
+
+    @Test
+    fun `an unarmed sleep timer names itself`() {
+        assertEquals("Sleep timer", PlayerFormat.sleepTimerLabel(SleepTimer.Off, NOW))
+        assertEquals("Sleep timer off", PlayerFormat.spokenSleepTimer(SleepTimer.Off, NOW))
+    }
+
+    @Test
+    fun `end of track is not a countdown`() {
+        assertEquals("End of track", PlayerFormat.sleepTimerLabel(SleepTimer.EndOfTrack, NOW))
+        assertEquals(
+            "Sleep timer, stopping at the end of this track",
+            PlayerFormat.spokenSleepTimer(SleepTimer.EndOfTrack, NOW),
+        )
+    }
+
+    @Test
+    fun `a timed stop prints what is left, not what was chosen`() {
+        assertEquals("30 min", PlayerFormat.sleepTimerLabel(SleepTimer.At(NOW + 30.minutes), NOW))
+        assertEquals("24 min", PlayerFormat.sleepTimerLabel(SleepTimer.At(NOW + 24.minutes), NOW))
+        assertEquals("1 hr", PlayerFormat.sleepTimerLabel(SleepTimer.At(NOW + 60.minutes), NOW))
+        assertEquals(
+            "1 hr 20 min",
+            PlayerFormat.sleepTimerLabel(SleepTimer.At(NOW + 80.minutes), NOW),
+        )
+    }
+
+    @Test
+    fun `the last minute does not read as zero`() {
+        // "0 min" on a timer that has not fired reads as a broken timer.
+        assertEquals(
+            "Less than a minute",
+            PlayerFormat.sleepTimerLabel(SleepTimer.At(NOW + 40.seconds), NOW),
+        )
+    }
+
+    @Test
+    fun `an elapsed timer reads as unarmed, because it is about to be`() {
+        val gone = SleepTimer.At(NOW - 1.minutes)
+        assertEquals("Sleep timer", PlayerFormat.sleepTimerLabel(gone, NOW))
+        assertEquals("Sleep timer off", PlayerFormat.spokenSleepTimer(gone, NOW))
+        assertNull(SleepTimerOptions.selectedFor(gone, NOW))
+    }
+
+    @Test
+    fun `a countdown is spoken in words rather than as a number`() {
+        assertEquals(
+            "Sleep timer, 24 minutes left",
+            PlayerFormat.spokenSleepTimer(SleepTimer.At(NOW + 24.minutes), NOW),
+        )
+    }
+
+    // ---- the sleep timer's choices ------------------------------------------
+
+    @Test
+    fun `a chosen duration becomes an instant that far ahead`() {
+        assertEquals(
+            SleepTimer.At(NOW + 45.minutes),
+            SleepTimerOptions.timerFor(SleepTimerChoice.MINUTES_45, NOW),
+        )
+        assertEquals(SleepTimer.Off, SleepTimerOptions.timerFor(SleepTimerChoice.OFF, NOW))
+        assertEquals(
+            SleepTimer.EndOfTrack,
+            SleepTimerOptions.timerFor(SleepTimerChoice.END_OF_TRACK, NOW),
+        )
+    }
+
+    @Test
+    fun `the lit pill is recovered from what is left`() {
+        // The domain stores the moment to stop and not the pill that was pressed, so the pill is inferred:
+        // the shortest offered duration that still covers the remaining time.
+        assertEquals(
+            SleepTimerChoice.MINUTES_30,
+            SleepTimerOptions.selectedFor(SleepTimer.At(NOW + 30.minutes), NOW),
+        )
+        assertEquals(
+            SleepTimerChoice.MINUTES_30,
+            SleepTimerOptions.selectedFor(SleepTimer.At(NOW + 25.minutes), NOW),
+        )
+        assertEquals(
+            SleepTimerChoice.MINUTES_15,
+            SleepTimerOptions.selectedFor(SleepTimer.At(NOW + 10.minutes), NOW),
+        )
+        // Longer than anything offered - a timer armed from another surface - lights the longest.
+        assertEquals(
+            SleepTimerChoice.MINUTES_60,
+            SleepTimerOptions.selectedFor(SleepTimer.At(NOW + 180.minutes), NOW),
+        )
+    }
+
+    @Test
+    fun `off and end of track select themselves exactly`() {
+        assertEquals(SleepTimerChoice.OFF, SleepTimerOptions.selectedFor(SleepTimer.Off, NOW))
+        assertEquals(
+            SleepTimerChoice.END_OF_TRACK,
+            SleepTimerOptions.selectedFor(SleepTimer.EndOfTrack, NOW),
+        )
+    }
+
+    @Test
+    fun `every choice has a printed label and a spoken one`() {
+        for (choice in SleepTimerOptions.offered) {
+            assertNotNull(SleepTimerOptions.label(choice))
+            assertNotNull(SleepTimerOptions.spokenLabel(choice))
+            // TalkBack must not be handed the printed form: "15 min" is read "fifteen min".
+            assertEquals(
+                "a spoken label should differ from the printed one for " + choice,
+                false,
+                SleepTimerOptions.label(choice) == SleepTimerOptions.spokenLabel(choice),
+            )
+        }
+    }
+
+    // ---- favourites ---------------------------------------------------------
+
+    @Test
+    fun `a refused favourite says which one of the two things went wrong`() {
+        assertEquals(
+            "Your account is not allowed to change favourites.",
+            PlayerFormat.favouriteErrorMessage(NeedlerError.PermissionDenied()),
+        )
+        assertEquals(
+            "That track is no longer on the server.",
+            PlayerFormat.favouriteErrorMessage(NeedlerError.NotFound("track")),
+        )
+        // The fallback is about the favourite, not about playback: "That track would not play" would be
+        // the wrong sentence entirely for a star.
+        assertEquals(
+            "That favourite did not reach the server.",
+            PlayerFormat.favouriteErrorMessage(NeedlerError.RateLimited()),
+        )
+    }
+
+    private companion object {
+        /** A fixed clock, so every expectation above is arithmetic rather than a race. */
+        val NOW: Instant = Instant.fromEpochMilliseconds(1_700_000_000_000L)
     }
 }

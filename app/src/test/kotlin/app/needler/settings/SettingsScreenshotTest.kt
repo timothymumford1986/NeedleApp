@@ -9,6 +9,7 @@ import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import app.needler.core.domain.model.CrossfadeDuration
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EqPreset
+import app.needler.core.domain.model.StreamRung
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.screenshot.NeedlerDevice
 import app.needler.screenshot.NeedlerScreenshots
@@ -144,7 +145,8 @@ class SettingsScreenshotTest {
             onGaplessChange = {},
             onOpenCrossfade = {},
             onOpenEqualiser = {},
-            onTranscodeOnMobileDataChange = {},
+            onWifiRungChange = {},
+            onDataRungChange = {},
             onScrobblingChange = {},
             onNotifyPullFinishedChange = {},
             onNotifyPullFailedChange = {},
@@ -157,6 +159,10 @@ class SettingsScreenshotTest {
             onArmDestructiveAction = {},
             onCancelDestructiveAction = {},
             onConfirmDestructiveAction = {},
+            // Both optional rows are wired here so the goldens show them. Left null they vanish,
+            // which is the point of their being nullable - and a screenshot of a screen with two
+            // rows missing is a screenshot of a wiring gap rather than of the screen.
+            onOpenDiagnostics = {},
             onOpenLicences = {},
         )
 
@@ -176,7 +182,8 @@ class SettingsScreenshotTest {
                 equaliserPreset = EqPreset.FLAT,
                 scrobblingEnabled = false,
                 scrobbleTargets = listOf("ListenBrainz"),
-                transcodeOnMobileData = true,
+                wifiRung = StreamRung.ORIGINAL,
+                dataRung = StreamRung.MP3_320,
                 transcodingAvailable = true,
             ),
             notifications = NotificationSectionState(

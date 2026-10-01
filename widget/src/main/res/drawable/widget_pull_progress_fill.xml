@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The filled half of the pull card's bar: `height: 4px; border-radius: 2px;
+  background: #bbdb9b` (NeedlerColors.positive) on screens 15 and 18.
+
+  A separate drawable from widget_progress_fill.xml, which is the now-playing
+  card's position bar in the accent blue. Same geometry, different colour, and
+  the colour is the point: the accent is the transport and the positive is
+  progress, per REQUIREMENTS.md "Design system".
+
+  Its *width* is computed in Kotlin and applied with GlanceModifier.width,
+  because Glance has no fractional weight and no ProgressBar whose height the
+  pack's 4dp can be pinned to. See PullCard.ProgressBar.
+
+  The unfilled track is shared with the now-playing card
+  (widget_progress_track.xml): the pack draws both in #1f271b, and a track is a
+  track.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="2dp" />
+    <solid android:color="@color/needler_widget_positive" />
+</shape>

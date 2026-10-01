@@ -15,6 +15,7 @@ import app.needler.core.data.local.dao.FavouriteDao
 import app.needler.core.data.local.dao.PinDao
 import app.needler.core.data.local.dao.PlaylistDao
 import app.needler.core.data.local.dao.PullDao
+import app.needler.core.data.local.dao.StreamOverrideDao
 import app.needler.core.data.local.dao.SyncStateDao
 import app.needler.core.data.local.dao.TrackDao
 import app.needler.core.data.local.dao.WriteQueueDao
@@ -27,6 +28,7 @@ import app.needler.core.data.local.entity.PinEntity
 import app.needler.core.data.local.entity.PlaylistEntity
 import app.needler.core.data.local.entity.PlaylistTrackEntity
 import app.needler.core.data.local.entity.PullEntity
+import app.needler.core.data.local.entity.StreamOverrideEntity
 import app.needler.core.data.local.entity.SyncStateEntity
 import app.needler.core.data.local.entity.TrackEntity
 import app.needler.core.data.local.entity.TrackFtsEntity
@@ -60,6 +62,7 @@ import app.needler.core.data.local.entity.WriteQueueEntity
         PullEntity::class,
         WriteQueueEntity::class,
         SyncStateEntity::class,
+        StreamOverrideEntity::class,
     ],
 )
 @TypeConverters(NeedlerTypeConverters::class)
@@ -84,6 +87,8 @@ public abstract class NeedlerDatabase : RoomDatabase() {
     public abstract fun writeQueueDao(): WriteQueueDao
 
     public abstract fun syncStateDao(): SyncStateDao
+
+    public abstract fun streamOverrideDao(): StreamOverrideDao
 
     /**
      * Drops the mirror, the pins, the cache index, the write queue and the sync state, because the
@@ -260,10 +265,10 @@ public abstract class NeedlerDatabase : RoomDatabase() {
     public companion object {
 
         /**
-         * Schema version 1: the first release. Bumping this requires a hand-written migration in
+         * Schema version 2: `stream_override` added. Bumping this requires a hand-written migration in
          * [NeedlerMigrations.ALL] - there is no destructive fallback, by requirement.
          */
-        public const val VERSION: Int = 1
+        public const val VERSION: Int = 2
 
         public const val DATABASE_NAME: String = "needler.db"
 

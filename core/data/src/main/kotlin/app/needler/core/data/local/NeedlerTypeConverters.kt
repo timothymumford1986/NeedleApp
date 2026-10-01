@@ -6,7 +6,9 @@ import app.needler.core.data.local.entity.DownloadStateDb
 import app.needler.core.data.local.entity.FavouriteTypeDb
 import app.needler.core.data.local.entity.PinSourceDb
 import app.needler.core.data.local.entity.PullStatusDb
+import app.needler.core.data.local.entity.StreamOverrideScopeDb
 import app.needler.core.data.local.entity.WriteOperationTypeDb
+import app.needler.core.data.settings.StreamQuality
 
 /**
  * Every type conversion the database performs, written out one pair at a time.
@@ -62,4 +64,28 @@ public class NeedlerTypeConverters {
     @TypeConverter
     public fun toWriteOperationType(value: String): WriteOperationTypeDb =
         WriteOperationTypeDb.fromDbValue(value)
+
+    @TypeConverter
+    public fun fromStreamOverrideScope(value: StreamOverrideScopeDb): String = value.dbValue
+
+    @TypeConverter
+    public fun toStreamOverrideScope(value: String): StreamOverrideScopeDb =
+        StreamOverrideScopeDb.fromDbValue(value)
+
+    /**
+     * The one converter whose enum lives outside `local.entity`.
+     *
+     * `stream_override.rung` stores a rung of the stream-quality ladder, and that ladder already has
+     * exactly one set of frozen persisted names - [StreamQuality.storageValue], which the two mode
+     * rungs use in `DataStore`. A third `StreamRungDb` copy of the same eight strings would be a
+     * ladder that could drift from the other two without anything failing to compile, so the existing
+     * frozen names are reused here instead. The rule they obey is the same one this file states for
+     * the others: the strings are frozen, and an unrecognised value degrades to
+     * [StreamQuality.ORIGINAL] - the rung that never transcodes - rather than throwing.
+     */
+    @TypeConverter
+    public fun fromStreamQuality(value: StreamQuality): String = value.storageValue
+
+    @TypeConverter
+    public fun toStreamQuality(value: String): StreamQuality = StreamQuality.fromStorageValue(value)
 }

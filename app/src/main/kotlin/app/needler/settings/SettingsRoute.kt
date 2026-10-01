@@ -45,8 +45,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * @param onSignedOut called once, after the sign-out has actually completed. The host navigates to
  *   Connect and drops Home from the back stack; a sign-out that failed never calls it, and the
  *   screen says why instead.
- * @param onOpenLicences opens the licences and full terms. Null - the default - removes the link
- *   rather than drawing one that does nothing, because there is no licences screen in the pack yet.
+ * @param onOpenDiagnostics opens the diagnostics log, `app.needler.diagnostics.DiagnosticsRoute`.
+ *   Register it as `composable("diagnostics")` and pass `navController::navigate`. Null - the
+ *   default - removes the row rather than drawing one that does nothing. REQUIREMENTS.md
+ *   "Observability" requires the log, so leaving this null is a wiring gap and not a decision.
+ * @param onOpenLicences opens the licences and full terms, `app.needler.licences.LicencesRoute`.
+ *   Register it as `composable("licences")` and pass `navController::navigate`. Null - the default -
+ *   removes the link rather than drawing one that does nothing.
  * @param onSignInAgain re-authenticates an expired companion session, which means returning to
  *   Connect for the account password: Needler never stores it, so there is no silent renewal and
  *   REQUIREMENTS.md requires the user be prompted. Null leaves the day-25 expiry warning as a
@@ -60,6 +65,7 @@ fun SettingsRoute(
     onChangeServer: () -> Unit,
     onSignedOut: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenDiagnostics: (() -> Unit)? = null,
     onOpenLicences: (() -> Unit)? = null,
     onSignInAgain: (() -> Unit)? = null,
     viewModel: SettingsViewModel = hiltViewModel(),
@@ -81,7 +87,8 @@ fun SettingsRoute(
             onGaplessChange = viewModel::onGaplessChange,
             onOpenCrossfade = onOpenCrossfade,
             onOpenEqualiser = onOpenEqualiser,
-            onTranscodeOnMobileDataChange = viewModel::onTranscodeOnMobileDataChange,
+            onWifiRungChange = viewModel::onWifiRungChange,
+            onDataRungChange = viewModel::onDataRungChange,
             onScrobblingChange = viewModel::onScrobblingChange,
             onNotifyPullFinishedChange = viewModel::onNotifyPullFinishedChange,
             onNotifyPullFailedChange = viewModel::onNotifyPullFailedChange,
@@ -94,6 +101,7 @@ fun SettingsRoute(
             onArmDestructiveAction = viewModel::onArmDestructiveAction,
             onCancelDestructiveAction = viewModel::onCancelDestructiveAction,
             onConfirmDestructiveAction = viewModel::onConfirmDestructiveAction,
+            onOpenDiagnostics = onOpenDiagnostics,
             onOpenLicences = onOpenLicences,
             onSignInAgain = onSignInAgain,
         ),

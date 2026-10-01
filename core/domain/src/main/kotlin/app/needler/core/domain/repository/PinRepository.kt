@@ -57,13 +57,36 @@ public interface PinRepository {
     public fun observeStorageUsage(): Flow<StorageUsage>
 
     /**
-     * Downloaded albums with the bytes each one occupies, largest first, so the Storage screen can
-     * list them and remove them one at a time.
+     * Downloaded albums with the bytes each one occupies, so the Storage screen can list them and
+     * remove them one at a time.
      *
      * This list is the *only* way downloaded bytes ever go away, short of
      * [removeAllFromDevice]: nothing in the app evicts a download, however full the device gets.
+     *
+     * ## Why this one takes an ordering as well as a window
+     *
+     * [limit] and [offset] are the window `LibraryRepository.observeAlbumList` already takes, and
+     * [order] is that function's `kind` argument under another name: one enum choosing the SQL
+     * ordering, then the page. Downloads are the one list whose two readers genuinely disagree about
+     * order, so a window alone would have been wrong for one of them. The Storage screen wants
+     * [DownloadedAlbumOrder.LARGEST_FIRST], because the question it answers is "what is taking up
+     * the room". Android Auto wants [DownloadedAlbumOrder.ALPHABETICAL_BY_TITLE], because a car list
+     * that rearranges itself whenever a download grows is a list nobody can learn.
+     *
+     * Before the ordering existed, the car got its order by reading **every** downloaded album and
+     * re-sorting in Kotlin. Handing it a size-ordered page and letting it sort that page by title
+     * would be worse than either: page one would be the twenty largest albums, alphabetised - a list
+     * that is neither, and that changes membership as downloads grow. The ordering therefore has to
+     * be part of the query, not applied after it.
+     *
+     * The default is [DownloadedAlbumOrder.LARGEST_FIRST] with no window, which is exactly what this
+     * function did before, so the Storage screen and the Wear audio sync read on unchanged.
      */
-    public fun observeDownloadedAlbums(): Flow<List<DownloadedAlbum>>
+    public fun observeDownloadedAlbums(
+        order: DownloadedAlbumOrder = DownloadedAlbumOrder.LARGEST_FIRST,
+        limit: Int = Int.MAX_VALUE,
+        offset: Int = 0,
+    ): Flow<List<DownloadedAlbum>>
 
     public fun observeStoragePreferences(): Flow<StoragePreferences>
 
@@ -171,4 +194,35 @@ public interface PinRepository {
      * It must never touch the metadata mirror, which would leave the app unable to browse at all.
      */
     public suspend fun removeAllFromDevice(): Outcome<EvictionReport>
+}
+
+/**
+ * How [PinRepository.observeDownloadedAlbums] orders its page.
+ *
+ * Two orderings rather than one because the two readers ask different questions of the same rows,
+ * and the answer has to come out of SQL: a page taken in one order and re-sorted in another is a
+ * page of the wrong albums. See [PinRepository.observeDownloadedAlbums].
+ *
+ * It sits here rather than beside [app.needler.core.domain.model.DownloadedAlbum] in
+ * `model/Offline.kt`, which is where `AlbumListKind` and `TrackListKind` would put it. That file was
+ * not this change's to edit; moving this declaration there is a pure relocation whenever it is.
+ */
+public enum class DownloadedAlbumOrder {
+
+    /**
+     * Largest first, title breaking ties: the Storage screen's order, and the historical behaviour.
+     *
+     * The screen exists so a user on a full device can free space, so the 4 GB box set belongs at the
+     * top rather than whatever was pinned most recently. Bytes are measured from the cache index, so
+     * this is what a removal would actually give back.
+     */
+    LARGEST_FIRST,
+
+    /**
+     * Alphabetical by album title: what a browse list wants.
+     *
+     * Android Auto's "On device" node reads this. Size order would make the list re-arrange itself
+     * as downloads progress, and a list that moves under the driver's finger is one nobody can learn.
+     */
+    ALPHABETICAL_BY_TITLE,
 }

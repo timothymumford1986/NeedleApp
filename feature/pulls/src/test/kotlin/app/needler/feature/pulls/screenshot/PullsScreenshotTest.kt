@@ -58,6 +58,38 @@ class PullsScreenshotTest {
         )
     }
 
+    /**
+     * The queue a real device drew: mostly pulls the `album` mirror could not
+     * name.
+     *
+     * A screenshot suite built only from well-formed data proves nothing, and this
+     * one was. Every fixture had a title, so the render that shipped looked
+     * correct while the live screen showed 34 blank title lines and 34 **Cancel**
+     * buttons described as "Cancel the pull of ". This image is where that is now
+     * visible: the fallback fills the title slot, the one named row is kept beside
+     * the unnamed ones so the difference can be seen, and a row with neither title
+     * nor artist is included because it is the floor of the layout.
+     */
+    @Test
+    fun `pulls the server could not name`() {
+        capture(
+            "pulls-missing-titles",
+            NeedlerDevice.Phone,
+            PACK.copy(pulls = SamplePulls.withMissingTitles, heldCount = 0),
+        )
+    }
+
+    /** The same rows at 200% text, where a fallback title has the least room. */
+    @Test
+    fun `pulls the server could not name, at 200 percent text size`() {
+        capture(
+            "pulls-missing-titles-large-text",
+            NeedlerDevice.Phone,
+            PACK.copy(pulls = SamplePulls.withMissingTitles, heldCount = 0),
+            fontScale = 2f,
+        )
+    }
+
     @Test
     fun `nothing in flight, so the header says so`() {
         capture(

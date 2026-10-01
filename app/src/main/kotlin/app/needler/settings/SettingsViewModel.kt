@@ -13,7 +13,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.needler.core.data.settings.NeedlerSettingsStore
 import app.needler.core.data.settings.NotificationSettings
-import app.needler.core.data.settings.StreamQuality
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EvictionReport
@@ -27,7 +26,7 @@ import app.needler.core.domain.model.ServerIdentity
 import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
-import app.needler.core.domain.model.StreamQualityPreference
+import app.needler.core.domain.model.StreamRung
 import app.needler.core.domain.model.SyncReport
 import app.needler.core.domain.model.SyncState
 import app.needler.core.domain.model.User
@@ -61,21 +60,18 @@ import kotlinx.coroutines.launch
  *
  * ## Why `NeedlerSettingsStore` is injected as well as the repositories
  *
- * Two of the things screen 12 draws have no domain repository behind them, and inventing one in
- * `:core:domain` is not this agent's to do:
+ * **The three notification switches**, and nothing else any more. Nothing in `:core:domain` exposes
+ * them; they live only in the preference store, which is also where `BackgroundWorkScheduler` reads
+ * them from, so going through the store is reading the same value the background half obeys rather
+ * than a parallel copy of it.
  *
- *  1. **The three notification switches.** Nothing in `:core:domain` exposes them; they live only
- *     in the preference store, which is also where `BackgroundWorkScheduler` reads them from. Going
- *     through the store is therefore reading the same value the background half obeys, not a
- *     parallel copy of it.
- *  2. **Turning the metered transcode back off.** `PlaybackSettingsRepository.setStreamQuality`
- *     cannot express it. Writing `ORIGINAL` sets the *unmetered* quality and leaves
- *     `mobile_data_stream_quality` at its `MP3_320` default, and the repository then reads the pair
- *     back as `MP3_320_ON_METERED` again - so the preference is write-once through the domain
- *     interface. This is a bug in `:core:data`, recorded in the handover notes; until it is fixed,
- *     this screen calls the repository *and* clears the metered quality through the store, so the
- *     switch works in both directions. Both writes land in the same `DataStore`, so there is no
- *     second source of truth, only a second door into the one that exists.
+ * There used to be a second reason, and it is worth recording that it is gone: turning the metered
+ * transcode *off* was impossible through the domain interface, because one setter carried a
+ * two-valued preference over two stored keys and writing "original" left the metered key at its
+ * `MP3_320` default, which the repository read straight back as the transcode. This screen therefore
+ * wrote twice - once through the repository, once through the store - to make its own switch work in
+ * both directions. `PlaybackSettingsRepository` now has one setter per connection, so
+ * [onWifiRungChange] and [onDataRungChange] are single writes and the second door is closed.
  *
  * `:app` is the only module allowed to see `:core:data` at all, which is what makes this legal
  * here and illegal anywhere else.
@@ -141,8 +137,8 @@ class SettingsViewModel @Inject constructor(
             equaliserPreset = preferences.eq.preset,
             scrobblingEnabled = scrobble.reportingEnabled,
             scrobbleTargets = scrobble.serverTargets,
-            transcodeOnMobileData =
-                preferences.streamQuality == StreamQualityPreference.MP3_320_ON_METERED,
+            wifiRung = preferences.wifiQuality,
+            dataRung = preferences.dataQuality,
             // Pessimistic before negotiation has happened: the row stays hidden rather than
             // appearing and then vanishing a moment later.
             transcodingAvailable = capabilities?.transcodingAvailable == true,
@@ -241,23 +237,22 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * "Stream MP3 320 on mobile data".
+     * "Stream quality on Wi-Fi".
      *
-     * Two writes, on purpose - see this class's header. The repository call is the domain-level
-     * statement of intent and is what any future correct implementation will honour; the store call
-     * is what makes switching the setting *off* actually stick today, because
-     * `setStreamQuality(ORIGINAL)` leaves the metered quality at its transcoding default and the
-     * repository reads that pair straight back as `MP3_320_ON_METERED`.
+     * **One write, through the repository, and no store call** - which is the point. This used to be a
+     * switch that wrote twice: once through `PlaybackSettingsRepository.setStreamQuality`, and once
+     * through `NeedlerSettingsStore` to clear the metered key, because the old two-valued setter could
+     * not express "off" and the repository read the pair straight back as
+     * `MP3_320_ON_METERED`. The setter is per-connection now, so each write lands in exactly the key
+     * it names and the workaround is gone. See this class's header, item 2, which this retires.
      */
-    fun onTranscodeOnMobileDataChange(enabled: Boolean) {
-        viewModelScope.launch {
-            playbackSettings.setStreamQuality(
-                if (enabled) StreamQualityPreference.MP3_320_ON_METERED else StreamQualityPreference.ORIGINAL,
-            )
-            settingsStore.setMobileDataStreamQuality(
-                if (enabled) StreamQuality.MP3_320 else StreamQuality.ORIGINAL,
-            )
-        }
+    fun onWifiRungChange(rung: StreamRung) {
+        viewModelScope.launch { playbackSettings.setWifiStreamRung(rung) }
+    }
+
+    /** "Stream quality on mobile data". */
+    fun onDataRungChange(rung: StreamRung) {
+        viewModelScope.launch { playbackSettings.setDataStreamRung(rung) }
     }
 
     // ---- Notifications -------------------------------------------------------

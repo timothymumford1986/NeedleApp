@@ -197,6 +197,83 @@ internal object SamplePulls {
         updatedAt = renderedAt - Duration.parse("96h"),
     )
 
+    // ---- pulls the server could not name ------------------------------------
+
+    /**
+     * A pull with **no album title at all**: the case that made this screen
+     * unusable on a real device.
+     *
+     * Not an invented edge. 34 of 35 pulls on a live install had an empty
+     * `albumTitle`, because `GET /api/v1/downloads` often omits `album_title` and
+     * the `album` mirror had been filled with a blank placeholder rather than the
+     * title the response actually carried. Every fixture above supplies a title,
+     * which is exactly why the screen passed review while being unusable — so
+     * this one, and [titleAllSpaces] below, are the fixtures that make the empty
+     * case testable rather than theoretical.
+     *
+     * Active and cancellable on purpose: the **Cancel** pill is where the bug
+     * was provable, because its content description is built by concatenation and
+     * read as "Cancel the pull of " with nothing after it.
+     */
+    val untitled: Pull = Pull(
+        releaseGroupMbid = mbid("untitled"),
+        albumTitle = "",
+        artistName = "Kelly Lee Owens",
+        taskId = PullTaskId("dl-4720"),
+        status = PullStatus.DOWNLOADING,
+        searchJobId = "sj-4720",
+        candidateIndex = 0,
+        progress = PullProgress(percent = 35, filesCompleted = 4, filesTotal = 11),
+        source = "slskd",
+        createdAt = renderedAt - Duration.parse("6m"),
+        updatedAt = renderedAt - Duration.parse("10s"),
+    )
+
+    /**
+     * A title that is whitespace and nothing else.
+     *
+     * A separate fixture from [untitled] because `isEmpty` and `isBlank` are
+     * different questions and a guard written against the first one lets this
+     * through — it renders as a row with an invisible title, which is the same
+     * defect with none of the evidence. Finished rather than active, so the
+     * fallback is exercised on the other row shape and on its **Play** label too.
+     */
+    val titleAllSpaces: Pull = Pull(
+        releaseGroupMbid = mbid("all-spaces"),
+        albumTitle = "   ",
+        artistName = "Actress",
+        taskId = PullTaskId("dl-4715"),
+        status = PullStatus.COMPLETED,
+        searchJobId = "sj-4715",
+        candidateIndex = 0,
+        progress = PullProgress(percent = 100, filesCompleted = 9, filesTotal = 9),
+        source = "slskd",
+        qualityPolicySummary = "FLAC",
+        createdAt = renderedAt - Duration.parse("6h"),
+        updatedAt = renderedAt - Duration.parse("5h"),
+    )
+
+    /**
+     * Neither a title nor an artist, and a **Retry** to label.
+     *
+     * The floor of the screen: nothing the mirror knows, nothing the failed row
+     * can say but its reason. If the subtitle and the spoken phrase are still
+     * sentences here, they are sentences everywhere.
+     */
+    val anonymous: Pull = Pull(
+        releaseGroupMbid = mbid("anonymous"),
+        albumTitle = "",
+        artistName = "",
+        taskId = PullTaskId("dl-4601"),
+        status = PullStatus.FAILED,
+        searchJobId = "sj-4601",
+        candidateIndex = 0,
+        failureReason = PullFailureReason.NO_SOURCE_FOUND,
+        source = "slskd",
+        createdAt = renderedAt - Duration.parse("50h"),
+        updatedAt = renderedAt - Duration.parse("49h"),
+    )
+
     // ---- assemblies ---------------------------------------------------------
 
     /** Screen 06 exactly: two active, two landed, one failed, newest first. */
@@ -218,6 +295,22 @@ internal object SamplePulls {
         landedYesterday,
         failed,
         partial,
+    )
+
+    /**
+     * The queue as a real device showed it: mostly pulls with no name.
+     *
+     * One named row is kept deliberately. The device report's own proof was that
+     * "Cancel the pull of Songs for Every Condition" read correctly once while
+     * "Cancel the pull of " read seven times, so a fixture with a single good row
+     * beside the broken ones is what a render can be judged against — all-blank
+     * data would look consistent and prove nothing.
+     */
+    val withMissingTitles: List<Pull> = listOf(
+        untitled,
+        downloading,
+        titleAllSpaces,
+        anonymous,
     )
 
     /** Two in flight, one held for review, one failure the user has not seen. */

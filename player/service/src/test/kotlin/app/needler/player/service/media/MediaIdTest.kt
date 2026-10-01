@@ -1,5 +1,8 @@
 package app.needler.player.service.media
 
+import app.needler.core.domain.model.ArtistMbid
+import app.needler.core.domain.model.PlaylistId
+import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.player.service.Fixtures
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -56,6 +59,70 @@ class MediaIdTest {
         assertTrue(MediaId.isBrowseId(MediaId.BROWSE_ROOT))
         assertNull(MediaId.toTrackKey(MediaId.BROWSE_ROOT))
         assertFalse(MediaId.isBrowseId(MediaId.forTrack(key)))
+    }
+
+    /**
+     * Every level of the Auto tree has to survive the round trip, because `onGetChildren` is handed nothing
+     * but the id it gave out and has to decide the whole branch from it.
+     */
+    @Test
+    fun `every browse node id decodes back to its node`() {
+        val fixed: Map<String, BrowseNode> = mapOf(
+            MediaId.BROWSE_ROOT to BrowseNode.Root,
+            MediaId.BROWSE_LIBRARY to BrowseNode.Library,
+            MediaId.BROWSE_ALBUMS to BrowseNode.Albums,
+            MediaId.BROWSE_ARTISTS to BrowseNode.Artists,
+            MediaId.BROWSE_SONGS to BrowseNode.Songs,
+            MediaId.BROWSE_GENRES to BrowseNode.Genres,
+            MediaId.BROWSE_RECENTLY_ADDED to BrowseNode.RecentlyAdded,
+            MediaId.BROWSE_PLAYLISTS to BrowseNode.Playlists,
+            MediaId.BROWSE_FAVOURITES to BrowseNode.Favourites,
+            MediaId.BROWSE_ON_DEVICE to BrowseNode.OnDevice,
+        )
+
+        for ((mediaId, node) in fixed) {
+            assertEquals(mediaId, node, MediaId.toBrowseNode(mediaId))
+            assertTrue(mediaId, MediaId.isBrowseId(mediaId))
+            assertNull(mediaId, MediaId.toTrackKey(mediaId))
+        }
+    }
+
+    /** Identities travel bare, exactly as REQUIREMENTS.md "Identity model" stores them. */
+    @Test
+    fun `a node that names one thing carries that thing's identity without a Subsonic prefix`() {
+        val album = ReleaseGroupMbid(Fixtures.ALBUM_A)
+        val artist = ArtistMbid(Fixtures.ARTIST_A)
+        val playlist = PlaylistId("7")
+
+        assertEquals("needler:album/" + Fixtures.ALBUM_A, MediaId.forAlbum(album))
+        assertEquals(BrowseNode.OneAlbum(album), MediaId.toBrowseNode(MediaId.forAlbum(album)))
+        assertEquals(BrowseNode.OneArtist(artist), MediaId.toBrowseNode(MediaId.forArtist(artist)))
+        assertEquals(BrowseNode.OnePlaylist(playlist), MediaId.toBrowseNode(MediaId.forPlaylist(playlist)))
+    }
+
+    /**
+     * A genre name is user data: it has spaces, ampersands and slashes in it. The id is parsed as prefix plus
+     * tail rather than split on the separator precisely so none of that needs escaping.
+     */
+    @Test
+    fun `a genre id round-trips a name containing a slash`() {
+        for (name in listOf("Jazz", "Drum & Bass", "Hip-Hop/Rap", "Folk, World, & Country")) {
+            assertEquals(name, BrowseNode.OneGenre(name), MediaId.toBrowseNode(MediaId.forGenre(name)))
+        }
+    }
+
+    /**
+     * Auto keeps ids across app updates - a tab it had open, a shortcut a user pinned - so a node this build
+     * does not have is a normal event, and the answer to it is an empty list rather than an error in a car.
+     */
+    @Test
+    fun `an unknown or empty browse id decodes to null`() {
+        assertNull(MediaId.toBrowseNode("needler:pulls"))
+        assertNull(MediaId.toBrowseNode("needler:album/"))
+        assertNull(MediaId.toBrowseNode("needler:genre/   "))
+        assertNull(MediaId.toBrowseNode(MediaId.forTrack(key)))
+        assertNull(MediaId.toBrowseNode(MediaId.forQueueRow(key, sequence = 3L)))
+        assertNull(MediaId.toBrowseNode(null))
     }
 
     /**

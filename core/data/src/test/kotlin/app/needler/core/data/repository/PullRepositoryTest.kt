@@ -9,6 +9,7 @@ import app.needler.core.data.fake.FakeWriteQueueDao
 import app.needler.core.data.fake.RG
 import app.needler.core.data.fake.albumRow
 import app.needler.core.data.fake.pullRow
+import app.needler.core.data.local.SortKeys
 import app.needler.core.data.local.entity.AlbumStateDb
 import app.needler.core.data.local.entity.PullStatusDb
 import app.needler.core.data.local.entity.WriteOperationTypeDb
@@ -282,6 +283,110 @@ public class PullRepositoryTest {
         assertEquals(DefaultPullRepository.PAGE_SIZE + 1, pullDao.rows.size)
     }
 
+    // ---------------------------------------------------------------- the title
+    //
+    // `pull` holds no title: REQUIREMENTS.md "Identity model" makes the release-group MBID the join
+    // key, so the Pulls screen reads the title from `album` through a LEFT JOIN. That works only if
+    // something puts a title in `album`, and for a long time nothing did on this path - the
+    // `album_title` both lanes carry was dropped, a blank placeholder was written instead, and
+    // because a blank row is a *known* row it was never corrected. On a real device that was 34 of 35
+    // rows with no name. These are the tests that were missing.
+
+    @Test
+    public fun `a download task's own title fills the album row the screen joins to`(): Unit =
+        runTest {
+            v1.downloadsResponse = { DownloadListDto(items = listOf(task("t1", RG))) }
+
+            repository.refreshPulls()
+
+            assertEquals("Spiderland", albumDao.rows[RG]?.title)
+            assertEquals("Slint", albumDao.rows[RG]?.artistName)
+            assertEquals(SortKeys.normalise("Spiderland"), albumDao.rows[RG]?.titleNormalised)
+        }
+
+    @Test
+    public fun `an album row left blank by an earlier refresh is repaired, not kept for ever`(): Unit =
+        runTest {
+            // The device's actual state: a placeholder written with no title, which every later
+            // refresh then reported as already known.
+            albumDao.rows[RG] = albumRow(
+                title = "",
+                artist = "",
+                artistMbid = null,
+                state = AlbumStateDb.NOT_OWNED,
+                year = null,
+            )
+            v1.downloadsResponse = { DownloadListDto(items = listOf(task("t1", RG, year = 1991))) }
+
+            repository.refreshPulls()
+
+            assertEquals("Spiderland", albumDao.rows[RG]?.title)
+            assertEquals("Slint", albumDao.rows[RG]?.artistName)
+            assertEquals(SortKeys.normalise("Spiderland"), albumDao.rows[RG]?.titleNormalised)
+            assertEquals(SortKeys.normalise("Slint"), albumDao.rows[RG]?.artistNormalised)
+            assertEquals(1991, albumDao.rows[RG]?.year)
+        }
+
+    @Test
+    public fun `a title the mirror already has is never overwritten by a task summary`(): Unit =
+        runTest {
+            // The mirror knows more about an owned album than a download task ever will, so the
+            // repair fills gaps only. Letting a task's summary win would trade a visible bug for an
+            // invisible one.
+            albumDao.rows[RG] = albumRow(title = "Spiderland (Remastered)", artist = "Slint Band")
+            v1.downloadsResponse = { DownloadListDto(items = listOf(task("t1", RG))) }
+
+            repository.refreshPulls()
+
+            assertEquals("Spiderland (Remastered)", albumDao.rows[RG]?.title)
+            assertEquals("Slint Band", albumDao.rows[RG]?.artistName)
+        }
+
+    @Test
+    public fun `the requests lane supplies the title when the downloads lane omits it`(): Unit =
+        runTest {
+            // Both lanes are on the one screen - REQUIREMENTS.md, "Queue screen requirements" item 6
+            // - and each omits fields the other carries, so neither alone can be trusted for a name.
+            v1.downloadsResponse = {
+                DownloadListDto(items = listOf(task("t1", RG, albumTitle = null, artistName = null)))
+            }
+            v1.activeRequestsResponse = {
+                app.needler.core.network.v1.dto.ActiveRequestsDto(
+                    items = listOf(
+                        app.needler.core.network.v1.dto.ActiveRequestItemDto(
+                            musicbrainzId = RG,
+                            artistName = "Slint",
+                            albumTitle = "Spiderland",
+                            status = "awaiting_approval",
+                        ),
+                    ),
+                    count = 1,
+                )
+            }
+
+            repository.refreshPulls()
+
+            assertEquals("Spiderland", albumDao.rows[RG]?.title)
+            assertEquals("Slint", albumDao.rows[RG]?.artistName)
+        }
+
+    @Test
+    public fun `a blank title on the wire is stored as absent, not as whitespace`(): Unit = runTest {
+        // A server that sends `"   "` has told us nothing. Storing it would give the screen a title
+        // that passes `isNotEmpty` and draws as a hole, which is the same defect without the
+        // evidence.
+        v1.downloadsResponse = {
+            DownloadListDto(items = listOf(task("t1", RG, albumTitle = "   ", artistName = " ")))
+        }
+
+        repository.refreshPulls()
+
+        assertEquals("", albumDao.rows[RG]?.title)
+        assertEquals("", albumDao.rows[RG]?.artistName)
+        // And the pull itself still exists to be rendered, with the screen's own fallback.
+        assertNotNull(pullDao.rows[RG])
+    }
+
     @Test
     public fun `pending approvals come from the requests lane, which has no paging`(): Unit = runTest {
         v1.activeRequestsResponse = {
@@ -354,11 +459,25 @@ public class PullRepositoryTest {
         assertEquals(1, repository.observePulls(PullBucket.FAILED).first().size)
     }
 
-    private fun task(id: String, mbid: String): DownloadTaskDto = DownloadTaskDto(
+    /**
+     * One download task.
+     *
+     * [albumTitle] and [artistName] are parameters because the interesting cases are the ones where
+     * the server sends nothing or sends whitespace - the default supplied a title to every fixture,
+     * which is how a screen that could not name 34 of its 35 rows passed review.
+     */
+    private fun task(
+        id: String,
+        mbid: String,
+        albumTitle: String? = "Spiderland",
+        artistName: String? = "Slint",
+        year: Int? = null,
+    ): DownloadTaskDto = DownloadTaskDto(
         id = id,
         releaseGroupMbid = mbid,
-        artistName = "Slint",
-        albumTitle = "Spiderland",
+        artistName = artistName,
+        albumTitle = albumTitle,
+        year = year,
         status = "downloading",
         progressPercent = 10,
         createdAt = 1_700_000_000.0,

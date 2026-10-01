@@ -78,6 +78,11 @@ fun SearchRoute(
         },
         onPull = viewModel::onPull,
         onPlayTrack = viewModel::onPlayTrack,
+        onShowAll = viewModel::onShowAll,
+        onLoadMore = viewModel::onLoadMoreFromCatalogue,
+        onMonitorArtistChange = viewModel::onMonitorArtistChange,
+        onConfirmPull = viewModel::onConfirmPull,
+        onCancelPull = viewModel::onCancelPull,
         onDismissNotice = viewModel::onDismissNotice,
         modifier = modifier,
     )

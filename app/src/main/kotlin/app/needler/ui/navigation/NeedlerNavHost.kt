@@ -21,6 +21,13 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import app.needler.connect.ConnectRoute
+import app.needler.licences.LicencesRoute
+import app.needler.feature.library.playlists.PlaylistsRoute
+import app.needler.feature.library.playlists.PlaylistRoute
+import app.needler.feature.library.genres.GenresRoute
+import app.needler.feature.library.genres.GenreRoute
+import app.needler.diagnostics.DiagnosticsRoute
+import android.net.Uri
 import app.needler.core.data.background.NotificationDestination
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.feature.library.album.AlbumRoute
@@ -87,6 +94,29 @@ private const val ROUTE_EQUALISER = "equaliser"
 private const val ROUTE_CROSSFADE = "crossfade"
 
 /**
+ * Playlists, genres, licences and the diagnostics log.
+ *
+ * All four sit inside the scaffold rather than above it, for the reason album
+ * and artist detail do: the pack keeps the bottom bar and the nav rail visible,
+ * so opening one is a change of content and not a change of context.
+ *
+ * The playlist id is carried **bare**, never `pl-` prefixed - the prefix is a
+ * Subsonic wire detail owned by :core:data - and a provisional `local-...` id is
+ * a legal value here. REQUIREMENTS.md "Local persistence" mints one for a
+ * playlist created offline and re-keys the row when the write queue replays
+ * `createPlaylist`, so a route that filtered those out would make a user's own
+ * offline playlist unopenable until the server had seen it.
+ */
+private const val ARG_PLAYLIST_ID = "playlistId"
+private const val ARG_GENRE = "genre"
+private const val ROUTE_PLAYLISTS = "playlists"
+private const val ROUTE_PLAYLIST = "playlist/{$ARG_PLAYLIST_ID}"
+private const val ROUTE_GENRES = "genres"
+private const val ROUTE_GENRE = "genre/{$ARG_GENRE}"
+private const val ROUTE_LICENCES = "licences"
+private const val ROUTE_DIAGNOSTICS = "diagnostics"
+
+/**
  * Back to Connect, with Home taken off the stack behind it.
  *
  * Settings offers two ways here and both mean the same thing: whatever the tabs are showing is
@@ -103,6 +133,21 @@ private fun returnToConnect(navController: NavHostController) {
 private fun albumRoute(mbid: String): String = "album/$mbid"
 
 private fun artistRoute(mbid: String): String = "artist/$mbid"
+
+private fun playlistRoute(id: String): String = "playlist/$id"
+
+/**
+ * A genre's route, with the genre name percent-encoded.
+ *
+ * The argument is the genre **name**, not a slug or an id, because that is what
+ * `getGenres` returns and what `getSongsByGenre` takes back. Real genre names
+ * carry the two characters that would otherwise break the match outright: a
+ * slash ("Rock/Pop") ends the path segment and the route no longer resolves, and
+ * an ampersand ("Drum & bass") is fine in a path but not once anything treats it
+ * as a query. Encoding here and decoding in the view model keeps both working
+ * without inventing a slug the server would not recognise on the way back.
+ */
+private fun genreRoute(genre: String): String = "genre/" + Uri.encode(genre)
 
 /**
  * The app's navigation graph.
@@ -267,7 +312,10 @@ private fun NeedlerHome(
     // Library, the equaliser and crossfade under Settings.
     val selected: NeedlerDestination = when (currentRoute) {
         ROUTE_ALBUM, ROUTE_ARTIST -> NeedlerDestination.Library
-        ROUTE_EQUALISER, ROUTE_CROSSFADE -> NeedlerDestination.Settings
+        ROUTE_PLAYLISTS, ROUTE_PLAYLIST, ROUTE_GENRES, ROUTE_GENRE ->
+            NeedlerDestination.Library
+        ROUTE_EQUALISER, ROUTE_CROSSFADE, ROUTE_LICENCES, ROUTE_DIAGNOSTICS ->
+            NeedlerDestination.Settings
         else -> NeedlerDestination.fromRoute(currentRoute) ?: NeedlerDestination.Start
     }
 
@@ -422,6 +470,16 @@ private fun NeedlerHome(
                     onOpenCrossfade = {
                         navController.navigate(ROUTE_CROSSFADE) { launchSingleTop = true }
                     },
+                    // Both rows draw only when a callback is passed, which is
+                    // why neither had ever appeared: SettingsScreen has carried
+                    // the Licences link since it was written and the host never
+                    // supplied a destination for it.
+                    onOpenLicences = {
+                        navController.navigate(ROUTE_LICENCES) { launchSingleTop = true }
+                    },
+                    onOpenDiagnostics = {
+                        navController.navigate(ROUTE_DIAGNOSTICS) { launchSingleTop = true }
+                    },
                     // Both of these end at Connect, and both have to clear Home
                     // behind them: signing out leaves no session for the tabs to
                     // read, and changing server invalidates everything they are
@@ -437,6 +495,54 @@ private fun NeedlerHome(
 
             composable(ROUTE_CROSSFADE) {
                 CrossfadeRoute(onBack = { navController.popBackStack() })
+            }
+
+            composable(ROUTE_LICENCES) {
+                LicencesRoute(
+                    widthSizeClass = widthSizeClass,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+
+            composable(ROUTE_DIAGNOSTICS) {
+                DiagnosticsRoute(
+                    widthSizeClass = widthSizeClass,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+
+            composable(ROUTE_PLAYLISTS) {
+                PlaylistsRoute(
+                    widthSizeClass = widthSizeClass,
+                    onOpenPlaylist = { navController.navigate(playlistRoute(it.value)) },
+                )
+            }
+
+            composable(
+                route = ROUTE_PLAYLIST,
+                arguments = listOf(navArgument(ARG_PLAYLIST_ID) { type = NavType.StringType }),
+            ) {
+                PlaylistRoute(
+                    widthSizeClass = widthSizeClass,
+                    onBack = { navController.popBackStack() },
+                )
+            }
+
+            composable(ROUTE_GENRES) {
+                GenresRoute(
+                    widthSizeClass = widthSizeClass,
+                    onOpenGenre = { navController.navigate(genreRoute(it)) },
+                )
+            }
+
+            composable(
+                route = ROUTE_GENRE,
+                arguments = listOf(navArgument(ARG_GENRE) { type = NavType.StringType }),
+            ) {
+                GenreRoute(
+                    widthSizeClass = widthSizeClass,
+                    onBack = { navController.popBackStack() },
+                )
             }
 
             composable(NeedlerDestination.Search.route) {

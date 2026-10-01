@@ -1,5 +1,5 @@
 // :player:service — the Media3 MediaLibraryService, the audio processor chain, the
-// write-through audio cache datasource and (next) the Android Auto browse tree.
+// write-through audio cache datasource and the Android Auto browse tree.
 // REQUIREMENTS.md "Architecture > Modules", "Playback", "Offline and caching".
 //
 // Everything that touches Media3 lives here and nowhere else. One
@@ -11,7 +11,9 @@
 //   * a write-through DataSource copies streamed bytes into the project's own
 //     `audio_cache` store as they are read - NOT CacheDataSource/SimpleCache,
 //     which REQUIREMENTS.md rules out for four separate reasons
-//   * the Auto browse tree and voice search will be served
+//   * the Auto browse tree and voice search are served, out of the local
+//     metadata mirror, so browsing and searching work with no network — which
+//     is the normal condition in a car
 //
 // It depends on :core:data — the exception to the "features see only domain"
 // rule — because the audio cache index is a Room table (`audio_cache`) that the

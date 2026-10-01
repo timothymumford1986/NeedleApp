@@ -6,6 +6,7 @@ import app.needler.core.domain.model.PlayQueue
 import app.needler.core.domain.model.PlaybackSpeed
 import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.repository.PlaybackSettingsRepository
 import kotlinx.coroutines.flow.Flow
@@ -163,6 +164,27 @@ public interface PlaybackController {
     public suspend fun setPlaybackSpeed(speed: PlaybackSpeed)
 
     /**
+     * Arms or disarms the sleep timer - REQUIREMENTS.md "Player features": "End of track or a
+     * duration".
+     *
+     * It belongs on the controller rather than only on [PlaybackSettingsRepository] because this
+     * interface is the one surface every client already has: Now Playing, the tablet sidebar, the
+     * widgets and Wear all hold a `PlaybackController` and none of them holds a repository. Declaring
+     * the setter only on the repository is what left the timer unreachable - the decision, the flow
+     * and the coordinator that acts on it were all in place with nothing able to turn it on.
+     *
+     * **Nothing is sent to the session.** Implementations write the armed timer to
+     * [PlaybackSettingsRepository.setSleepTimer] and stop there: the player service evaluates the timer
+     * on its own position tick and calls [stop] itself when it fires, which is the only way a timer can
+     * also fire while the app's UI is not running. A `postDelayed` from here would keep running through
+     * a pause, survive a crate clear, and be invisible to a test.
+     *
+     * The armed value comes back on [PlaybackState.sleepTimer], so a surface that sets it and a surface
+     * that only shows it read the same field.
+     */
+    public suspend fun setSleepTimer(timer: SleepTimer)
+
+    /**
      * Stops playback and releases the audio focus, leaving the crate intact.
      *
      * Distinct from [pause]: stop is what the sleep timer and the notification's dismiss do, and the
@@ -196,6 +218,20 @@ public data class PlaybackState(
     val shuffleEnabled: Boolean = false,
     val repeatMode: RepeatMode = RepeatMode.OFF,
     val speed: PlaybackSpeed = PlaybackSpeed.Normal,
+    /**
+     * The armed sleep timer, or [SleepTimer.Off].
+     *
+     * Here rather than only on [PlaybackSettingsRepository] so that every surface showing the transport
+     * can show what is armed without taking a second dependency - the widgets and Wear hold this
+     * interface and nothing else.
+     *
+     * **It carries no countdown, deliberately.** [SleepTimer.At] is an instant, and the reader
+     * subtracts the clock from it when it draws; a "minutes remaining" field here would make this flow -
+     * the one that emits only when a person changed something - emit once a second for as long as a
+     * timer is armed, which is the exact cost [PlaybackController.observeProgress] is a separate flow to
+     * avoid. One label ticking locally is cheaper than the whole player screen ticking.
+     */
+    val sleepTimer: SleepTimer = SleepTimer.Off,
     /**
      * Where sound is going, as the session is actually routing it.
      *

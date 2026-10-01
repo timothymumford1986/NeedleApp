@@ -9,8 +9,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 /**
  * The stateful half of the crate, screen 08.
  *
- * Nothing but wiring: the screen itself takes a [CrateUiState] and four callbacks, so every state of
- * it - full, empty, mid-album - renders from a literal value with no session behind it.
+ * Nothing but wiring: the screen itself takes a [CrateUiState] and a handful of callbacks, so every
+ * state of it - full, empty, mid-album - renders from a literal value with no session behind it.
  */
 @Composable
 fun CrateRoute(
@@ -26,6 +26,7 @@ fun CrateRoute(
         onClear = viewModel::clear,
         onPlayItem = viewModel::skipTo,
         onMove = viewModel::moveItem,
+        onRemove = viewModel::removeItem,
         modifier = modifier,
     )
 }

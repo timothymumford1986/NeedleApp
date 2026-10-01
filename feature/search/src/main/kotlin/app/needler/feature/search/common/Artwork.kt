@@ -1,21 +1,14 @@
 package app.needler.feature.search.common
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import app.needler.core.design.component.AsyncAlbumArt
+import app.needler.core.design.component.NeedlerArtwork
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.ArtworkRef
+import app.needler.core.domain.model.Track
 
 /**
  * Album artwork, from whichever lane the album came out of.
@@ -37,9 +30,12 @@ import app.needler.core.domain.model.ArtworkRef
  * anything this screen can see — which is exactly what makes a merged result
  * list possible at all.
  *
- * **No such mapper exists yet**, so artwork currently renders as the placeholder
- * tint rather than an image. That is `:feature:library`'s finding too, and it is
- * in the handover notes; nothing below `:app` resolves an `ArtworkRef` today.
+ * That mapper is `:app`'s `ArtworkLoader`. For every album that genuinely has no
+ * cover behind it, and for the moment before one arrives, `:core:design`'s
+ * [NeedlerArtwork] draws the letter over a tint derived from the release-group
+ * MBID. The identity is the MBID and not the title, as its own documentation
+ * requires: two records called "Greatest Hits" are two colours, and the same
+ * record is the same colour here, on album detail and in the widget.
  */
 @Composable
 internal fun AlbumArtwork(
@@ -47,11 +43,13 @@ internal fun AlbumArtwork(
     modifier: Modifier = Modifier,
     shape: Shape = NeedlerTheme.shapes.artworkThumb,
 ) {
-    AsyncAlbumArt(
+    NeedlerArtwork(
+        model = album.artwork,
+        identity = album.releaseGroupMbid.value,
+        name = album.title,
         // Null everywhere: every row on this screen already names its album, and
         // a screen reader told "Mordechai by Khruangbin" twice is worse than one
         // told it once.
-        model = album.artwork,
         contentDescription = null,
         modifier = modifier,
         shape = shape,
@@ -65,15 +63,22 @@ internal fun AlbumArtwork(
  * untouched. Separate only because [app.needler.core.domain.model.Track] and
  * [Album] are separate types carrying the same [ArtworkRef], and the Songs block
  * on screen 03 draws its tiles smaller (44dp) than the album rows above it.
+ *
+ * The placeholder identity is the song's own release-group MBID, taken from its
+ * [app.needler.core.domain.model.TrackKey], so a song and the album it is on draw
+ * the same colour on the same screen. The letter is the album's title for the same
+ * reason: a Songs row already carries the song's name in text beside it.
  */
 @Composable
 internal fun TrackArtwork(
-    artwork: ArtworkRef?,
+    track: Track,
     modifier: Modifier = Modifier,
     shape: Shape = NeedlerTheme.shapes.artworkThumb,
 ) {
-    AsyncAlbumArt(
-        model = artwork,
+    NeedlerArtwork(
+        model = track.artwork,
+        identity = track.key.releaseGroupMbid.value,
+        name = track.albumTitle ?: track.title,
         contentDescription = null,
         modifier = modifier,
         shape = shape,
@@ -84,46 +89,30 @@ internal fun TrackArtwork(
  * An artist avatar: the round tile at the head of the Artist block on screens 03
  * and 10.
  *
- * The pack draws a tinted circle with the artist's initial in Space Grotesk —
- * `K` for Khruangbin, `Y` for Yussef Dayes — rather than a photograph, and that
- * is drawn here as the *base* of the tile rather than as a fallback shown only
- * on failure. Coil paints over it when (and only when) an [ArtworkRef] resolves
- * to a real image, which is why the placeholder colour handed to
- * [AsyncAlbumArt] is transparent: an opaque placeholder would hide the initial
- * for as long as the request took, and forever when the artist has no image at
- * all.
+ * The pack draws a tinted circle with the artist's initial — `K` for Khruangbin,
+ * `Y` for Yussef Dayes — rather than a photograph, and that is exactly what
+ * `:core:design`'s [NeedlerArtwork] draws when no image resolves: the letter
+ * underneath, the image over it when there is one. Hand-rolling the same stack
+ * here, as this file used to, meant the search screen's coverless tiles were a
+ * different colour from every other surface's.
  *
- * The whole tile is removed from the accessibility tree. It carries no
- * information the row's own description does not already contain, and TalkBack
- * announcing a bare "K" beside "Khruangbin" is noise.
+ * The circle is passed as the shape, and the artist MBID as the identity, so an
+ * artist is one colour wherever they appear. The whole tile is left out of the
+ * accessibility tree by passing no description: it carries no information the
+ * row's own description does not already contain, and TalkBack announcing a bare
+ * "K" beside "Khruangbin" is noise.
  */
 @Composable
 internal fun ArtistAvatar(
     artist: Artist,
     modifier: Modifier = Modifier,
 ) {
-    val colors = NeedlerTheme.colors
-    Box(
-        modifier = modifier
-            .clip(NeedlerTheme.shapes.circle)
-            .background(colors.artworkPlaceholder)
-            .clearAndSetSemantics {},
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = SearchFormat.initial(artist.name),
-            style = NeedlerTheme.typography.avatarInitial,
-            color = colors.textSecondary,
-        )
-        val artwork: ArtworkRef? = artist.artwork
-        if (artwork != null) {
-            AsyncAlbumArt(
-                model = artwork,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                shape = NeedlerTheme.shapes.circle,
-                placeholderColor = Color.Transparent,
-            )
-        }
-    }
+    NeedlerArtwork(
+        model = artist.artwork,
+        identity = artist.mbid.value,
+        name = artist.name,
+        contentDescription = null,
+        modifier = modifier,
+        shape = NeedlerTheme.shapes.circle,
+    )
 }

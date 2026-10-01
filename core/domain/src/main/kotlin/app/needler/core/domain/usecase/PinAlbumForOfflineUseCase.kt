@@ -95,6 +95,12 @@ public class PinAlbumForOfflineUseCase(
      * eviction policy already considers it short.
      */
     private fun willLeaveDeviceLowOnSpace(usage: StorageUsage, albumSizeBytes: Long?): Boolean {
+        // An unmeasurable volume is not a full one. `deviceFreeBytes` is zero in both cases, so
+        // without this guard every pin on a device whose StatFs threw would warn that it will leave
+        // the phone short - and REQUIREMENTS.md "Storage, and why there is no budget" point 4 is
+        // explicit that an unreadable reading suspends the policy rather than guessing. The same
+        // reasoning that stops the eviction pass acting on it stops the warning claiming it.
+        if (usage.freeSpaceUnknown) return false
         val incoming: Long = albumSizeBytes ?: return usage.deviceLowOnSpace
         return usage.deviceFreeBytes - incoming < usage.freeSpaceFloorBytes
     }

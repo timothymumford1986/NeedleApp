@@ -174,6 +174,68 @@ internal object LibraryFormat {
         AudioFormat.UNKNOWN -> "Unknown"
     }
 
+    // ---- names, when the server did not send one ----------------------------
+
+    /**
+     * A title to **draw**: the album's own, trimmed, or `Untitled album`.
+     *
+     * ## Why this exists
+     *
+     * `Album.title` is not guaranteed to hold anything. `ReleaseItemDto.title` is a
+     * nullable string and `CatalogueMappers.album` maps it with `.orEmpty()`, so a
+     * release group MusicBrainz has no title for becomes an [Album] with a blank
+     * one, which `CatalogueMappers.albumEntity` then writes into the mirror. The
+     * same shape of hole put 34 blank rows on the Pulls screen.
+     *
+     * Blank is not the same as missing anywhere else in this file — "Unknown is not
+     * zero" — and it is not the same here either. The difference is that there is
+     * nothing to drop: a row still has to name the record it is about, and an empty
+     * title leaves the row anonymous rather than shorter.
+     *
+     * Trimmed **first**, so that `" "` and `""` are one case. A title of three
+     * spaces reads as blank on screen and as present to `isEmpty`, and a guard
+     * written the other way round lets exactly that through.
+     */
+    fun albumTitle(raw: String?): String = raw?.trim()?.takeIf { it.isNotEmpty() } ?: UNTITLED_ALBUM
+
+    /**
+     * A title to put **inside a sentence**: the album's own, trimmed, or `this album`.
+     *
+     * Separate from [albumTitle] because the two failures read differently. A row
+     * that says "Untitled album" is honest; a content description that says
+     * "Cancel the pull of Untitled album" is clumsy where "Cancel the pull of this
+     * album" is what a person would say. And the alternative - concatenating the
+     * raw title - produced "Cancel the pull of ", a sentence ending in a
+     * preposition, which is what the device audit found by reading the
+     * accessibility tree.
+     *
+     * Every label on the album screen is built from this, and none of them
+     * concatenates `album.title` directly. That is the point of it being one
+     * function rather than six inline guards: the seventh call site is the one that
+     * would have been forgotten.
+     */
+    fun albumLabel(raw: String?): String = raw?.trim()?.takeIf { it.isNotEmpty() } ?: THIS_ALBUM
+
+    /** An artist name to **draw**: their own, trimmed, or `Unknown artist`. */
+    fun artistName(raw: String?): String = raw?.trim()?.takeIf { it.isNotEmpty() } ?: UNKNOWN_ARTIST
+
+    /** An artist name to put **inside a sentence**: their own, trimmed, or `this artist`. */
+    fun artistLabel(raw: String?): String = raw?.trim()?.takeIf { it.isNotEmpty() } ?: THIS_ARTIST
+
+    /**
+     * A track title to **draw**: its own, trimmed, or `Untitled track`.
+     *
+     * `CatalogueTrackDto.title` defaults to the empty string for exactly the same
+     * reason `ReleaseItemDto.title` is nullable, so a track row is as capable of
+     * arriving blank as an album row - and a blank row in a numbered track list is
+     * even harder to read as data rather than as a rendering fault, because the
+     * number beside it is still there.
+     */
+    fun trackTitle(raw: String?): String = raw?.trim()?.takeIf { it.isNotEmpty() } ?: UNTITLED_TRACK
+
+    /** A track title to put **inside a sentence**: its own, trimmed, or `this track`. */
+    fun trackLabel(raw: String?): String = raw?.trim()?.takeIf { it.isNotEmpty() } ?: THIS_TRACK
+
     // ---- composed lines -----------------------------------------------------
 
     /**
@@ -219,20 +281,32 @@ internal object LibraryFormat {
         return parts.joinToString(separator = " · ")
     }
 
-    /** `The Marías · Submarine`, the subtitle on an album row in a list. */
+    /**
+     * `The Marías · 2024`, the subtitle on an album row in a list.
+     *
+     * The artist goes through [artistName], so a row whose artist the catalogue did
+     * not supply reads `Unknown artist · 2024` rather than ` · 2024`.
+     */
     fun albumRowSubtitle(album: Album): String {
         val parts: List<String> = buildList {
-            add(album.artistName)
+            add(artistName(album.artistName))
             album.year?.let { add(it.toString()) }
         }
         return parts.joinToString(separator = " · ")
     }
 
-    /** `Khruangbin · 4:02`, the subtitle on a song row in the Songs tab. */
+    /**
+     * `Khruangbin · Mordechai`, the subtitle on a song row in the Songs tab.
+     *
+     * Here a blank part genuinely is dropped rather than replaced: a song row's
+     * subtitle is optional context beside a title that is already drawn, so an
+     * empty one costs nothing, where an "Unknown artist" on every row of a
+     * badly-tagged library would be noise on every line.
+     */
     fun songRowSubtitle(track: Track): String {
         val parts: List<String> = buildList {
-            if (track.artistName.isNotBlank()) add(track.artistName)
-            track.albumTitle?.let { add(it) }
+            if (track.artistName.isNotBlank()) add(track.artistName.trim())
+            track.albumTitle?.trim()?.takeIf { it.isNotEmpty() }?.let { add(it) }
         }
         return parts.joinToString(separator = " · ")
     }
@@ -253,6 +327,30 @@ internal object LibraryFormat {
 
     /** The phrase screen 05 ends its meta line with. */
     const val NOT_IN_LIBRARY: String = "not in your library"
+
+    /**
+     * What a record with no title is called on screen.
+     *
+     * The same words the Pulls screen uses, so a release group that arrived without
+     * a title is called one thing throughout the app rather than one thing per
+     * screen.
+     */
+    const val UNTITLED_ALBUM: String = "Untitled album"
+
+    /** What a record with no title is called inside a sentence. */
+    const val THIS_ALBUM: String = "this album"
+
+    /** What an artist with no name is called on screen. */
+    const val UNKNOWN_ARTIST: String = "Unknown artist"
+
+    /** What an artist with no name is called inside a sentence. */
+    const val THIS_ARTIST: String = "this artist"
+
+    /** What a track with no title is called on screen. */
+    const val UNTITLED_TRACK: String = "Untitled track"
+
+    /** What a track with no title is called inside a sentence. */
+    const val THIS_TRACK: String = "this track"
 
     private const val UNIT: Long = 1_024L
     private val UNITS: List<String> = listOf("KB", "MB", "GB", "TB", "PB")

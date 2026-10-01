@@ -44,6 +44,25 @@ public interface FavouriteDao {
     )
     public fun observeStarredAlbums(): Flow<List<AlbumEntity>>
 
+    /**
+     * One window of [observeStarredAlbums], same order, same rows.
+     *
+     * `LibraryRepository.observeAlbumList` has taken a `limit` and an `offset` since it was written,
+     * and five of its six kinds push them into SQL. `STARRED` was the exception: it read every starred
+     * album and sliced the list in Kotlin, so the one album list that advertised a window was the one
+     * that did not have one. This is the missing statement.
+     */
+    @Query(
+        """
+        SELECT album.* FROM favourite
+        JOIN album ON album.release_group_mbid = favourite.entity_id
+        WHERE favourite.entity_type = 'album'
+        ORDER BY favourite.starred_at IS NULL, favourite.starred_at DESC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public fun observeStarredAlbumsPaged(limit: Int, offset: Int): Flow<List<AlbumEntity>>
+
     @Query(
         """
         SELECT artist.* FROM favourite

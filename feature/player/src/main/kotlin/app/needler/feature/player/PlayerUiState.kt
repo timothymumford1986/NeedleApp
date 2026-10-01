@@ -1,9 +1,12 @@
 package app.needler.feature.player
 
+import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.AudioQuality
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OutputTarget
 import app.needler.core.domain.model.QueueItem
+import app.needler.core.domain.model.SleepTimer
+import app.needler.core.domain.model.StreamFormat
 import app.needler.core.domain.playback.PlaybackState
 import app.needler.core.domain.playback.RepeatMode
 import app.needler.feature.player.ui.PlayerFormat
@@ -39,6 +42,57 @@ data class PlayerUiState(
     val error: NeedlerError? = null,
     /** How many rows follow the playing one. Drawn as a count only, so it costs no list diff. */
     val upNextCount: Int = 0,
+    /**
+     * Whether the playing track is starred.
+     *
+     * Binary, because binary is all this server supports: REQUIREMENTS.md records `setRating` as "a
+     * deliberate no-op on this server... Needler must not offer star ratings", and the domain has no
+     * rating concept to hold one anyway. Read from `FavouriteRepository.observeIsFavourite`, which serves
+     * it from the mirror, so it flips under the finger whether or not the server can be reached.
+     */
+    val isFavourite: Boolean = false,
+    /**
+     * A star that the server permanently refused, or null.
+     *
+     * Separate from [error], which is a *playback* failure. They land in the same line on screen but they
+     * are not the same thing, and folding them together would mean a failed star clearing itself the next
+     * time a track played.
+     */
+    val favouriteError: NeedlerError? = null,
+    /**
+     * The playing track's artist, when the artist has been resolved to an MBID.
+     *
+     * Null is the ordinary state for the first frames of a track, and permanent for an artist the mirror
+     * holds no MBID for. `Track` carries an artist *name* only - see
+     * [app.needler.feature.player.ui.TrackByline] for why the byline follows this field rather than
+     * drawing a link that might not work.
+     */
+    val artistMbid: ArtistMbid? = null,
+    /** The armed sleep timer. Off is by far its commonest value. */
+    val sleepTimer: SleepTimer = SleepTimer.Off,
+
+    /**
+     * What the server would send if this track were fetched right now, or null before it is known.
+     *
+     * Live and network-dependent: the same track is `Original` at home and `Transcoded(mp3, 192)` on
+     * mobile data, because the resolver picks the rung from the connection and then caps it against
+     * the track's own quality. Held as the resolved [StreamFormat] rather than as a string so the
+     * `Transcoded` case can be told from the `Original` one - which is exactly the distinction the
+     * Server tag exists to draw.
+     */
+    val serverFormat: StreamFormat? = null,
+
+    /**
+     * The quality of the copy on this device, or null when there is not one.
+     *
+     * **Non-null means downloaded**, never merely cached while listening. A cached copy is evictable
+     * under disk pressure, so showing it as `Pulled:` would promise offline availability the app
+     * cannot keep; `CachedAudio.pinned` carries that distinction and the ViewModel applies it. It also
+     * goes null when the bytes are stale - the server replaced the file on a quality upgrade - because
+     * the resolver will discard them on the next play, and a tag that outlived the copy it describes
+     * would be worse than no tag.
+     */
+    val pulledQuality: AudioQuality? = null,
 ) {
     /** True when there is something to draw a title and a transport for. */
     val hasTrack: Boolean get() = item != null
@@ -53,8 +107,50 @@ data class PlayerUiState(
     /** The quality badge beside the title, or null when the server reported no format. */
     val formatBadge: String? get() = PlayerFormat.formatBadge(quality)
 
+    // ---- the quality tag pair ------------------------------------------------------------------
+    // Two tags rather than one badge, because there are two facts and they are not always the same
+    // one. `Server:` is what pressing play would fetch; `Pulled:` is what is already here. A local
+    // copy always wins, so when both exist only one of them is what you are hearing - and drawing
+    // them as equals would imply the server rate is, which it is not.
+
+    /** True when a downloaded copy exists, which is therefore what plays. */
+    val isPulled: Boolean get() = pulledQuality != null
+
+    /** `MP3 192`, `FLAC` - what the server would send now, or null when it is not known yet. */
+    val serverTagValue: String? get() = PlayerFormat.serverBadge(format = serverFormat, source = quality)
+
+    /** `FLAC` - the downloaded copy's own quality, or null when there is no download. */
+    val pulledTagValue: String? get() = PlayerFormat.pulledBadge(pulledQuality)
+
+    /** The Server tag's spoken form, which says whether it is in use. */
+    val serverTagDescription: String?
+        get() = PlayerFormat.spokenServerBadge(
+            format = serverFormat,
+            source = quality,
+            inUse = !isPulled,
+        )
+
+    /** The Pulled tag's spoken form. */
+    val pulledTagDescription: String? get() = PlayerFormat.spokenPulledBadge(pulledQuality)
+
     /** The current item's audio quality, or null when nothing is loaded. */
     val quality: AudioQuality? get() = item?.track?.quality
+
+    /**
+     * The artist's name on its own, for the half of the byline that is a link.
+     *
+     * Empty when nothing is loaded, which no surface draws: the idle state prints [subtitle] instead.
+     */
+    val artistName: String get() = item?.track?.artistName.orEmpty()
+
+    /** The album's title on its own, or null when the server reported none. */
+    val albumTitle: String? get() = item?.track?.albumTitle?.takeIf { it.isNotBlank() }
+
+    /** True when the artist line has somewhere to go, and therefore when it is drawn as a link. */
+    val canOpenArtist: Boolean get() = artistMbid != null && item != null
+
+    /** The favourite failure line, or null. */
+    val favouriteErrorMessage: String? get() = favouriteError?.let(PlayerFormat::favouriteErrorMessage)
 
     /** Where sound is going, named plainly, whether or not anything is playing. */
     val outputName: String get() = PlayerFormat.outputName(output)
@@ -81,9 +177,22 @@ data class PlayerUiState(
          * Folds a [PlaybackState] and the crate's size into the UI's own shape.
          *
          * [upNextCount] comes from the queue flow rather than from the state, so it is passed in:
-         * the two arrive separately and a transport update must not wait on a queue update.
+         * the two arrive separately and a transport update must not wait on a queue update. The same is
+         * true of [isFavourite] and [artistMbid], which come from two other repositories and resolve on
+         * their own schedule - a transport update must not wait on a Room query either.
+         *
+         * The sleep timer is *not* passed in. It rides on [PlaybackState] because every surface that
+         * shows a transport already holds a `PlaybackController` and nothing else.
          */
-        fun from(state: PlaybackState, upNextCount: Int = 0): PlayerUiState = PlayerUiState(
+        fun from(
+            state: PlaybackState,
+            upNextCount: Int = 0,
+            isFavourite: Boolean = false,
+            favouriteError: NeedlerError? = null,
+            artistMbid: ArtistMbid? = null,
+            serverFormat: StreamFormat? = null,
+            pulledQuality: AudioQuality? = null,
+        ): PlayerUiState = PlayerUiState(
             item = state.currentItem,
             isPlaying = state.isPlaying,
             isBuffering = state.isBuffering,
@@ -93,6 +202,12 @@ data class PlayerUiState(
             output = state.output,
             error = state.error,
             upNextCount = upNextCount,
+            isFavourite = isFavourite,
+            favouriteError = favouriteError,
+            artistMbid = artistMbid,
+            sleepTimer = state.sleepTimer,
+            serverFormat = serverFormat,
+            pulledQuality = pulledQuality,
         )
     }
 }

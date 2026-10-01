@@ -2,12 +2,19 @@
 <!--
   Wear OS companion manifest.
 
-  standalone=false because v1 plays on-device audio synced from the phone over
-  the data layer and has no server connection of its own — the watch app is not
-  usable without the phone app. That flag is the machine-readable form of
-  REQUIREMENTS.md's "Surfaces beyond the app" constraint for Wear, and Play uses
-  it to decide whether the watch app may be installed on its own. It must stay
-  false for as long as the transport is the data layer.
+  standalone=false because the watch app has no server connection of its own —
+  everything it plays arrives from the phone over the data layer, so the watch
+  app is not usable without the phone app having been set up. That flag is the
+  machine-readable form of REQUIREMENTS.md's "Surfaces beyond the app"
+  constraint for Wear, and Play uses it to decide whether the watch app may be
+  installed on its own. It must stay false for as long as the transport is the
+  data layer.
+
+  Note that on-device playback does NOT make this app standalone. A watch
+  holding a synced album plays it with the phone switched off, which is the
+  whole point — but it had to be given that album by a phone first, and it can
+  be given another only by a phone. "Works offline" and "works alone" are
+  different claims and only the first is true.
 
   The theme is the platform's own Theme.DeviceDefault rather than a Needler
   style, because this module has no res/ directory at all: every colour it uses
@@ -18,16 +25,32 @@
   taskAffinity is cleared as the Wear Compose template does, so the watch app
   never shares a task with anything else declaring app.needler — which :app
   does, since the two APKs must share an applicationId to pair.
-
-  No WearableListenerService is declared. The watch has nothing to do with a
-  playback snapshot while its screen is off, and a manifest-declared listener
-  would be woken for every track change on the phone all day. See
-  DataLayerPlaybackClient for the full argument; a tile or complication would
-  change it.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature android:name="android.hardware.type.watch" />
+
+    <!--
+      The watch's own playback. REQUIREMENTS.md "Surfaces beyond the app > Wear
+      OS" puts "playback of on-device audio synced from the phone over the data
+      layer" in Wear's v1 scope, and a watch plays for a run with its screen off
+      — which needs a foreground service holding a wake lock.
+
+      FOREGROUND_SERVICE_MEDIA_PLAYBACK is mandatory from targetSdk 34. There is
+      one foreground service in this APK and it is the media session.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!--
+      Media3 owns the media notification, and on Wear OS that notification is
+      what the system's own media controls read. Requested at runtime, and only
+      when the user first plays something from the watch's own store — see
+      NeedlerWearActivity. A denial costs the system controls and nothing else:
+      the session still plays.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="Needler"
@@ -50,6 +73,67 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          The watch's own Media3 session. A MediaSessionService, not the
+          MediaLibraryService :player:service declares, because nothing on Wear
+          OS asks a media app for a browse tree — see the class for the full
+          argument.
+
+          exported="true" because the platform's media controls and the media
+          button receiver are the callers, which is the same reason the phone's
+          session service is exported.
+        -->
+        <service
+            android:name=".local.WearLocalPlayerService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
+        <!--
+          Audio arriving from the phone.
+
+          This module used to declare no WearableListenerService at all, on the
+          argument that "the watch has nothing to do with a playback snapshot
+          while its screen is off, and a manifest-declared listener would be
+          woken for every track change on the phone all day". That argument is
+          intact, and the filter below is what keeps it so:
+
+            * DATA_CHANGED only. No MESSAGE_RECEIVED: nothing sends this watch a
+              command, and the transport snapshots are read by the activity
+              while it is on screen and by nothing at all when it is not.
+            * Two path prefixes, /needler/sync/track and /needler/sync/cover.
+              Not /needler, which would cover the now-playing and crate items;
+              not even /needler/sync, which would also cover the selection item
+              this watch publishes itself and wake it for its own writes.
+
+          So this service is woken by an album arriving, which nobody is going
+          to hold a watch app open for twenty minutes to receive, and by nothing
+          else.
+
+          exported="true" is mandatory — Google Play services is the caller, and
+          an unexported service would simply never be reached. The data layer
+          restricts delivery to apps sharing a package name and signing key, and
+          the service verifies the path family before touching anything.
+        -->
+        <service
+            android:name=".sync.NeedlerWearSyncService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/needler/sync/track" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/needler/sync/cover" />
+            </intent-filter>
+        </service>
 
     </application>
 

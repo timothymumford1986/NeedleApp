@@ -24,8 +24,30 @@ import kotlinx.coroutines.flow.Flow
  */
 public interface LibraryRepository {
 
-    /** All artists, alphabetical by sort name, for the Artists screen and its index jump. */
-    public fun observeArtists(): Flow<List<Artist>>
+    /**
+     * Artists, alphabetical by sort name, for the Artists screen and its index jump.
+     *
+     * [limit] and [offset] are the same window [observeAlbumList] and [observeTracks] take, and they
+     * are here for the same reason: Android Auto's `onGetChildren` asks for one page at a time, and
+     * the only way to answer it before this existed was to read every artist in the mirror and slice
+     * the list in Kotlin. REQUIREMENTS.md "Performance budgets" sets "Cold start to library content"
+     * at "Under 1.2 s, mid-range 2022 phone" and "Scroll" at "No dropped frames on a 5,000-album
+     * grid"; loading a whole table to render twenty rows is what those numbers are written against.
+     * A paged query pushes the window into SQL, where `index_artist_sort_name_normalised` already
+     * serves the ordering.
+     *
+     * **The default is unbounded, not a page size.** The Artists screen is alphabetical *with an
+     * index jump*, so it needs the whole alphabet to know where "S" begins; defaulting to 100 the
+     * way [observeAlbumList] does would have silently truncated a screen that must not be
+     * truncated. The window is opt-in, and the callers that want one - the car, the widgets - say
+     * so. The rejected alternative was a second, separately named paged function: that is the
+     * second paging idiom this interface does not need, since [observeAlbumList] and
+     * [observeTracks] already establish limit-and-offset on the function itself.
+     */
+    public fun observeArtists(
+        limit: Int = Int.MAX_VALUE,
+        offset: Int = 0,
+    ): Flow<List<Artist>>
 
     public fun observeArtist(mbid: ArtistMbid): Flow<Artist?>
 
@@ -105,7 +127,30 @@ public interface LibraryRepository {
         offset: Int = 0,
     ): Flow<List<Track>>
 
-    public fun observeGenres(): Flow<List<Genre>>
+    /**
+     * Genre buckets, alphabetical.
+     *
+     * The window here is honest about what it does not save, which is why it is documented rather
+     * than merely offered. Genres are a denormalised column on `album` rather than a table -
+     * REQUIREMENTS.md "Local persistence" lists `artist`, `album`, `track` and no genre table at all
+     * - so counting the buckets means reading every owned album's genre column whichever page is
+     * asked for. Nothing can know which genre is twenty-first alphabetically without having counted
+     * them all. [limit] and [offset] therefore bound what is mapped and returned, not what is
+     * scanned.
+     *
+     * That is still worth having: it is what stops a browser being handed four hundred rows to draw
+     * twenty of, and it keeps this function the same shape as every other windowed read here. The
+     * scan it cannot avoid is one narrow column over owned albums only, which stays well inside
+     * REQUIREMENTS.md "Performance budgets": "Local search results - Under 50 ms for 10,000 albums".
+     *
+     * The rejected alternative was an `album_genre` join table that SQL could page and group. It
+     * would make this one query, and it would also add a table REQUIREMENTS.md does not specify, a
+     * hand-written migration, and a second source of truth for something the tracks already own.
+     */
+    public fun observeGenres(
+        limit: Int = Int.MAX_VALUE,
+        offset: Int = 0,
+    ): Flow<List<Genre>>
 
     public fun observeTracksByGenre(
         genre: String,

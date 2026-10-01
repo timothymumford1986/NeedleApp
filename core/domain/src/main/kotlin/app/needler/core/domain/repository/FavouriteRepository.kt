@@ -14,7 +14,30 @@ import kotlinx.coroutines.flow.Flow
  */
 public interface FavouriteRepository {
 
-    /** Starred albums, artists and tracks from the mirror, recently starred first. */
+    /**
+     * Starred albums, artists and tracks from the mirror, recently starred first.
+     *
+     * ## Deliberately not windowed
+     *
+     * Every other list-shaped read in the domain now takes a `limit` and an `offset` -
+     * `LibraryRepository.observeArtists`, `PlaylistRepository.observePlaylists`,
+     * `PinRepository.observeDownloadedAlbums` - and this one does not. That is a decision, not an
+     * omission.
+     *
+     * [Favourites] is three lists, not one, so a single offset has nothing to index into. Applying
+     * the same window to each bucket is worse than no window at all: the one caller that pages
+     * favourites, the Android Auto browse tree, flattens them into `albums + artists + tracks`, and a
+     * per-bucket window over a flattened list drops and repeats rows between pages. Paging the
+     * flattened sequence properly would take three counts and three windowed queries per page turn,
+     * six statements to window a list the user built by hand.
+     *
+     * And that is the other half of it: this collection is bounded by human effort rather than by
+     * library size. REQUIREMENTS.md "Assumptions made" puts libraries in "the low thousands of
+     * albums"; nobody stars thousands of things. The performance budgets that forced windows onto
+     * artists, playlists and downloads - "Scroll: no dropped frames on a 5,000-album grid" - are
+     * about lists that grow with the library, and this one does not. The caller slices in memory,
+     * which is the right trade here and the wrong one there.
+     */
     public fun observeFavourites(): Flow<Favourites>
 
     public fun observeIsFavourite(target: FavouriteTarget): Flow<Boolean>

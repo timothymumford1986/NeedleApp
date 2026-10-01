@@ -3,6 +3,8 @@ package app.needler.feature.library.album
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
 import app.needler.core.domain.model.AlbumState
+import app.needler.core.domain.model.ConnectivityState
+import app.needler.core.domain.model.NetworkStatus
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineDownloadState
 import app.needler.core.domain.model.Outcome
@@ -12,6 +14,8 @@ import app.needler.core.domain.model.PullProgress
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.RequestStatus
 import app.needler.core.domain.model.ServerCapabilities
+import app.needler.core.domain.model.StreamRung
+import app.needler.feature.library.FakeFavouriteRepository
 import app.needler.feature.library.FakeLibraryRepository
 import app.needler.feature.library.FakePinRepository
 import app.needler.feature.library.FakePlaybackController
@@ -40,7 +44,9 @@ class AlbumViewModelTest {
     private val library = FakeLibraryRepository()
     private val pulls = FakePullRepository()
     private val pins = FakePinRepository()
+    private val favourites = FakeFavouriteRepository()
     private val sessions = FakeSessions()
+    private val playbackSettings = FakeAlbumPlaybackSettings()
     private val playback = FakePlaybackController()
 
     private val submarine = SampleLibrary.submarine
@@ -51,9 +57,24 @@ class AlbumViewModelTest {
         library = library,
         pulls = pulls,
         pins = pins,
+        favourites = favourites,
         sessions = sessions,
+        playbackSettings = playbackSettings,
         playback = Optional.of(playback),
     )
+
+    /**
+     * Pull, then confirm the sheet.
+     *
+     * Pulling is two steps now: the tap opens the sheet and the sheet places the request.
+     * Every test that used to call `onPull` alone goes through both, because a test that
+     * stopped at the tap would assert that nothing had been sent.
+     */
+    private fun AlbumViewModel.pullAndConfirm(monitorArtist: Boolean = false) {
+        onPull()
+        if (monitorArtist) onMonitorArtistChange(true)
+        onConfirmRequest()
+    }
 
     private fun ownedSubmarine() {
         library.albumsByMbid.value = mapOf(mbid.value to submarine.copy(state = AlbumState.Owned))
@@ -315,7 +336,7 @@ class AlbumViewModelTest {
         model.state.test {
             awaitItem()
             awaitItem()
-            model.onPull()
+            model.pullAndConfirm()
             advanceUntilIdle()
             var current = awaitItem()
             while (current.notice == null) current = awaitItem()
@@ -343,7 +364,7 @@ class AlbumViewModelTest {
         model.state.test {
             awaitItem()
             awaitItem()
-            model.onPull()
+            model.pullAndConfirm()
             advanceUntilIdle()
             var current = awaitItem()
             while (current.notice == null) current = awaitItem()
@@ -420,7 +441,7 @@ class AlbumViewModelTest {
         model.state.test {
             awaitItem()
             awaitItem()
-            model.onPull()
+            model.pullAndConfirm()
             advanceUntilIdle()
             var current = awaitItem()
             while (current.notice == null) current = awaitItem()
@@ -453,5 +474,247 @@ class AlbumViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
         assertEquals(listOf(mbid), library.refreshedAlbums)
+    }
+
+    // ---- the request sheet --------------------------------------------------
+
+    @Test
+    fun `Pull opens the sheet and sends nothing until it is confirmed`() = runTest {
+        val notOwned = SampleLibrary.blackClassicalMusic
+        library.albumsByMbid.value = mapOf(notOwned.releaseGroupMbid.value to notOwned)
+
+        val model = viewModel(notOwned.releaseGroupMbid.value)
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onPull()
+            var open = awaitItem()
+            while (open.requestSheet == null) open = awaitItem()
+            assertEquals(notOwned.title, open.requestSheet?.title)
+            assertFalse(open.requestSheet?.monitorArtist ?: true)
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        // The whole point: a tap is not a request.
+        assertTrue(pulls.albumRequests.isEmpty())
+    }
+
+    @Test
+    fun `the monitor artist toggle reaches the request body`() = runTest {
+        val notOwned = SampleLibrary.blackClassicalMusic
+        library.albumsByMbid.value = mapOf(notOwned.releaseGroupMbid.value to notOwned)
+
+        val model = viewModel(notOwned.releaseGroupMbid.value)
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.pullAndConfirm(monitorArtist = true)
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        // RequestAlbumUseCase has taken this flag since it was written and no caller ever
+        // passed it. This assertion is the one that would have caught that.
+        assertTrue(pulls.albumRequests.single().monitorArtist)
+    }
+
+    @Test
+    fun `dismissing the sheet sends nothing`() = runTest {
+        val notOwned = SampleLibrary.blackClassicalMusic
+        library.albumsByMbid.value = mapOf(notOwned.releaseGroupMbid.value to notOwned)
+
+        val model = viewModel(notOwned.releaseGroupMbid.value)
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onPull()
+            model.onDismissRequestSheet()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(pulls.albumRequests.isEmpty())
+    }
+
+    // ---- favourites ---------------------------------------------------------
+
+    @Test
+    fun `starring the album stars the release group, never a file id`() = runTest {
+        ownedSubmarine()
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onToggleFavourite()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(
+            listOf(app.needler.core.domain.model.FavouriteTarget.OfAlbum(mbid) to true),
+            favourites.calls,
+        )
+    }
+
+    @Test
+    fun `un-starring an already starred album asks for the opposite`() = runTest {
+        library.albumsByMbid.value = mapOf(
+            mbid.value to submarine.copy(state = AlbumState.Owned, isFavourite = true),
+        )
+        library.tracksByMbid.value = mapOf(mbid.value to SampleLibrary.submarineTracks)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.isFavourite) loaded = awaitItem()
+            model.onToggleFavourite()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertFalse(favourites.calls.single().second)
+    }
+
+    /**
+     * REQUIREMENTS.md "Track identity is not stable": `file_id` "must never be used as an
+     * offline cache key", and the same reasoning makes it useless as a favourite key. A
+     * star keyed on it would come unstuck from its track the first time the server found a
+     * better copy.
+     */
+    @Test
+    fun `starring a track is keyed on the stable track key`() = runTest {
+        ownedSubmarine()
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.tracks.isEmpty()) loaded = awaitItem()
+            model.onToggleTrackFavourite(loaded.tracks.first())
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        val target = favourites.calls.single().first
+        assertTrue(target is app.needler.core.domain.model.FavouriteTarget.OfTrack)
+        assertEquals(
+            SampleLibrary.submarineTracks.first().key,
+            (target as app.needler.core.domain.model.FavouriteTarget.OfTrack).key,
+        )
+    }
+
+    @Test
+    fun `a star the server refuses says so`() = runTest {
+        ownedSubmarine()
+        favourites.setOutcome = Outcome.Failure(NeedlerError.SessionExpired)
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onToggleFavourite()
+            advanceUntilIdle()
+            var current = awaitItem()
+            while (current.notice == null) current = awaitItem()
+            assertTrue((current.notice as AlbumNotice.Problem).isProblem)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // ---- the quality tag pair -----------------------------------------------
+
+    @Test
+    fun `a pulled album makes Pulled the tag in force and dims Server`() = runTest {
+        // Submarine is pinned and complete in the sample library, and the header has to say that the
+        // local copy is what plays - a local copy always wins over any streaming setting.
+        library.albumsByMbid.value = mapOf(mbid.value to submarine)
+        library.tracksByMbid.value = mapOf(mbid.value to SampleLibrary.submarineTracks)
+        sessions.capabilitiesFlow.value = TRANSCODING_SERVER
+        sessions.connectivityFlow.value = ConnectivityState(NetworkStatus.METERED)
+        playbackSettings.setDataStreamRung(StreamRung.MP3_192)
+
+        viewModel().state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            assertTrue(loaded.isPulled)
+            assertEquals("FLAC", loaded.pulledTagValue)
+            // Still shown, still true, and no longer what you would hear.
+            assertEquals("MP3 192", loaded.serverTagValue)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `the server tag follows the connection`() = runTest {
+        ownedSubmarine()
+        sessions.capabilitiesFlow.value = TRANSCODING_SERVER
+        playbackSettings.setDataStreamRung(StreamRung.MP3_192)
+
+        viewModel().state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            // Unmetered: the Wi-Fi rung is Original, so the file is sent untouched and the tag names
+            // the source rather than a rung nothing reached.
+            assertEquals("FLAC", loaded.serverTagValue)
+            assertFalse(loaded.isPulled)
+
+            sessions.connectivityFlow.value = ConnectivityState(NetworkStatus.METERED)
+            var metered = awaitItem()
+            while (metered.serverTagValue == "FLAC") metered = awaitItem()
+            assertEquals("MP3 192", metered.serverTagValue)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `an album override beats the mode default on both connections`() = runTest {
+        ownedSubmarine()
+        sessions.capabilitiesFlow.value = TRANSCODING_SERVER
+        val model = viewModel()
+
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            assertEquals("FLAC", loaded.serverTagValue)
+            assertNull(loaded.qualityOverride)
+
+            // Unmetered, Wi-Fi rung Original, and the album still transcodes: this is what makes the
+            // override absolute rather than "metered only".
+            model.onOverrideQuality(StreamRung.MP3_128)
+            advanceUntilIdle()
+            var overridden = awaitItem()
+            while (overridden.qualityOverride == null) overridden = awaitItem()
+            assertEquals("MP3 128", overridden.serverTagValue)
+
+            model.onClearQualityOverride()
+            advanceUntilIdle()
+            var cleared = awaitItem()
+            while (cleared.qualityOverride != null) cleared = awaitItem()
+            assertEquals("FLAC", cleared.serverTagValue)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `a server that cannot transcode shows the source whatever the rung`() = runTest {
+        // REQUIREMENTS.md rule 3 of "Streaming": with no ffmpeg every rung resolves to original bytes,
+        // so a tag promising MP3 192 would be describing something the server will never send.
+        ownedSubmarine()
+        sessions.connectivityFlow.value = ConnectivityState(NetworkStatus.METERED)
+        playbackSettings.setDataStreamRung(StreamRung.MP3_192)
+
+        viewModel().state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            assertEquals("FLAC", loaded.serverTagValue)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    private companion object {
+        /** A server with ffmpeg. `FakeSessions` defaults to one without, which is the other case above. */
+        val TRANSCODING_SERVER: ServerCapabilities = ServerCapabilities(
+            subsonicEnabled = true,
+            transcodingAvailable = true,
+            libraryDownloadAllowed = true,
+        )
     }
 }

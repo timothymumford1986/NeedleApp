@@ -48,11 +48,14 @@ public interface AudioCacheWriter {
      * not be retained.
      *
      * Null is an ordinary answer, not a failure: the track streams and plays exactly as it would
-     * have, it is simply not kept. There are three reasons for it, and the caller does not need to
+     * have, it is simply not kept. There are four reasons for it, and the caller does not need to
      * tell them apart:
      *
      *  * **The bytes are transcoded.** [PlayableSource.Stream.cacheWhileStreaming] is false. The
      *    resolver sets that flag from the format it resolved and nothing downstream may override it.
+     *  * **Nothing declared a length.** Neither the response nor the mirror gave one, so there is no
+     *    number to check the free-space floor against before the write and none to check the finished
+     *    write against afterwards. See "Why the length is a parameter" below.
      *  * **There is not enough free space.** Retaining them would take the device below its
      *    free-space floor even after the whole cached-while-listening tier had been given up. The
      *    incoming bytes are skipped rather than forced in, and nothing extra is evicted for them:
@@ -61,12 +64,55 @@ public interface AudioCacheWriter {
      *  * **They are already on the device.** A complete, non-stale row exists for this key, so the
      *    only thing a second write could achieve is to replace a good file with an identical one.
      *
+     * ## The caller cannot tell them apart; the log can
+     *
+     * That rule is about the *caller*, and it is not an argument for silence. A device played three
+     * tracks to completion and showed `Cached while listening 0 B`, and because every refusal here was
+     * silent, diagnosing it took a full source trace - a correct refusal and a broken one are the same
+     * `null`. So an implementation writes one line per outcome to the diagnostics log REQUIREMENTS.md
+     * "Observability" already requires, through a sink it is given: see [AudioRetentionEvent] for the
+     * seven lines and why each one earns its place.
+     *
+     * Widening this return type to carry the reason was considered and rejected. A caller handed a
+     * reason will eventually act on one, and then retention policy is being decided at the call site
+     * rather than in the one store that owns it - which is the coupling this interface exists to
+     * prevent.
+     *
      * The expected [TrackFetchHandle] comes from [PlayableSource.Stream.fetchHandle] and is
      * snapshotted onto the row at commit time. It is what the staleness check compares against on
      * every later sync, which is why it must be the handle the bytes were actually fetched with and
      * never the mirror's current value.
+     *
+     * ## Why the length is a parameter and not read off the handle
+     *
+     * [TrackFetchHandle.sizeBytes] is the size **the metadata mirror recorded at the last sync**, and
+     * that is a description of the file rather than a measurement of the response. The two can
+     * legitimately disagree: DroppedNeedle replaces files in place on a quality upgrade
+     * (REQUIREMENTS.md "Invalidating upgraded files"), so a play between the upgrade and the next
+     * sync receives the new file's bytes while the mirror still describes the old one. A server that
+     * reports no size at all disagrees in the other direction.
+     *
+     * That number decides two things - whether the write fits above the free-space floor, and whether
+     * the finished write is complete - so getting it from the wrong side is not cosmetic. Checking a
+     * complete body against a stale size makes the write look truncated, which discards it; and
+     * because the file name is derived from the track key, the same disagreement recurs on every
+     * play. The symptom is a device that streams perfectly and retains nothing, with no error
+     * anywhere - REQUIREMENTS.md "Offline and caching" records that failure once already.
+     *
+     * The download path reached this conclusion first and states it plainly: "The transfer's own view
+     * of the file's length wins over the mirror's." This parameter is the streaming path being held to
+     * the same rule, rather than each half of one store trusting a different number.
+     *
+     * @param declaredLengthBytes the length the response declared for the **whole file**, from
+     *   `Content-Length`, or null when the caller has no such number. It must describe the whole
+     *   file: a write-through only ever begins at byte zero and never asks for a range, so a length
+     *   measured against anything else does not belong here. Null falls back to
+     *   [TrackFetchHandle.sizeBytes], which is all the caller had before the response arrived.
      */
-    public suspend fun openWrite(source: PlayableSource.Stream): AudioCacheWriteHandle?
+    public suspend fun openWrite(
+        source: PlayableSource.Stream,
+        declaredLengthBytes: Long? = null,
+    ): AudioCacheWriteHandle?
 }
 
 /**
@@ -101,7 +147,14 @@ public interface AudioCacheWriteHandle {
     /** The track these bytes belong to. Identity is the stable key, never the `file_id`. */
     public val key: TrackKey
 
-    /** The size the server declared, or null when it did not. [commit] checks against it. */
+    /**
+     * The length this write is held to, or null when nothing declared one. [commit] checks against it.
+     *
+     * It is the length the **response** declared where there was one, and the mirror's recorded size
+     * only as a fallback - see [AudioCacheWriter.openWrite] for why the order matters. Null means
+     * neither side said, and then only the reader reaching the end of the body can say the file is
+     * whole.
+     */
     public val expectedSizeBytes: Long?
 
     /** How many bytes have been accepted so far. */

@@ -64,18 +64,40 @@ public class WriteThroughSink(
     /**
      * Ends the write.
      *
+     * ## What counts as complete
+     *
+     * Two kinds of evidence, and the stronger one is used whenever it exists:
+     *
+     *  * **The declared length was received in full.** Every byte the response said the file has is on
+     *    disk. That is a measurement, and it settles the question on its own - a write that was
+     *    abandoned mid-track cannot have reached the declared length, which is the case REQUIREMENTS.md
+     *    "Offline and caching" requires to be discarded.
+     *  * **The reader reached end-of-input**, used only when nothing declared a length. It is weaker: it
+     *    says the body ended cleanly, not that the body was whole.
+     *
+     * End-of-input is deliberately **not** required on top of the byte count, and that is a correction
+     * rather than a loosening. Media3 closes a `DataSource` when its load ends, and a load can end
+     * having taken every byte without the reader asking once more and being told there are no
+     * more - a track's last block landing exactly on the end of the body, a load cancelled a moment
+     * after the final read. Demanding both discarded those writes, which is the same silent outcome as
+     * never opening one: the track plays, nothing is kept, and no error is raised anywhere. The
+     * download path has never had that requirement; it publishes on the byte count alone.
+     *
+     * A short body is still refused, for the reason the class exists.
+     *
      * @param readToEnd whether the `DataSource` reported end-of-input rather than being closed early.
      * @return true when the bytes were published as a complete cached track.
      */
     public fun finish(readToEnd: Boolean): Boolean {
-        if (failed || !readToEnd) {
+        if (failed) {
             abandon()
             return false
         }
         val expected: Long? = handle.expectedSizeBytes
-        if (expected != null && handle.bytesWritten != expected) {
-            // A clean end-of-stream that is short of the declared length is still a truncated fetch.
-            // Committing it is the silent failure above, so it goes in the bin.
+        val complete: Boolean = if (expected != null) handle.bytesWritten == expected else readToEnd
+        if (!complete) {
+            // Short of the declared length, or an end nothing can vouch for. Either way these are
+            // partial bytes, and committing them is the silent failure above, so they go in the bin.
             abandon()
             return false
         }

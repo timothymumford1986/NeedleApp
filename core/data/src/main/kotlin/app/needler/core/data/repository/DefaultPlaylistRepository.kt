@@ -55,8 +55,18 @@ public class DefaultPlaylistRepository(
 
     // ---------------------------------------------------------------------- reads
 
-    override fun observePlaylists(): Flow<List<Playlist>> = combine(
-        playlistDao.observePlaylists(),
+    /**
+     * Playlists, alphabetical, one window at a time.
+     *
+     * The window goes into SQL via [PlaylistDao.observePlaylistsPaged]; the write queue beside it is
+     * not windowed and must not be, because a page of playlists has to be checked against **every**
+     * pending edit to answer `hasPendingLocalEdits` honestly. The queue is a handful of rows at worst
+     * - it is drained as soon as there is a connection - so it costs nothing to read whole, and
+     * windowing it would silently clear the pending badge on a playlist whose edit happened to sit
+     * outside the window.
+     */
+    override fun observePlaylists(limit: Int, offset: Int): Flow<List<Playlist>> = combine(
+        playlistDao.observePlaylistsPaged(limit, offset),
         writeQueueDao.observeQueue(),
     ) { rows: List<PlaylistEntity>, queue ->
         val pending: Set<String> = queue

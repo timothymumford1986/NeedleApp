@@ -3,6 +3,7 @@ package app.needler.feature.player.fake
 import app.needler.core.domain.model.PlayQueue
 import app.needler.core.domain.model.PlaybackSpeed
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.playback.PlaybackProgress
@@ -127,6 +128,32 @@ class FakePlaybackController(
     override suspend fun setPlaybackSpeed(speed: PlaybackSpeed) {
         commands += "setPlaybackSpeed(" + speed.value + ")"
         stateFlow.value = stateFlow.value.copy(speed = speed)
+    }
+
+    /**
+     * Arms the timer, and publishes it on the state.
+     *
+     * The real implementation writes it to `PlaybackSettingsRepository` and reads it back onto
+     * `PlaybackState` through `observeState`, so a client that sets it sees it arrive on the state it was
+     * already bound to. That round trip is the behaviour worth faking - a fake that only recorded the
+     * command would let a screen pass its tests while showing nothing.
+     */
+    override suspend fun setSleepTimer(timer: SleepTimer) {
+        commands += "setSleepTimer(" + describe(timer) + ")"
+        stateFlow.value = stateFlow.value.copy(sleepTimer = timer)
+    }
+
+    /**
+     * A timer as a string a test can assert on.
+     *
+     * `At` prints as `At` without its instant: the instant is "now plus the duration chosen", so an
+     * assertion on the exact value would be an assertion about how long the test took to run. Tests that
+     * care about the duration read it off the state instead.
+     */
+    private fun describe(timer: SleepTimer): String = when (timer) {
+        SleepTimer.Off -> "Off"
+        SleepTimer.EndOfTrack -> "EndOfTrack"
+        is SleepTimer.At -> "At"
     }
 
     override suspend fun stop() {

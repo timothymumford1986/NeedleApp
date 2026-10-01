@@ -256,6 +256,43 @@ class PullsViewModelTest {
         }
     }
 
+    /**
+     * A pull the `album` mirror cannot name is still a pull.
+     *
+     * The device report's finding was that 34 of 35 rows had an empty
+     * `albumTitle`, and the reason nobody caught it is that every fixture in this
+     * module supplied one. This is the test that would have caught it: the
+     * unnamed rows must survive bucketing, keep their place in the queue's single
+     * newest-first order, and still be actionable — a row the user cannot name is
+     * a row they will try to cancel anyway, and the ViewModel routes on the task
+     * id, not on the title.
+     */
+    @Test
+    fun `a pull the server could not name is still bucketed and still actionable`() = runTest {
+        val repository = FakePullRepository(pulls = SamplePulls.withMissingTitles)
+        val viewModel = viewModel(repository)
+        subscribe(viewModel)
+        advanceUntilIdle()
+
+        val state = viewModel.state.value
+        assertEquals(4, state.pulls.size)
+        assertEquals(2, state.active.size)
+        assertEquals(1, state.completed.size)
+        assertEquals(1, state.failed.size)
+        assertEquals("2 in progress", state.headerLine)
+        // Three of the four have nothing to show in the title slot, which is the
+        // shape of the real device's queue rather than a contrived one.
+        assertEquals(3, state.pulls.count { it.albumTitle.isBlank() })
+
+        viewModel.onCancel(SamplePulls.untitled)
+        advanceUntilIdle()
+        assertEquals(listOf(SamplePulls.untitled.taskId), repository.cancelledTasks)
+
+        viewModel.onRetry(SamplePulls.anonymous)
+        advanceUntilIdle()
+        assertEquals(listOf(SamplePulls.anonymous.taskId), repository.retriedTasks)
+    }
+
     @Test
     fun `an empty queue is an empty state only once the mirror has answered`() = runTest {
         val repository = FakePullRepository()

@@ -18,9 +18,11 @@ import com.google.android.gms.wearable.NodeClient
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -28,8 +30,8 @@ import kotlinx.coroutines.withContext
  * commands, `NodeClient` to know whether the phone is there at all.
  *
  * Everything Google Play services touches in this module is behind this class. Above it, the screen
- * sees [WearPlaybackState] and three suspending functions - see [WearPlaybackClient] for why that
- * seam is where it is.
+ * sees [WearPlaybackState], [WearCrateState] and four suspending functions - see [WearPlaybackClient]
+ * for why that seam is where it is.
  *
  * ## Nothing here throws at the caller
  *
@@ -50,12 +52,29 @@ import kotlinx.coroutines.withContext
  *
  * ## Lifecycle
  *
- * [observe] is cold. The listener is registered when collection starts and removed when it stops, so
- * the cost of keeping a data-layer listener alive is paid only while something is collecting -
- * `NeedlerWearActivity` collects between `onStart` and `onStop` and no longer. There is deliberately
- * no `WearableListenerService`: this app has nothing to do with a snapshot while its screen is off,
- * and a manifest-declared listener service would be woken for every update all day. A tile or a
- * complication would change that calculation; neither is built.
+ * [observe] and [observeCrate] are cold. A listener is registered when collection starts and removed
+ * when it stops, so the cost of keeping a data-layer listener alive is paid only while something is
+ * collecting - `NeedlerWearActivity` collects between `onStart` and `onStop` and no longer. There is
+ * deliberately no `WearableListenerService` on the watch: this app has nothing to do with a snapshot
+ * while its screen is off, and a manifest-declared listener service would be woken for every update
+ * all day. A tile or a complication would change that calculation; neither is built.
+ *
+ * ## Collecting is also what makes the phone publish
+ *
+ * The phone does not observe its own session until a watch asks - see
+ * [WearPlaybackProtocol.PATH_REQUEST_STATE] and the battery argument beside it. So [observe] sends
+ * that request as soon as it has a listener attached, and resends it every [RENEWAL_MS] while
+ * collection continues, which is a third of the window the phone grants. Three consequences worth
+ * knowing:
+ *
+ *  * The retained item is on screen first and is corrected a round trip later. That is the honest
+ *    order: the retained copy may be minutes old, and it is still better than a spinner.
+ *  * One lost request costs nothing, because the next one lands well before the window lapses.
+ *  * The same loop is how a watch recovers from [WearPlaybackState.PhoneUnreachable] without
+ *    polling anything: while no node is connected the request goes nowhere, and the first renewal
+ *    after the link returns makes the phone publish, which arrives as an ordinary change event.
+ *
+ * [observeCrate] deliberately does not run that loop; see [WearPlaybackClient.observeCrate].
  */
 class DataLayerPlaybackClient(context: Context) : WearPlaybackClient {
 
@@ -91,40 +110,25 @@ class DataLayerPlaybackClient(context: Context) : WearPlaybackClient {
     @Volatile
     private var decodedArtwork: ImageBitmap? = null
 
-    override fun observe(): Flow<WearPlaybackState> = callbackFlow {
-        val listener = DataClient.OnDataChangedListener { events ->
-            // The buffer is released as soon as this callback returns, so every item is decoded
-            // synchronously here. Only the last relevant event matters: these are states, not a log,
-            // and an intermediate one has already been superseded.
-            var latest: WearPlaybackState? = null
-            for (event in events) {
-                val item: DataItem = event.dataItem
-                if (item.uri.path != WearPlaybackProtocol.PATH_NOW_PLAYING) continue
-                latest = if (event.type == DataEvent.TYPE_DELETED) {
-                    // The phone withdrew the snapshot: the session went away entirely.
-                    WearPlaybackState.Idle
-                } else {
-                    decode(item)
-                }
-            }
-            val resolved: WearPlaybackState? = latest
-            if (resolved != null) trySend(resolved)
-        }
+    override fun observe(): Flow<WearPlaybackState> = itemFlow(
+        path = WearPlaybackProtocol.PATH_NOW_PLAYING,
+        unreachable = WearPlaybackState.PhoneUnreachable,
+        // A reachable phone that has published nothing is idle, not silent.
+        absent = WearPlaybackState.Idle,
+        // The phone withdrew the snapshot: the session went away entirely.
+        deleted = WearPlaybackState.Idle,
+        asksPhoneToPublish = true,
+        decode = ::decodeNowPlaying,
+    )
 
-        val nodes: List<Node> = connectedNodes()
-        if (nodes.isEmpty()) {
-            send(WearPlaybackState.PhoneUnreachable)
-        } else {
-            // A reachable phone that has published nothing is idle, not silent.
-            send(readRetainedSnapshot() ?: WearPlaybackState.Idle)
-        }
-
-        // Registered even when no node is connected: pairing can complete while this screen is up,
-        // and the first snapshot afterwards should simply appear.
-        orNullOnFailure { dataClient.addListener(listener).awaitResult() }
-
-        awaitClose { orNullOnFailure { dataClient.removeListener(listener) } }
-    }.conflate()
+    override fun observeCrate(): Flow<WearCrateState> = itemFlow(
+        path = WearPlaybackProtocol.PATH_CRATE,
+        unreachable = WearCrateState.PhoneUnreachable,
+        absent = WearCrateState.Empty,
+        deleted = WearCrateState.Empty,
+        asksPhoneToPublish = false,
+        decode = ::decodeCrate,
+    )
 
     override suspend fun loadArtwork(artworkId: String): ImageBitmap? {
         val alreadyDecoded: ImageBitmap? = decodedArtwork
@@ -160,8 +164,76 @@ class DataLayerPlaybackClient(context: Context) : WearPlaybackClient {
         broadcast(WearPlaybackProtocol.PATH_PREVIOUS)
     }
 
+    override suspend fun skipToRow(rowId: String) {
+        // An empty id would reach the phone as an empty payload, which it drops. Stopping here saves
+        // the round trip and keeps the "empty means nothing" rule in one place on each side.
+        if (rowId.isEmpty()) return
+        broadcast(WearPlaybackProtocol.PATH_SKIP_TO_ROW, rowId.toByteArray(Charsets.UTF_8))
+    }
+
     /**
-     * Sends [path] to every connected node.
+     * One retained data item at [path], as a flow of [T].
+     *
+     * Shared by both state flows because the shape is identical down to the awkward parts - the node
+     * check before the retained read, the event buffer that is released the moment the callback
+     * returns, and the listener that has to be removed on cancellation. The two differ only in what
+     * they decode to, what their three empty answers are, and whether they ask the phone to publish;
+     * writing it twice would be thirty lines of duplicate GMS plumbing for two callers.
+     *
+     * @param unreachable emitted when no node is connected, in place of whatever is cached.
+     * @param absent emitted when the phone is reachable but has never published this item.
+     * @param deleted emitted when the phone withdraws the item.
+     * @param asksPhoneToPublish whether to run the [WearPlaybackProtocol.PATH_REQUEST_STATE] loop.
+     */
+    private fun <T : Any> itemFlow(
+        path: String,
+        unreachable: T,
+        absent: T,
+        deleted: T,
+        asksPhoneToPublish: Boolean,
+        decode: (DataItem) -> T,
+    ): Flow<T> = callbackFlow {
+        val listener = DataClient.OnDataChangedListener { events ->
+            // The buffer is released as soon as this callback returns, so every item is decoded
+            // synchronously here. Only the last relevant event matters: these are states, not a log,
+            // and an intermediate one has already been superseded.
+            var latest: T? = null
+            for (event in events) {
+                val item: DataItem = event.dataItem
+                if (item.uri.path != path) continue
+                latest = if (event.type == DataEvent.TYPE_DELETED) deleted else decode(item)
+            }
+            val resolved: T? = latest
+            if (resolved != null) trySend(resolved)
+        }
+
+        val nodes: List<Node> = connectedNodes()
+        if (nodes.isEmpty()) {
+            send(unreachable)
+        } else {
+            send(readRetainedItem(path, decode) ?: absent)
+        }
+
+        // Registered even when no node is connected: pairing can complete while this screen is up,
+        // and the first snapshot afterwards should simply appear.
+        orNullOnFailure { dataClient.addListener(listener).awaitResult() }
+
+        if (asksPhoneToPublish) {
+            // Launched into the flow's own scope, so cancelling the collection stops the renewals
+            // with it and the phone's window lapses on its own. See the class note.
+            launch {
+                while (true) {
+                    broadcast(WearPlaybackProtocol.PATH_REQUEST_STATE)
+                    delay(RENEWAL_MS)
+                }
+            }
+        }
+
+        awaitClose { orNullOnFailure { dataClient.removeListener(listener) } }
+    }.conflate()
+
+    /**
+     * Sends [path] to every connected node, with [payload].
      *
      * Every node, rather than the one running Needler, because narrowing it needs a `CapabilityClient`
      * capability declared by the phone app in `res/values/wear.xml` - which is in `:app`, not here.
@@ -172,9 +244,9 @@ class DataLayerPlaybackClient(context: Context) : WearPlaybackClient {
      * A failed send is swallowed. There is nothing useful to say about it: the honest feedback that a
      * command worked is the next snapshot, and one that did not work produces no snapshot.
      */
-    private suspend fun broadcast(path: String) {
+    private suspend fun broadcast(path: String, payload: ByteArray = EMPTY_PAYLOAD) {
         for (node in connectedNodes()) {
-            orNullOnFailure { messageClient.sendMessage(node.id, path, EMPTY_PAYLOAD).awaitResult() }
+            orNullOnFailure { messageClient.sendMessage(node.id, path, payload).awaitResult() }
         }
     }
 
@@ -182,19 +254,19 @@ class DataLayerPlaybackClient(context: Context) : WearPlaybackClient {
         orNullOnFailure { nodeClient.connectedNodes.awaitResult() } ?: emptyList()
 
     /**
-     * The copy of the now-playing item that Google Play services already holds on this watch.
+     * The copy of the item at [path] that Google Play services already holds on this watch.
      *
      * This is the reason state is a data item rather than a message: it is here before the phone is
      * asked anything, so a watch app opened from the launcher draws the right thing on its first
      * frame instead of a spinner.
      */
-    private suspend fun readRetainedSnapshot(): WearPlaybackState? {
+    private suspend fun <T : Any> readRetainedItem(path: String, decode: (DataItem) -> T): T? {
         val buffer: DataItemBuffer =
             orNullOnFailure { dataClient.dataItems.awaitResult() } ?: return null
         return try {
-            var found: WearPlaybackState? = null
+            var found: T? = null
             for (item in buffer) {
-                if (item.uri.path == WearPlaybackProtocol.PATH_NOW_PLAYING) found = decode(item)
+                if (item.uri.path == path) found = decode(item)
             }
             found
         } finally {
@@ -213,7 +285,7 @@ class DataLayerPlaybackClient(context: Context) : WearPlaybackClient {
      * older or newer phone is a normal situation, not a corrupt one. A snapshot with a key this build
      * does not know about renders with the keys it does.
      */
-    private fun decode(item: DataItem): WearPlaybackState {
+    private fun decodeNowPlaying(item: DataItem): WearPlaybackState {
         val map: DataMap = DataMapItem.fromDataItem(item).dataMap
         if (!map.getBoolean(WearPlaybackProtocol.KEY_HAS_ITEM, false)) {
             return WearPlaybackState.Idle
@@ -234,6 +306,39 @@ class DataLayerPlaybackClient(context: Context) : WearPlaybackClient {
         )
     }
 
+    /**
+     * One [DataItem] to one [WearCrateState].
+     *
+     * Only the key reading is here; every decision the decode makes is in [WearCrateState.of], which
+     * is pure and tested. A row missing its id is dropped rather than published as an untappable
+     * line, because the id is the only thing that makes a row actionable - and a row the user can see
+     * but cannot use is the kind of dead control this module goes out of its way to avoid.
+     */
+    private fun decodeCrate(item: DataItem): WearCrateState {
+        val map: DataMap = DataMapItem.fromDataItem(item).dataMap
+        val encoded: List<DataMap> =
+            map.getDataMapArrayList(WearPlaybackProtocol.KEY_CRATE_ROWS) ?: emptyList()
+        val rows: List<WearCrateRow> = encoded.mapNotNull { row ->
+            val id: String = row.getString(WearPlaybackProtocol.KEY_ROW_ID)
+                ?.takeIf { it.isNotEmpty() }
+                ?: return@mapNotNull null
+            WearCrateRow(
+                id = id,
+                title = row.getString(WearPlaybackProtocol.KEY_ROW_TITLE, ""),
+                artist = row.getString(WearPlaybackProtocol.KEY_ROW_ARTIST, ""),
+            )
+        }
+        return WearCrateState.of(
+            rows = rows,
+            currentIndex = map.getInt(
+                WearPlaybackProtocol.KEY_CRATE_CURRENT,
+                WearPlaybackProtocol.NO_CURRENT_ROW,
+            ),
+            windowStart = map.getInt(WearPlaybackProtocol.KEY_CRATE_WINDOW_START, 0),
+            total = map.getInt(WearPlaybackProtocol.KEY_CRATE_TOTAL, rows.size),
+        )
+    }
+
     private companion object {
         /**
          * Commands carry no arguments; the path is the whole instruction.
@@ -241,7 +346,18 @@ class DataLayerPlaybackClient(context: Context) : WearPlaybackClient {
          * An empty array rather than null, because `MessageClient.sendMessage` is the one data-layer
          * call whose payload nullability has moved between Play services versions, and an empty array
          * means the same thing to the phone either way.
+         *
+         * [WearPlaybackProtocol.PATH_SKIP_TO_ROW] is the one exception and carries a row id.
          */
         val EMPTY_PAYLOAD: ByteArray = ByteArray(0)
+
+        /**
+         * How often a collecting watch renews the phone's publishing window.
+         *
+         * A third of the window, so one lost message is invisible and two are needed before anything
+         * on screen goes stale. Derived rather than written out, so the two numbers cannot drift
+         * apart into a watch that renews slower than the phone forgets.
+         */
+        val RENEWAL_MS: Long = WearPlaybackProtocol.STATE_WINDOW_MS / 3
     }
 }

@@ -1,6 +1,9 @@
 package app.needler.core.data.repository
 
+import app.needler.core.data.local.dao.StreamOverrideDao
 import app.needler.core.data.local.dao.TrackDao
+import app.needler.core.data.local.entity.StreamOverrideEntity
+import app.needler.core.data.local.entity.StreamOverrideScopeDb
 import app.needler.core.data.local.entity.TrackEntity
 import app.needler.core.data.mapper.EntityMappers
 import app.needler.core.data.mapper.SubsonicIds
@@ -24,7 +27,8 @@ import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.ScrobbleEvent
 import app.needler.core.domain.model.ScrobblePreferences
 import app.needler.core.domain.model.SleepTimer
-import app.needler.core.domain.model.StreamQualityPreference
+import app.needler.core.domain.model.StreamOverrideScope
+import app.needler.core.domain.model.StreamRung
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.WriteOperation
 import app.needler.core.domain.repository.PlaybackSettingsRepository
@@ -56,35 +60,68 @@ import app.needler.core.data.settings.PlaybackSettings as StoredPlayback
  *
  * The persisted crate is stored as **track keys**, not file ids, so a queue restored after a
  * server-side quality upgrade resolves to the new files rather than to rows the server has replaced.
+ *
+ * ## Two stores, because there are two kinds of quality preference
+ *
+ * The **mode rungs** - one for Wi-Fi, one for mobile data - are settings, and live in `DataStore`
+ * beside gapless and crossfade. The **per-item overrides** are a row per track or album, so they live
+ * in Room: `DataStore` holds settings, not a table. Both are read here so that nothing else has to
+ * know there are two places, and `ResolvePlayableSourceUseCase` sees one repository.
  */
 public class DefaultPlaybackSettingsRepository(
     private val settingsStore: NeedlerSettingsStore,
     private val appStateStore: AppStateStore,
     private val trackDao: TrackDao,
+    private val streamOverrideDao: StreamOverrideDao,
     private val writeQueue: WriteQueue,
     private val networkMonitor: NetworkMonitor,
     private val subsonic: SubsonicApi,
     private val v1: V1Api,
+    private val now: () -> Long = { System.currentTimeMillis() },
 ) : PlaybackSettingsRepository {
 
     private val scrobbleTargets: MutableStateFlow<List<String>> = MutableStateFlow(emptyList())
     private val selectedOutput: MutableStateFlow<OutputTarget> =
         MutableStateFlow(OutputTarget.ThisDevice(displayName = THIS_DEVICE_NAME))
 
+    /**
+     * Playback speed and the sleep timer: session state, held in memory and never written to
+     * `DataStore`.
+     *
+     * See [setSleepTimer] for why they are not settings. They are `StateFlow`s rather than fields
+     * because [observePlaybackPreferences] is what the player service collects, and the service is the
+     * thing that has to act on them - a field nothing can observe is how the sleep timer came to be
+     * unreachable. One process holds both: the `MediaLibraryService` runs in the app's process and this
+     * repository is a singleton, so the UI's write and the service's read are the same object.
+     */
+    private val sessionSpeed: MutableStateFlow<PlaybackSpeed> = MutableStateFlow(PlaybackSpeed.Normal)
+    private val sessionSleepTimer: MutableStateFlow<SleepTimer> = MutableStateFlow(SleepTimer.Off)
+
     // ----------------------------------------------------------------- preferences
 
-    override fun observePlaybackPreferences(): Flow<PlaybackPreferences> =
-        settingsStore.settings.map { settings ->
-            PlaybackPreferences(
-                gaplessEnabled = settings.playback.gaplessEnabled,
-                crossfade = toDomain(settings.crossfade),
-                eq = toDomain(settings.equaliser),
-                speed = PlaybackSpeed.Normal,
-                sleepTimer = SleepTimer.Off,
-                streamQuality = toStreamPreference(settings.playback),
-                scrobblingEnabled = settings.playback.scrobbleEnabled,
-            )
-        }
+    /**
+     * The persisted settings and the two session values, as one observable.
+     *
+     * The player service collects this and nothing else, so the sleep timer has to arrive here or it
+     * arrives nowhere: `PlaybackCoordinator` reads `sleepTimer` off each emission and evaluates it on
+     * its own position tick. That is why the timer is combined in rather than read from a field.
+     */
+    override fun observePlaybackPreferences(): Flow<PlaybackPreferences> = combine(
+        settingsStore.settings,
+        sessionSpeed,
+        sessionSleepTimer,
+    ) { settings, speed, timer ->
+        PlaybackPreferences(
+            gaplessEnabled = settings.playback.gaplessEnabled,
+            crossfade = toDomain(settings.crossfade),
+            eq = toDomain(settings.equaliser),
+            speed = speed,
+            sleepTimer = timer,
+            wifiQuality = toRung(settings.playback.streamQuality),
+            dataQuality = toRung(settings.playback.mobileDataStreamQuality),
+            scrobblingEnabled = settings.playback.scrobbleEnabled,
+        )
+    }
 
     override fun observeEqSettings(): Flow<EqSettings> = settingsStore.equaliser.map(::toDomain)
 
@@ -129,30 +166,89 @@ public class DefaultPlaybackSettingsRepository(
     /**
      * Playback speed and the sleep timer are **session state, not settings**.
      *
-     * They belong to the thing that is playing and die with it: a speed persisted across a restart
-     * would have the next album start at 1.5x with no visible cause. Both are accepted here because
-     * the domain interface declares them, and both are applied through the controller.
+     * They belong to the thing that is playing and die with it, so neither reaches `DataStore`. A speed
+     * persisted across a restart would have the next album start at 1.5x with no visible cause; a timer
+     * persisted overnight is armed and already elapsed by morning, so the first track of the day stops
+     * itself, which reads as the app refusing to play. `PlaybackCoordinator` carries a guard against
+     * exactly that, and it is a guard against a persistence this repository must not add.
+     *
+     * Both are therefore held in [sessionSpeed] and [sessionSleepTimer] - in memory, for the life of
+     * the process - and both are published on [observePlaybackPreferences]. **That publication is the
+     * point.** These two setters were `= Unit` for a while, on the reasoning that the values were
+     * "applied through the controller" and so needed no store. Half of that was true: speed does reach
+     * the session directly, through `setPlaybackSpeed` on the Media3 controller. The sleep timer cannot,
+     * because nothing in the session implements one - the timer is evaluated by the player service
+     * against the flow this repository emits, and a no-op setter meant that flow never changed. The
+     * result was a timer that was modelled, decided, tested and acted upon, and impossible to turn on.
+     *
+     * A write here also keeps the emitted speed honest for the coordinator, which re-applies
+     * `preferences.speed` to the player on every emission: with a hard-coded `Normal` on this flow, any
+     * unrelated settings change - arming the sleep timer among them - would quietly drop playback back
+     * to 1x.
      */
-    override suspend fun setPlaybackSpeed(speed: PlaybackSpeed): Unit = Unit
+    override suspend fun setPlaybackSpeed(speed: PlaybackSpeed) {
+        sessionSpeed.value = speed
+    }
 
-    override suspend fun setSleepTimer(timer: SleepTimer): Unit = Unit
+    override suspend fun setSleepTimer(timer: SleepTimer) {
+        sessionSleepTimer.value = timer
+    }
 
     /**
-     * Sets stream quality.
+     * Sets the unmetered ceiling.
      *
-     * [StreamQualityPreference.MP3_320_ON_METERED] must only be offered when the server advertises
+     * ## One key, one write - which is what the old shape could not do
+     *
+     * This replaced a `setStreamQuality(StreamQualityPreference)` that took a two-valued enum
+     * meaning "original" or "original on Wi-Fi, MP3 320 on mobile data", and it was **write-only in
+     * one direction**: writing `ORIGINAL` set the unmetered key and left `mobile_data_stream_quality`
+     * at its `MP3_320` default, which this repository then read straight back as
+     * `MP3_320_ON_METERED`. The Settings screen carried a documented workaround - a second write
+     * through `NeedlerSettingsStore` - to make its own switch turn off. Two keys behind one setter is
+     * what caused that, so there are two setters now and each writes exactly the key it names.
+     *
+     * Any rung but [StreamRung.ORIGINAL] must only be offered when the server advertises
      * `transcoding:1` **and** reports transcoding enabled: the server allows one transcode per user
      * and two in total, so it is a scarce resource rather than a free setting. The gate is the
      * caller's, because hiding the control is better than failing the tap.
      */
-    override suspend fun setStreamQuality(preference: StreamQualityPreference) {
-        when (preference) {
-            StreamQualityPreference.ORIGINAL -> settingsStore.setStreamQuality(StreamQuality.ORIGINAL)
-            StreamQualityPreference.MP3_320_ON_METERED -> {
-                settingsStore.setStreamQuality(StreamQuality.ORIGINAL)
-                settingsStore.setMobileDataStreamQuality(StreamQuality.MP3_320)
-            }
-        }
+    override suspend fun setWifiStreamRung(rung: StreamRung) {
+        settingsStore.setStreamQuality(toStored(rung))
+    }
+
+    override suspend fun setDataStreamRung(rung: StreamRung) {
+        settingsStore.setMobileDataStreamQuality(toStored(rung))
+    }
+
+    // ------------------------------------------------------------- per-item overrides
+
+    override suspend fun getStreamOverride(scope: StreamOverrideScope, id: String): StreamRung? =
+        streamOverrideDao.get(scope = toDb(scope), itemId = id)?.let { row -> toRung(row.rung) }
+
+    override fun observeStreamOverride(
+        scope: StreamOverrideScope,
+        id: String,
+    ): Flow<StreamRung?> = streamOverrideDao
+        .observe(scope = toDb(scope), itemId = id)
+        .map { row -> row?.let { toRung(it.rung) } }
+
+    override suspend fun setStreamOverride(
+        scope: StreamOverrideScope,
+        id: String,
+        rung: StreamRung,
+    ) {
+        streamOverrideDao.upsert(
+            StreamOverrideEntity(
+                scope = toDb(scope),
+                itemId = id,
+                rung = toStored(rung),
+                updatedAt = now(),
+            ),
+        )
+    }
+
+    override suspend fun clearStreamOverride(scope: StreamOverrideScope, id: String) {
+        streamOverrideDao.delete(scope = toDb(scope), itemId = id)
     }
 
     override suspend fun setScrobblingEnabled(enabled: Boolean) {
@@ -324,18 +420,57 @@ public class DefaultPlaybackSettingsRepository(
     )
 
     /**
-     * The settings store keeps two quality values - one for any connection and one for mobile data -
-     * while the domain models the single choice the screen actually offers. `MP3_320_ON_METERED` is
-     * "original, except transcode on metered", which is exactly that pair.
+     * A stored rung as the domain's rung. Exhaustive, so a rung added to one ladder and forgotten in
+     * the other fails to compile rather than silently resolving to Original.
+     *
+     * ## Why no migration was needed, and what "the migration" actually is
+     *
+     * The store has always held **two** keys - `stream_quality` and `mobile_data_stream_quality` -
+     * with defaults `original` and `mp3_320`. What changed is that the domain used to collapse them
+     * into one two-valued preference and now carries both. So an existing install lands where it
+     * should by reading the keys it already has:
+     *
+     * | Install | `stream_quality` | `mobile_data_stream_quality` | Reads as |
+     * | --- | --- | --- | --- |
+     * | Toggle was **on** | `original` (or absent) | `mp3_320` (or absent) | Wi-Fi Original, Data MP3 320 |
+     * | Toggle was **off** | `original` (or absent) | `original` | Wi-Fi Original, Data Original |
+     * | Fresh install | absent | absent | Wi-Fi Original, Data MP3 320 |
+     *
+     * The off case is the one that could have gone wrong, and it is why the old Settings screen wrote
+     * `mobile_data_stream_quality = original` explicitly when the switch was turned off: that write is
+     * what makes "off" distinguishable from "never touched". `PlaybackSettingsRepositoryTest` pins
+     * both directions.
+     *
+     * No rung value is rewritten and no key is renamed, so there is nothing to run once and nothing
+     * that can half-run.
      */
-    private fun toStreamPreference(playback: StoredPlayback): StreamQualityPreference =
-        if (playback.streamQuality == StreamQuality.ORIGINAL &&
-            playback.mobileDataStreamQuality.isTranscode
-        ) {
-            StreamQualityPreference.MP3_320_ON_METERED
-        } else {
-            StreamQualityPreference.ORIGINAL
-        }
+    private fun toRung(stored: StreamQuality): StreamRung = when (stored) {
+        StreamQuality.ORIGINAL -> StreamRung.ORIGINAL
+        StreamQuality.OPUS_192 -> StreamRung.OPUS_192
+        StreamQuality.OPUS_128 -> StreamRung.OPUS_128
+        StreamQuality.OPUS_96 -> StreamRung.OPUS_96
+        StreamQuality.MP3_320 -> StreamRung.MP3_320
+        StreamQuality.MP3_256 -> StreamRung.MP3_256
+        StreamQuality.MP3_192 -> StreamRung.MP3_192
+        StreamQuality.MP3_128 -> StreamRung.MP3_128
+    }
+
+    /** The same mapping the other way, for a write. Exhaustive for the same reason. */
+    private fun toStored(rung: StreamRung): StreamQuality = when (rung) {
+        StreamRung.ORIGINAL -> StreamQuality.ORIGINAL
+        StreamRung.OPUS_192 -> StreamQuality.OPUS_192
+        StreamRung.OPUS_128 -> StreamQuality.OPUS_128
+        StreamRung.OPUS_96 -> StreamQuality.OPUS_96
+        StreamRung.MP3_320 -> StreamQuality.MP3_320
+        StreamRung.MP3_256 -> StreamQuality.MP3_256
+        StreamRung.MP3_192 -> StreamQuality.MP3_192
+        StreamRung.MP3_128 -> StreamQuality.MP3_128
+    }
+
+    private fun toDb(scope: StreamOverrideScope): StreamOverrideScopeDb = when (scope) {
+        StreamOverrideScope.TRACK -> StreamOverrideScopeDb.TRACK
+        StreamOverrideScope.ALBUM -> StreamOverrideScopeDb.ALBUM
+    }
 
     public companion object {
         public const val THIS_DEVICE_NAME: String = "This device"

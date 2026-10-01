@@ -44,6 +44,20 @@ class SearchScreenshotTest {
         capture("search-results", NeedlerDevice.Phone, RESULTS)
     }
 
+    /**
+     * The order the device report said was backwards: owned artist first, the
+     * library's albums and songs above everything un-owned, and the un-owned tail
+     * capped with a row that reveals the rest.
+     */
+    @Test
+    fun `owned results lead, with both blocks capped`() {
+        capture(
+            "search-owned-first",
+            NeedlerDevice.Phone,
+            SearchUiState(query = "wonder", results = SampleSearch.wonderResults),
+        )
+    }
+
     @Test
     fun `nothing typed yet, with a search history`() {
         capture(
@@ -158,6 +172,20 @@ class SearchScreenshotTest {
         )
     }
 
+    /**
+     * The request sheet a **Pull** opens, with the `monitor_artist` toggle
+     * REQUIREMENTS.md "Placing a request" asks for. The sheet is `:core:design`'s,
+     * shared with the library screens.
+     */
+    @Test
+    fun `the request sheet over a search result`() {
+        capture(
+            "search-pull-sheet",
+            NeedlerDevice.Phone,
+            RESULTS.copy(pullSheetAlbum = SampleSearch.buzz, monitorArtist = true),
+        )
+    }
+
     @Test
     fun `a pull has been accepted`() {
         capture(
@@ -253,6 +281,11 @@ class SearchScreenshotTest {
             onAlbumClick = {},
             onPull = {},
             onPlayTrack = {},
+            onShowAll = {},
+            onLoadMore = {},
+            onMonitorArtistChange = {},
+            onConfirmPull = {},
+            onCancelPull = {},
             onDismissNotice = {},
         )
     }
