@@ -50,6 +50,26 @@ dependencies {
     // The data layer, for syncing on-device audio and session state from the phone.
     implementation(libs.playServices.wearable)
 
+    // Not a dependency - a floor on one that arrives through the line above.
+    //
+    // play-services-wearable pulls play-services-base, which asks for
+    // androidx.fragment 1.0.0; Gradle settles on 1.1.0. NeedlerWearActivity uses
+    // registerForActivityResult to ask for POST_NOTIFICATIONS, and
+    // androidx.activity's InvalidFragmentVersionForActivityResult is a *fatal*
+    // lint check below fragment 1.3.0: a pre-1.3 FragmentActivity does not call
+    // super.onRequestPermissionsResult, so the result never arrives. It fails
+    // :wear:lintVitalRelease, which means it fails the release build rather than
+    // merely warning.
+    //
+    // A constraint rather than an implementation dependency, because this module
+    // is Wear Compose and wants no fragment code of its own - only a version
+    // floor on the copy Play services drags in.
+    constraints {
+        implementation(libs.androidx.fragment) {
+            because("androidx.activity requires fragment 1.3.0+ for registerForActivityResult")
+        }
+    }
+
     // The watch's own playback. REQUIREMENTS.md "Surfaces beyond the app > Wear
     // OS" ends Wear's v1 scope with "playback of on-device audio synced from the
     // phone over the data layer", and a watch that plays with its screen off

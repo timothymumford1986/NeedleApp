@@ -71,6 +71,7 @@ glance = "1.2.0"                     # src: GMaven androidx/glance/glance-appwid
 wearCompose = "1.6.2"                # src: GMaven androidx/wear/compose/compose-material3 (1.7.0 is rc only)
 wearToolingPreview = "1.0.0"         # src: GMaven androidx/wear/wear-tooling-preview
 playServicesWearable = "20.0.1"      # src: GMaven com/google/android/gms/play-services-wearable
+androidxFragment = "1.9.1"           # src: GMaven androidx/fragment/fragment (constraint only - see :wear)
 
 # ---- di / http / serialisation ----
 hilt = "2.60.1"                      # src: MC com/google/dagger/hilt-android
@@ -180,6 +181,7 @@ wear-compose-material3 = { group = "androidx.wear.compose", name = "compose-mate
 wear-compose-navigation = { group = "androidx.wear.compose", name = "compose-navigation", version.ref = "wearCompose" }
 wear-toolingPreview = { group = "androidx.wear", name = "wear-tooling-preview", version.ref = "wearToolingPreview" }
 playServices-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "playServicesWearable" }
+androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "androidxFragment" }
 
 # ---- di ----
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
