@@ -1,9 +1,11 @@
 package app.needler.feature.search.search
 
+import app.needler.core.design.component.artworkPlaceholderInitial
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.CatalogueLaneState
 import app.needler.core.domain.model.NeedlerError
+import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.ServiceStatus
 import app.needler.core.domain.model.UnifiedSearchResults
 import app.needler.feature.search.SampleSearch
@@ -186,6 +188,138 @@ class SearchUiStateTest {
         )
     }
 
+    // ---- which block a row belongs in ---------------------------------------
+
+    /**
+     * REQUIREMENTS.md "Album states": one `Album` type carries all of them, and the
+     * split here is on that state and never on the lane a row arrived from. An
+     * album being pulled is the user's own music, not a shopping-list entry.
+     */
+    @Test
+    fun `everything but NotOwned belongs to the library block`() {
+        val state = SearchUiState(query = "khruangbin", results = SampleSearch.khruangbinResults)
+
+        assertEquals(
+            listOf("Mordechai", "Flyte", "Black Classical Music"),
+            state.libraryAlbums.map { it.title },
+        )
+        assertEquals(listOf("Buzz"), state.catalogueAlbums.map { it.title })
+    }
+
+    // ---- the capped blocks and the row under them ---------------------------
+
+    @Test
+    fun `a block longer than its preview offers to show the rest`() {
+        val state = SearchUiState(query = "wonder", results = SampleSearch.wonderResults)
+
+        assertEquals(ARTIST_PREVIEW, state.visibleArtists.size)
+        assertEquals(CATALOGUE_ALBUM_PREVIEW, state.visibleCatalogueAlbums.size)
+        assertEquals(
+            SearchMoreRow("Show all 5 artists", SearchMoreAction.SHOW_ALL),
+            state.moreRow(SearchBucket.ARTISTS),
+        )
+        assertEquals(
+            SearchMoreRow("Show all 10 albums to pull", SearchMoreAction.SHOW_ALL),
+            state.moreRow(SearchBucket.ALBUMS),
+        )
+    }
+
+    /** Expanding is local and instant, and only then is the server worth asking. */
+    @Test
+    fun `an expanded block shows everything it holds and then offers a page`() {
+        val state = expanded(SearchBucket.ARTISTS)
+
+        assertEquals(5, state.visibleArtists.size)
+        assertEquals(
+            SearchMoreRow(MORE_FROM_CATALOGUE, SearchMoreAction.LOAD_MORE),
+            state.moreRow(SearchBucket.ARTISTS),
+        )
+    }
+
+    /** A block that fits needs no row at all — the pack's own layout, undecorated. */
+    @Test
+    fun `a block that was never capped offers nothing`() {
+        val state = SearchUiState(query = "khruangbin", results = SampleSearch.khruangbinResults)
+
+        assertNull(state.moreRow(SearchBucket.ARTISTS))
+        assertNull(state.moreRow(SearchBucket.ALBUMS))
+    }
+
+    /**
+     * REQUIREMENTS.md rule 4: offline shows library results only. Revealing rows
+     * already in hand is fine; offering a call that cannot be made is not.
+     */
+    @Test
+    fun `offline offers the rows already in hand and no page of the catalogue`() {
+        val offline = SearchUiState(
+            query = "wonder",
+            offline = true,
+            results = SampleSearch.wonderResults.copy(
+                catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+            ),
+        )
+
+        assertEquals(
+            SearchMoreRow("Show all 10 albums to pull", SearchMoreAction.SHOW_ALL),
+            offline.moreRow(SearchBucket.ALBUMS),
+        )
+        assertNull(
+            "no page can be fetched without a connection",
+            offline.copy(
+                paging = offline.paging.with(SearchBucket.ALBUMS, BucketPaging(expanded = true)),
+            ).moreRow(SearchBucket.ALBUMS),
+        )
+    }
+
+    @Test
+    fun `a page in flight says so and accepts no taps`() {
+        val state = expanded(SearchBucket.ALBUMS).let {
+            it.copy(
+                paging = it.paging.with(
+                    SearchBucket.ALBUMS,
+                    BucketPaging(expanded = true, loading = true),
+                ),
+            )
+        }
+
+        val row: SearchMoreRow = requireNotNull(state.moreRow(SearchBucket.ALBUMS))
+        assertEquals(LOOKING_FOR_MORE, row.label)
+        assertFalse(row.enabled)
+    }
+
+    @Test
+    fun `a failed page is a retry and the end of the list is not`() {
+        val base = expanded(SearchBucket.ALBUMS)
+        val failed = base.copy(
+            paging = base.paging.with(
+                SearchBucket.ALBUMS,
+                BucketPaging(
+                    expanded = true,
+                    note = pageFailedNote("The server answered 500."),
+                    noteIsProblem = true,
+                ),
+            ),
+        )
+        val exhausted = base.copy(
+            paging = base.paging.with(
+                SearchBucket.ALBUMS,
+                BucketPaging(
+                    expanded = true,
+                    hasMore = false,
+                    note = catalogueExhaustedNote("wonder"),
+                ),
+            ),
+        )
+
+        val retry: SearchMoreRow = requireNotNull(failed.moreRow(SearchBucket.ALBUMS))
+        assertTrue(retry.enabled)
+        assertTrue(retry.isProblem)
+
+        val end: SearchMoreRow = requireNotNull(exhausted.moreRow(SearchBucket.ALBUMS))
+        assertFalse("there is nothing left to ask for", end.enabled)
+        assertFalse(end.isProblem)
+    }
+
     // ---- headings -----------------------------------------------------------
 
     @Test
@@ -252,15 +386,28 @@ class SearchUiStateTest {
         assertNull(SearchFormat.spokenDuration(null))
     }
 
+    /**
+     * The avatar letter comes from `:core:design` now, not from a second copy of
+     * the rule in this module. Asserted here because the search screen is where
+     * the coverless tile is most visible — an artist result has no cover far more
+     * often than an owned album does.
+     */
     @Test
-    fun `an avatar always has a letter in it`() {
-        assertEquals("K", SearchFormat.initial("Khruangbin"))
-        assertEquals("T", SearchFormat.initial("  The Marías "))
-        assertEquals("?", SearchFormat.initial("   "))
+    fun `an artist tile draws a letter from the shared placeholder`() {
+        assertEquals("K", artworkPlaceholderInitial("Khruangbin"))
+        assertEquals("T", artworkPlaceholderInitial("  The Marías "))
+        assertNull("nothing to draw rather than a question mark", artworkPlaceholderInitial("   "))
     }
 
     private fun noteFor(lane: CatalogueLaneState): String? = SearchUiState(
         query = "khruangbin",
         results = UnifiedSearchResults(query = "khruangbin", catalogue = lane),
     ).catalogueNote
+
+    /** The "wonder" results with one bucket expanded and nothing paged yet. */
+    private fun expanded(bucket: SearchBucket): SearchUiState = SearchUiState(
+        query = "wonder",
+        results = SampleSearch.wonderResults,
+        paging = SearchPaging().with(bucket, BucketPaging(expanded = true)),
+    )
 }

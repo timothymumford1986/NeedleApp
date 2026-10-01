@@ -6,6 +6,7 @@ import app.needler.core.data.local.dao.AlbumDao
 import app.needler.core.data.local.dao.ArtistDao
 import app.needler.core.data.local.dao.TrackDao
 import app.needler.core.data.local.entity.AlbumEntity
+import app.needler.core.data.local.entity.ArtistEntity
 import app.needler.core.data.local.entity.TrackEntity
 import app.needler.core.data.mapper.CatalogueMappers
 import app.needler.core.data.mapper.EntityMappers
@@ -22,6 +23,7 @@ import app.needler.core.domain.model.SearchSuggestion
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.map
 import app.needler.core.domain.repository.SearchRepository
+import app.needler.core.domain.usecase.UnifiedSearchUseCase
 import app.needler.core.network.v1.V1Api
 import app.needler.core.network.v1.dto.SearchBucketResponseDto
 import app.needler.core.network.v1.dto.SearchResponseDto
@@ -51,10 +53,11 @@ public class DefaultSearchRepository(
 ) : SearchRepository {
 
     /**
-     * Local FTS over `album_fts` and `track_fts`, plus an artist prefix scan.
+     * Local FTS over `album_fts` and `track_fts`, plus the two-source artist lane below.
      *
-     * Artists have no FTS table - the Artists screen is an alphabetical index with a jump list, and
-     * a prefix scan over the normalised sort name is what that screen's own affordance already is.
+     * Artists have no FTS table of their own - REQUIREMENTS.md's persistence table specifies FTS4 over
+     * album title plus artist name and over track title, and `album_fts` therefore already indexes
+     * every owned artist's name.
      */
     override fun searchLocal(query: String, limit: Int): Flow<LocalSearchResults> {
         val match: String = FtsQuery.forPrefixSearch(query)
@@ -68,13 +71,65 @@ public class DefaultSearchRepository(
         }.map { (albums, tracks) ->
             LocalSearchResults(
                 query = trimmed,
-                artists = artistDao
-                    .searchArtistsByPrefix(SortKeys.normalise(trimmed), limit)
-                    .map(EntityMappers::artist),
+                artists = ownedArtists(trimmed, albums, limit),
                 albums = albums.map { EntityMappers.album(it) },
                 tracks = tracks.map { EntityMappers.track(it) },
             )
         }
+    }
+
+    /**
+     * The owned artists a query finds, from the artist index **and** from the artists of the albums
+     * `album_fts` just matched.
+     *
+     * The second source is the fix for a bug that shipped: searching "wonder" returned four catalogue
+     * strangers and not "Oh Wonder", three of whose albums were on the device. The artist index is
+     * queried with [ArtistDao.searchArtistsByPrefix], a prefix `LIKE` on `sort_name_normalised`, so it
+     * can only ever find a name that *begins* with what was typed - and "oh wonder" does not begin
+     * with "wonder". Every screen that filters the alphabetical Artists list is well served by that
+     * query; a search field is not, because nobody types an artist's first word to find them.
+     *
+     * `album_fts` covers the gap exactly, at no extra index cost: it tokenises the artist name beside
+     * the album title, so the very query that found the three owned albums also proves their artist
+     * matches. Their artist MBIDs are taken from those rows and the real mirror rows read back, so the
+     * owned album count and the artwork reference are the row's own and not inferred from an album.
+     *
+     * Two guards on that second source:
+     *
+     *  - the candidate's **name** must match what was typed, per
+     *    [UnifiedSearchUseCase.artistMatches]. An album matches `album_fts` on its title as well as
+     *    its artist, and a search for "wonder" that found the album *Wonder* must not put its
+     *    unrelated artist into the artist results. That predicate is borrowed from the use case rather
+     *    than written again here: it is the same rule the merge ranks with, and two copies of it would
+     *    let this lane admit an artist the merge then sorts last for not matching.
+     *  - a candidate with no row in `artist` is skipped rather than synthesised from the album. An
+     *    artist the mirror has never heard of is not an artist the user owns, and a row invented here
+     *    would carry a zero album count and no artwork into a list whose whole purpose is to show what
+     *    is owned.
+     *
+     * Rejected alternative: a third FTS table over artist names. It would answer this in one query,
+     * and it would also be a third inverted index for sync to keep consistent, for a list capped at
+     * [limit] rows that `album_fts` already answers inside the 50 ms local-search budget.
+     */
+    private suspend fun ownedArtists(
+        query: String,
+        matchedAlbums: List<AlbumEntity>,
+        limit: Int,
+    ): List<Artist> {
+        val found: LinkedHashMap<String, Artist> = LinkedHashMap()
+        for (row in artistDao.searchArtistsByPrefix(SortKeys.normalise(query), limit)) {
+            found[row.artistMbid] = EntityMappers.artist(row)
+        }
+        for (album in matchedAlbums) {
+            if (found.size >= limit) break
+            val mbid: String = album.artistMbid ?: continue
+            if (found.containsKey(mbid)) continue
+            // Checked before the read, so an album that matched on its title alone costs no query.
+            if (!UnifiedSearchUseCase.artistMatches(query, album.artistName)) continue
+            val artist: ArtistEntity = artistDao.getArtist(mbid) ?: continue
+            found[mbid] = EntityMappers.artist(artist)
+        }
+        return found.values.toList()
     }
 
     override suspend fun searchCatalogue(

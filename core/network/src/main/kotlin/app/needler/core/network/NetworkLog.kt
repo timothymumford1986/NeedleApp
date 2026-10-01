@@ -12,10 +12,11 @@ import java.util.concurrent.TimeUnit
  * How serious one diagnostic line is.
  *
  * The levels exist so that a logcat sink can map them onto Android's priorities and a developer
- * can ask for `adb logcat NeedlerNet:W *:S` and see only the things that went wrong. A sink with
- * no notion of severity — the file-backed diagnostics log `:core:data` owns — may ignore the level
- * entirely, which is why [NetworkLogSink] keeps a one-argument `log` as its single abstract member
- * and treats the level as an optional refinement rather than a second required method.
+ * can ask for `adb logcat NeedlerNet:W *:S` and see only the things that went wrong. A sink with no
+ * notion of severity may ignore the level entirely, which is why [NetworkLogSink] keeps a
+ * one-argument `log` as its single abstract member and treats the level as an optional refinement
+ * rather than a second required method. [SessionDiagnosticsLog] does express it, both to colour the
+ * on-screen view and to let a reader of a shared file find the four lines that mattered.
  *
  * There is deliberately no `Verbose`. Everything this module would have written at that level is
  * either a body (never logged at all) or a per-chunk event on the download path, and a level whose
@@ -36,17 +37,20 @@ public enum class NetworkLogLevel {
 }
 
 /**
- * Where this module's request log goes. `:core:data` implements it over the local, user-viewable
- * diagnostics log required by REQUIREMENTS.md §Observability ("request URLs with secrets
- * redacted, status codes … never leaves the device automatically"), and [LogcatNetworkLogSink]
- * implements it over `android.util.Log` for a developer with a cable attached.
+ * Where this module's request log goes. [SessionDiagnosticsLog] implements it as the local,
+ * user-viewable diagnostics log required by REQUIREMENTS.md §Observability ("request URLs with
+ * secrets redacted, status codes … never leaves the device automatically"), and
+ * [LogcatNetworkLogSink] implements it over `android.util.Log` for a developer with a cable
+ * attached. On a debuggable build both are installed at once — see [forApplication].
  *
  * Implementations must be cheap and thread-safe; they are called on OkHttp's threads.
  *
  * Nothing that reaches a sink has been near a credential: [redactUrl] is the URL rule,
  * [RedactingLogInterceptor] is the header rule (no request header is logged, at all), and
  * [redactParseMessage] closes the one place a server's bytes could otherwise have leaked back out
- * through an exception message.
+ * through an exception message. [redactLogLine] is the belt-and-braces rule applied to arbitrary
+ * text by the buffer that the user can read and share, for lines written by code that has not
+ * thought about any of the above.
  */
 public fun interface NetworkLogSink {
 
@@ -64,7 +68,7 @@ public fun interface NetworkLogSink {
 
     public companion object {
 
-        /** Drops everything. The default, and what release builds use unless diagnostics is on. */
+        /** Drops everything. The process default, and what every unit test in this project sees. */
         public val None: NetworkLogSink = object : NetworkLogSink {
             override fun log(line: String): Unit = Unit
             override fun log(level: NetworkLogLevel, line: String): Unit = Unit
@@ -104,8 +108,25 @@ public fun interface NetworkLogSink {
         public fun logcat(tag: String = NetworkLog.TAG): NetworkLogSink = LogcatNetworkLogSink(tag)
 
         /**
-         * The right sink for this process: logcat when the application is debuggable, [None] when
-         * it is not.
+         * The right sink for this process: the in-memory session log always, plus logcat when the
+         * application is debuggable.
+         *
+         * ## Why the session log is installed on a release build too
+         *
+         * Because REQUIREMENTS.md §Observability requires it of the shipped app, not of a developer
+         * build: "A local, user-viewable diagnostics log covering the last session … It must be
+         * shareable as a file for bug reports." A user who cannot connect to their server has no
+         * cable, no `adb` and no debuggable build, and they are precisely the person the requirement
+         * exists for. Installing the buffer only when `FLAG_DEBUGGABLE` is set would have satisfied
+         * the letter of "a diagnostics log exists" while leaving it empty in every install that
+         * ships.
+         *
+         * This is not the "no debug logging" that §Security rule 5 forbids in release builds. That
+         * rule is about logcat — a system-wide buffer any other app with the right permission can
+         * read. [SessionDiagnosticsLog] is process-private memory that is erased when the process
+         * dies and reaches a file only when the user taps share.
+         *
+         * ## Why the platform flag rather than a build constant
          *
          * `FLAG_DEBUGGABLE` rather than a `BuildConfig.DEBUG` constant, for two reasons. No module
          * in this project enables the `buildConfig` build feature, so there is no such constant to
@@ -115,13 +136,19 @@ public fun interface NetworkLogSink {
          * process may be debugged at all. AGP sets it on every debug build and clears it on every
          * release build, and it cannot be got wrong by a caller who forgets a parameter.
          *
-         * Note what this does **not** consult: a user setting. REQUIREMENTS.md §Observability asks
-         * for a user-viewable diagnostics log, and that is `:core:data`'s file-backed sink, gated
-         * by the user. This is the developer's cable-attached view, and it exists only where a
-         * developer could have attached a cable.
+         * Note what this still does **not** consult: a user setting. There is no diagnostics
+         * on/off switch, because a log the user has to enable before reproducing a bug is a log
+         * that is empty on the one run they wanted it for. What the user controls is whether it
+         * ever leaves the device, which is the guarantee the requirement actually asks for.
          */
-        public fun forApplication(context: Context, tag: String = NetworkLog.TAG): NetworkLogSink =
-            if (isDebuggableFlags(context.applicationInfo.flags)) logcat(tag) else None
+        public fun forApplication(context: Context, tag: String = NetworkLog.TAG): NetworkLogSink {
+            val session: NetworkLogSink = NetworkDiagnostics.sessionLog
+            return if (isDebuggableFlags(context.applicationInfo.flags)) {
+                session + logcat(tag)
+            } else {
+                session
+            }
+        }
 
         /** The predicate behind [forApplication], split out so it is testable without a Context. */
         internal fun isDebuggableFlags(applicationInfoFlags: Int): Boolean =
@@ -130,13 +157,49 @@ public fun interface NetworkLogSink {
 }
 
 /**
+ * Both sinks, in order, for one line.
+ *
+ * There is exactly one caller — [NetworkLogSink.forApplication], which has to put a line in the
+ * user's diagnostics buffer *and* in logcat on a debuggable build — and it exists rather than being
+ * inlined there because the alternative was making one of the two sinks wrap the other. A sink that
+ * secretly forwards to a second sink is the kind of thing that later gets installed twice.
+ *
+ * [NetworkLogSink.None] is folded out on both sides, so composing with nothing costs nothing and
+ * [NetworkDiagnostics.isEnabled] still answers correctly.
+ */
+public operator fun NetworkLogSink.plus(other: NetworkLogSink): NetworkLogSink = when {
+    this === NetworkLogSink.None -> other
+    other === NetworkLogSink.None -> this
+    else -> CompositeNetworkLogSink(this, other)
+}
+
+/** The pair [plus] produces. Not constructed directly; the operator folds [NetworkLogSink.None]. */
+private class CompositeNetworkLogSink(
+    private val first: NetworkLogSink,
+    private val second: NetworkLogSink,
+) : NetworkLogSink {
+
+    override fun log(line: String) {
+        first.log(line)
+        second.log(line)
+    }
+
+    override fun log(level: NetworkLogLevel, line: String) {
+        first.log(level, line)
+        second.log(level, line)
+    }
+
+    override fun toString(): String = first.toString() + " + " + second.toString()
+}
+
+/**
  * The process-wide sink that every [NeedlerHttpClient] built with the default argument writes
  * through.
  *
  * It starts at [NetworkLogSink.None], so a build that never calls [installForApplication] logs
- * nothing whatsoever. That is exactly what a release build must do, and it means the failure mode
- * of forgetting to wire this up is silence rather than a leak — the safe direction for a module
- * that handles credentials.
+ * nothing whatsoever — which is what every unit test in this project wants, and it means the
+ * failure mode of forgetting to wire this up is silence rather than a leak, the safe direction for
+ * a module that handles credentials.
  *
  * One line in `NeedlerApplication.onCreate` turns it on:
  *
@@ -144,8 +207,10 @@ public fun interface NetworkLogSink {
  * NetworkDiagnostics.installForApplication(this)
  * ```
  *
- * That call is safe to make unconditionally: it inspects the application's own `FLAG_DEBUGGABLE`
- * and installs [NetworkLogSink.None] on a release build.
+ * That call is safe to make unconditionally and it is what makes REQUIREMENTS.md §Observability
+ * true: it installs [sessionLog] in every build, and adds logcat on top of it only where the
+ * application's own `FLAG_DEBUGGABLE` says a developer could have attached a cable. See
+ * [NetworkLogSink.forApplication] for why the buffer is not gated on the debuggable flag as well.
  *
  * Deliberately not done: a `ContentProvider` declared in this module's manifest that installs the
  * sink with no wiring at all, the trick AndroidX Startup and Firebase use. It would work, and it
@@ -154,6 +219,24 @@ public fun interface NetworkLogSink {
  * launch, forever, so that a developer need not type one line once.
  */
 public object NetworkDiagnostics {
+
+    /**
+     * The one diagnostics buffer in the process — the log REQUIREMENTS.md §Observability requires,
+     * and the thing the Diagnostics screen reads and shares.
+     *
+     * A process-wide `object` rather than a Hilt `@Singleton`, because of when it has to start
+     * working. [installForApplication] is called from `NeedlerApplication.onCreate`, which runs
+     * before anything has asked the dependency graph for anything, and the first requests of a cold
+     * start — the capability probe and the delta sync — are the ones a bug report most often needs.
+     * A graph-scoped buffer would either be constructed too late to see them or would have to be
+     * eagerly created by the very `onCreate` that also has to install it, which is the same
+     * singleton with more ceremony and one more way to end up with two of them.
+     *
+     * It receives nothing until a sink is installed: [forApplication] is what puts it behind
+     * [sink]. So a unit test that never installs anything sees an empty buffer, and a
+     * `NeedlerHttpClient` built in a test writes to nothing.
+     */
+    public val sessionLog: SessionDiagnosticsLog = SessionDiagnosticsLog()
 
     @Volatile
     public var sink: NetworkLogSink = NetworkLogSink.None
@@ -173,12 +256,24 @@ public object NetworkDiagnostics {
         this.sink = sink
     }
 
-    /** Install logcat when the application is debuggable, and nothing when it is not. */
+    /**
+     * Install the right sink for this process: [sessionLog] always, plus logcat where the
+     * application is debuggable. Safe to call unconditionally, which is why it is the one line
+     * `NeedlerApplication.onCreate` needs.
+     */
     public fun installForApplication(context: Context, tag: String = NetworkLog.TAG) {
         install(NetworkLogSink.forApplication(context, tag))
     }
 
-    /** Back to silence. For tests, and for a user switching diagnostics off. */
+    /**
+     * Back to silence.
+     *
+     * For tests, which share one JVM and one process-wide install point, so any test that touches
+     * this has to put it back. There is no user-facing off switch behind this — see
+     * [NetworkLogSink.forApplication] — and note that it does not empty [sessionLog]; clearing the
+     * buffer is [SessionDiagnosticsLog.clear], and the two are separate because a test that wants
+     * silence usually also wants to assert on what was captured before it.
+     */
     public fun disable() {
         sink = NetworkLogSink.None
     }
@@ -262,6 +357,122 @@ public fun redactUrl(url: String): String {
     val parsed = url.toHttpUrlOrNull()
     if (parsed != null) return redactUrl(parsed)
     return url.substringBefore('?') + if (url.contains('?')) "?REDACTED" else ""
+}
+
+/**
+ * Header names whose value is a credential and which no rule about *shape* would catch.
+ *
+ * `Cookie` and `Set-Cookie` are the whole list: every other header worth worrying about —
+ * `Authorization`, `Proxy-Authorization`, `X-Auth-Token`, `CF-Access-Client-Secret` — contains one of
+ * [SECRET_SHAPED_NAME_FRAGMENTS] and is caught by shape. Matched exactly, case-insensitively.
+ */
+private val SECRET_HEADER_NAMES: Set<String> = setOf("cookie", "set-cookie")
+
+/**
+ * `scheme://anything@` — the userinfo of a URL, wherever it appears in a line.
+ *
+ * Requires the trailing `@`, so a port (`host:8443`) is untouched.
+ */
+private val USERINFO_IN_TEXT = Regex("([A-Za-z][A-Za-z0-9+.\\-]*://)[^/@\\s]+@")
+
+/**
+ * One `?key=value` or `&key=value` pair, anywhere in a line.
+ *
+ * The delimiter is part of the match so the single-letter Subsonic names (`p`, `t`, `s`) can be
+ * redacted without a rule that fires on the letter `t` in ordinary prose.
+ */
+private val QUERY_PAIR_IN_TEXT = Regex("([?&])([A-Za-z0-9_.\\[\\]\\-]{1,60})=([^&\\s\"'<>]*)")
+
+/**
+ * One `Header-Name: value` pair whose **name is already secret-shaped**, anywhere in a line, with the
+ * value running to the next separator.
+ *
+ * Built from [SECRET_SHAPED_NAME_FRAGMENTS] and [SECRET_HEADER_NAMES] rather than written out, so a
+ * fragment added for the query rule is picked up by the header rule for free and the two cannot
+ * disagree about what a secret looks like.
+ *
+ * The name is baked into the pattern rather than tested in the replacement lambda, and that is the
+ * whole point of the shape. A pattern that matched *any* `name: value` would, on the line
+ * `GET https://host/x -> 401 Cookie: session=abc`, match `https:` first, consume the rest of the
+ * line as its value, find the name innocent, put it back unchanged — and never look at the `Cookie`
+ * that came after it, because a regex replacement resumes after the match it has already made. So
+ * the innocent case must not match at all.
+ *
+ * The name class excludes `.` for the same reason: in `music.yourhome.net:8443` no candidate name
+ * reaches the colon, so a host and port survive intact.
+ */
+private val SECRET_HEADER_PAIR_IN_TEXT: Regex = Regex(
+    "\\b([A-Za-z0-9_\\-]*(?:" +
+        (SECRET_SHAPED_NAME_FRAGMENTS + SECRET_HEADER_NAMES).joinToString("|") { Regex.escape(it) } +
+        ")[A-Za-z0-9_\\-]*)\\s*:\\s*([^,;\\r\\n}\\]]*)",
+    RegexOption.IGNORE_CASE,
+)
+
+/** `Bearer <token>`, for a line that quoted the credential without naming the header. */
+private val BEARER_IN_TEXT = Regex("(?i)\\bBearer\\s+[A-Za-z0-9._~+/=\\-]{4,}")
+
+/**
+ * Any line of arbitrary text, with every credential this app can hold taken back out of it.
+ *
+ * ## Why this exists when [redactUrl] already does
+ *
+ * [redactUrl] is applied by the code that builds a URL, to a `HttpUrl` it holds. It is the right
+ * rule and it is not enough, because REQUIREMENTS.md §Observability puts three more kinds of line in
+ * the diagnostics log — "sync summaries and playback errors", plus whatever else proves useful — and
+ * those are written by modules that never see an `HttpUrl`. A sync summary assembled from the
+ * endpoint it was syncing, or a playback error built from an ExoPlayer `IOException` whose message
+ * is the request line that failed, is a plain `String` that arrived with the Subsonic app-password
+ * inside it. REQUIREMENTS.md §Security rule 1 does not have an exception for lines written by
+ * somebody else's module.
+ *
+ * So [SessionDiagnosticsLog.record] runs this over **every** line on ingest. The cost is a few regex
+ * passes per logged line, on the thread that just finished a socket read, and the benefit is that
+ * "did the author of this call site think about credentials?" stops being a question anyone has to
+ * answer correctly for the app to be safe.
+ *
+ * ## What it takes out, and in what order
+ *
+ *  1. **Userinfo.** `https://tim:hunter2@host/…` becomes `https://REDACTED@host/…`. First, because
+ *     the password there is the one credential that is not introduced by a name at all.
+ *  2. **Secret-shaped headers.** A `Name: value` pair whose name is [SECRET_HEADER_NAMES] or
+ *     [looksSecretShaped] loses the whole value — `Authorization: Bearer eyJ…` becomes
+ *     `Authorization: REDACTED`. This is the `/api/v1` lane's credential, and the rule is
+ *     deliberately greedy to the end of the value: a bearer is one opaque token and there is nothing
+ *     in it worth keeping.
+ *  3. **Secret-shaped query values.** Exactly the rule [redactUrl] applies, reused here through the
+ *     same [REDACTED_QUERY_KEYS] set and the same [looksSecretShaped] predicate rather than
+ *     re-stated, so the two cannot drift. This is the Subsonic lane's credential, `apiKey`, plus the
+ *     legacy `p`/`t`/`s` trio. **Every** occurrence goes: the replacement is global, so a URL
+ *     carrying the same app-password twice — a duplicated parameter, or a retry line that quotes the
+ *     URL a second time — comes out redacted twice. A rule that stopped at the first match would be
+ *     worse than no rule, because it would look like it had worked.
+ *  4. **A bare `Bearer` token**, for a line that quoted the credential without the header name.
+ *
+ * ## The alternative that was rejected
+ *
+ * Scrubbing by *value*: hand the buffer the live app-password and bearer from [CredentialProvider]
+ * and delete every literal occurrence of either from every line. It is strictly stronger — it would
+ * catch a credential hidden in a parameter named something innocuous — and it was rejected because
+ * it requires the diagnostics component, whose entire output is a file the user is encouraged to
+ * attach to a public bug report, to hold a copy of both live secrets for the life of the process.
+ * That trades a hypothetical leak for a real one if any part of the scrubbing is ever inverted or
+ * bypassed, and REQUIREMENTS.md §Security rule 1 is about where credentials are allowed to be, not
+ * only about what is printed. The name-based rule needs no credential at all, which is why it is the
+ * one that ships.
+ */
+public fun redactLogLine(line: String): String {
+    if (line.isEmpty()) return line
+    var result: String = USERINFO_IN_TEXT.replace(line) { match -> match.groupValues[1] + "REDACTED@" }
+    result = SECRET_HEADER_PAIR_IN_TEXT.replace(result) { match ->
+        match.groupValues[1] + ": REDACTED"
+    }
+    result = QUERY_PAIR_IN_TEXT.replace(result) { match ->
+        val delimiter: String = match.groupValues[1]
+        val name: String = match.groupValues[2]
+        val redact: Boolean = name.lowercase() in REDACTED_QUERY_KEYS || looksSecretShaped(name)
+        if (redact) delimiter + name + "=REDACTED" else match.value
+    }
+    return BEARER_IN_TEXT.replace(result, "Bearer REDACTED")
 }
 
 private const val MAX_PARSE_MESSAGE_CHARS = 240

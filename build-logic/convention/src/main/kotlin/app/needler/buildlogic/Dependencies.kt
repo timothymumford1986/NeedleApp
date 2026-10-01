@@ -63,10 +63,30 @@ internal fun Project.addSharedComposeDependencies() {
     }
 }
 
-/** androidx.test wiring for modules that carry instrumented tests. */
+/**
+ * androidx.test wiring for modules that carry instrumented tests - the ones that
+ * run on an emulator or a device rather than on the JVM.
+ *
+ * Instrumented tests are for what Robolectric cannot stand in for: the Android
+ * Keystore, real SQLite, a bound Service, the PackageInstaller. Anything a JVM
+ * unit test can reach belongs in `src/test`, which is free and runs in seconds.
+ * CI boots an emulator for these in the `instrumented` job of build.yml.
+ *
+ * `androidx.test:runner` is not named here even though both Android convention
+ * plugins set `testInstrumentationRunner` to a class from it. It arrives with
+ * espresso-core, and the version catalogue's rule is that every version in it
+ * was read from the publishing repository rather than remembered - so it gets a
+ * line of its own once someone reads one.
+ */
 internal fun Project.addSharedAndroidTestDependencies() {
     dependencies.apply {
         addProvider("androidTestImplementation", libs.library("androidx.test.ext.junit"))
         addProvider("androidTestImplementation", libs.library("androidx.test.espresso.core"))
+        // ApplicationProvider and ActivityScenario. Already in the catalogue for
+        // the screenshot renderer, which uses it on the JVM side.
+        addProvider("androidTestImplementation", libs.library("androidx.test.core"))
+        // Same reason it is on the unit-test classpath: everything in Needler is
+        // a Flow or a suspend fun, so a test that drives one needs runTest.
+        addProvider("androidTestImplementation", libs.library("kotlinx.coroutines.test"))
     }
 }

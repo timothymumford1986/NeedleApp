@@ -10,7 +10,24 @@ import kotlinx.datetime.Instant
  */
 public data class Pull(
     val releaseGroupMbid: ReleaseGroupMbid,
+    /**
+     * The album's name, **which may be blank**.
+     *
+     * Not nullable, because there is nothing a caller would do with `null` that it would not also do
+     * with `""`, and two spellings of "no title" invite a guard that only covers one of them. It is
+     * blank whenever the `album` mirror has no name for this release group: REQUIREMENTS.md "Identity
+     * model" makes the release-group MBID the join key and the mirror the one home for the title, so a
+     * pull for something never seen in the library or in catalogue search has nothing to join to.
+     *
+     * Every place this is drawn, spoken or concatenated into a label **must** guard on `isBlank`.
+     * That is not defensiveness: 34 of 35 rows on a real device were blank, which made the Pulls
+     * screen unusable and produced the accessibility label "Cancel the pull of " with nothing after
+     * it. REQUIREMENTS.md "Accessibility" requires every control to carry a content description, and a
+     * description ending in a preposition does not satisfy it. See `PullsFormat.albumTitle` and
+     * `NotificationComposer.text` for the two existing guards.
+     */
     val albumTitle: String,
+    /** The artist's name, blank under the same conditions as [albumTitle] and guarded the same way. */
     val artistName: String,
     /** The `/api/v1/downloads` task, absent while a request is only an approval waiting in a queue. */
     val taskId: PullTaskId? = null,
@@ -346,3 +363,335 @@ public data class PullActivitySummary(
     /** Albums that finished since the last poll: the source of the "pull finished" notification. */
     val landedReleaseGroupMbids: List<ReleaseGroupMbid> = emptyList(),
 )
+
+// ---------------------------------------------------------------------------
+// The other two request lanes
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a request named an album or a single track.
+ *
+ * Both lanes below carry `request_kind`, and both are keyed on the release group either way: a track
+ * request reports `track_release_group_mbid` beside the recording it was placed against, so the join
+ * key REQUIREMENTS.md "Identity model" mandates is available for both. The distinction survives into
+ * the domain only so a row can say "the track *Nightswimming*" rather than naming an album the user
+ * never asked for.
+ */
+public enum class RequestTarget {
+    ALBUM,
+    TRACK,
+    ;
+
+    public companion object {
+        /** Maps `request_kind`, which is `album` or `track`. Anything else is an album. */
+        public fun fromServerToken(token: String?): RequestTarget =
+            if (token?.trim()?.equals("track", ignoreCase = true) == true) TRACK else ALBUM
+    }
+}
+
+/**
+ * What became of a request, as `GET /api/v1/requests/history` reports it.
+ *
+ * REQUIREMENTS.md, "Placing a request": Needler "must render the status the server returned rather
+ * than inferring it from the cached role, because the role may have changed moments earlier". That
+ * is why [RequestHistoryEntry] keeps the server's raw token beside this enum. The enum is what the
+ * screen branches on; the token is what it prints when the server names a state this client has
+ * never heard of. Folding an unknown token onto the nearest member was rejected: it would show the
+ * user a state the server did not report, which is the exact failure that requirement names.
+ *
+ * [serverToken] doubles as the `status` filter on the same endpoint. That is deliberate rather than
+ * convenient — `GET /api/v1/requests/history` is the **only** request list that takes parameters at
+ * all, and putting the filter value on the state it filters for keeps the two from drifting.
+ * `requests/active` and `requests/wanted` take none and return the whole list.
+ */
+public enum class RequestOutcome(public val serverToken: String?) {
+
+    /** Accepted and waiting on the server's own scheduling. */
+    PENDING("pending"),
+
+    /** Accepted and parked for an administrator. A role-`user` request lands here. */
+    AWAITING_APPROVAL("awaiting_approval"),
+
+    /** Approved, and the acquisition is somewhere in the download lane. */
+    IN_PROGRESS("approved"),
+
+    /** The album or track arrived. */
+    COMPLETED("completed"),
+
+    /** An administrator declined it. */
+    REJECTED("rejected"),
+
+    FAILED("failed"),
+
+    CANCELLED("cancelled"),
+
+    /**
+     * A token this client does not model.
+     *
+     * Not an error and not a filter: [serverToken] is null precisely so that asking the server to
+     * filter by "whatever we could not read" is impossible to express.
+     */
+    OTHER(null),
+    ;
+
+    /**
+     * Whether `POST /api/v1/requests/retry/{mbid}` is worth offering on this entry.
+     *
+     * [REJECTED] is deliberately excluded. Retrying it re-asks an administrator who has already said
+     * no, which is not a decision a client should take on the user's behalf, and the endpoint
+     * answers `200` with `success=false` for it anyway — a refusal the user would read as a bug in
+     * Needler rather than as a policy on their server.
+     */
+    public val isRetryable: Boolean get() = this == FAILED || this == CANCELLED
+
+    /** True while the server still has work to do for this request. */
+    public val isSettled: Boolean
+        get() = when (this) {
+            COMPLETED, REJECTED, FAILED, CANCELLED -> true
+            PENDING, AWAITING_APPROVAL, IN_PROGRESS, OTHER -> false
+        }
+
+    public companion object {
+        /** Maps the server's `status`. Unknown and blank both become [OTHER]; see the class KDoc. */
+        public fun fromServerToken(token: String?): RequestOutcome {
+            return when (token?.trim()?.lowercase()) {
+                "pending", "requested", "new" -> PENDING
+                "awaiting_approval", "awaiting-approval", "pending_approval" -> AWAITING_APPROVAL
+                "approved", "queued", "searching", "downloading", "processing", "in_progress" ->
+                    IN_PROGRESS
+                "completed", "complete", "imported", "done" -> COMPLETED
+                "rejected", "denied", "declined" -> REJECTED
+                "failed", "error" -> FAILED
+                "cancelled", "canceled" -> CANCELLED
+                else -> OTHER
+            }
+        }
+    }
+}
+
+/**
+ * One entry of `GET /api/v1/requests/history`: something asked for, and what came of it.
+ *
+ * Separate from [Pull] rather than modelled as one, because the two answer different questions and
+ * are keyed differently in time. A [Pull] is a *task* the server is working on now — it has byte
+ * counters, a cancel and a retry, and it stops existing when the server clears it. This is the
+ * record that the asking happened, and it outlives the task: REQUIREMENTS.md "Local persistence"
+ * gives the `pull` table no history sibling, so a finished request survives only here, on the
+ * server. Collapsing them would have meant either giving [Pull] a dozen nullable columns that are
+ * meaningless for a live task, or dropping the fields that make history worth reading at all.
+ *
+ * ## Timestamps are ISO-8601 on this lane
+ *
+ * [requestedAt] and [completedAt] arrive as ISO-8601 strings, which is what the whole `/requests`
+ * half of `/api/v1` sends — and is **not** what its own `wanted` list sends, nor what `/downloads`
+ * sends. See [WantedWatch] for the other half of that trap.
+ */
+public data class RequestHistoryEntry(
+    val releaseGroupMbid: ReleaseGroupMbid,
+    /**
+     * The album's name, **which may be blank**, for exactly the reasons [Pull.albumTitle] may be:
+     * the server records what it was told and a request placed from a thin search result may have
+     * told it nothing. Every render site must go through `PullsFormat.albumTitle` or
+     * `PullsFormat.albumPhrase`; a blank drawn raw is what made the Pulls screen unusable once.
+     */
+    val albumTitle: String,
+    /** The artist's name, blank under the same conditions as [albumTitle] and guarded the same way. */
+    val artistName: String,
+    /** The status as modelled. Branch on this; print [statusToken] when it is [RequestOutcome.OTHER]. */
+    val status: RequestOutcome,
+    /** Exactly what the server's `status` field said, kept so an unmodelled state is still reportable. */
+    val statusToken: String,
+    val target: RequestTarget = RequestTarget.ALBUM,
+    /** Set on a track request, where the album title names the release the track came from. */
+    val trackTitle: String? = null,
+    val requestedAt: Instant? = null,
+    val completedAt: Instant? = null,
+    /** True when the album is now in the library, which is not the same as the request completing. */
+    val inLibrary: Boolean = false,
+    /** Who approved or declined it, when the server records a name. */
+    val reviewedByName: String? = null,
+    val reviewedAt: Instant? = null,
+    val year: Int? = null,
+) {
+    /** Whether to offer `POST /api/v1/requests/retry/{mbid}`; see [RequestOutcome.isRetryable]. */
+    public val canRetry: Boolean get() = status.isRetryable
+
+    /** When this entry last changed, for the relative day at the end of its line. */
+    public val happenedAt: Instant? get() = completedAt ?: reviewedAt ?: requestedAt
+}
+
+/**
+ * One page of `GET /api/v1/requests/history`.
+ *
+ * **This is the request lane's only paged endpoint, and the only one with real totals.** The
+ * contrast is worth stating where the type lives: `GET /api/v1/downloads` has no `total` and no
+ * `total_pages`, so REQUIREMENTS.md rules that "an infinitely scrolling list is fine; a 'page 3 of
+ * 7' control is not implementable" there. Here both are reported, so a count *is* implementable and
+ * [total] is the honest number to put beside the list. `requests/active` and `requests/wanted` have
+ * no paging at all and are not modelled as pages for that reason.
+ */
+public data class RequestHistoryPage(
+    val entries: List<RequestHistoryEntry>,
+    /** One-based, as the server counts. */
+    val page: Int,
+    val pageSize: Int,
+    /** Every entry the filter matches, not just this page. */
+    val total: Int,
+    val totalPages: Int,
+) {
+    /**
+     * Whether asking for [page] + 1 could return anything.
+     *
+     * Three answers in preference order, because only the first is the server's own. The totals are
+     * what this endpoint promises; the page-count arithmetic covers a server that sends `total` but
+     * not `total_pages`; and the last branch is the blind test `/downloads` is stuck with, kept here
+     * only so a server that reports neither still scrolls rather than stopping at one page.
+     */
+    public val hasMore: Boolean
+        get() = when {
+            totalPages > 0 -> page < totalPages
+            total > 0 && pageSize > 0 -> page.toLong() * pageSize.toLong() < total.toLong()
+            else -> pageSize > 0 && entries.size >= pageSize
+        }
+
+    public companion object {
+        /** The answer for a lane that has never been asked. */
+        public val Empty: RequestHistoryPage = RequestHistoryPage(
+            entries = emptyList(),
+            page = 1,
+            pageSize = 0,
+            total = 0,
+            totalPages = 0,
+        )
+    }
+}
+
+/** Why the server is still watching for something: it has none of it, or only part of it. */
+public enum class WantedGap {
+    /** Nothing of this release group has been found. */
+    MISSING,
+
+    /** Some of it landed and the rest is still being looked for. */
+    PARTIAL,
+
+    /** A `kind` this client does not model. */
+    OTHER,
+    ;
+
+    public companion object {
+        public fun fromServerToken(token: String?): WantedGap = when (token?.trim()?.lowercase()) {
+            "missing" -> MISSING
+            "partial" -> PARTIAL
+            else -> OTHER
+        }
+    }
+}
+
+/** How alive a standing watch is. The server's own four words, plus one for anything else. */
+public enum class WantedWatchState {
+    /** Being checked on a schedule. */
+    WATCHING,
+
+    /** Still recorded, checked rarely: the server has stopped expecting this one soon. */
+    DORMANT,
+
+    /** No longer checked. */
+    STOPPED,
+
+    /** It arrived. The watch is kept as a record. */
+    FULFILLED,
+
+    OTHER,
+    ;
+
+    /** True while the server will look again without being asked. */
+    public val isLive: Boolean get() = this == WATCHING || this == DORMANT
+
+    public companion object {
+        public fun fromServerToken(token: String?): WantedWatchState =
+            when (token?.trim()?.lowercase()) {
+                "watching", "active" -> WATCHING
+                "dormant" -> DORMANT
+                "stopped", "paused" -> STOPPED
+                "fulfilled", "found" -> FULFILLED
+                else -> OTHER
+            }
+    }
+}
+
+/**
+ * A standing watch: music the server could not find, and keeps looking for.
+ *
+ * ## The timestamps here are epoch seconds, not ISO-8601
+ *
+ * This is the trap in this lane and it is worth stating twice. `GET /api/v1/requests/wanted` sits in
+ * the same `/api/v1/requests` namespace as the history list, and disagrees with it: every `*_at`
+ * here is **epoch seconds as a float**, the `/downloads` convention, while `requests/history` and
+ * `requests/active` send ISO-8601 strings. REQUIREMENTS.md only warns that the `/requests` and
+ * `/downloads` lanes differ; the split runs one level deeper than that, inside `/requests` itself.
+ * `WireTime` in `:core:data` has a reader for each, and neither can be assumed from the path.
+ */
+public data class WantedWatch(
+    val releaseGroupMbid: ReleaseGroupMbid,
+    /** May be blank; guard every render site, as [Pull.albumTitle] documents. */
+    val albumTitle: String,
+    /** May be blank; guarded the same way. */
+    val artistName: String,
+    val gap: WantedGap,
+    val state: WantedWatchState,
+    /** The server's raw `state`, printed when [state] is [WantedWatchState.OTHER]. */
+    val stateToken: String,
+    /** How many times the server has looked so far. */
+    val checkCount: Int = 0,
+    /** Sources that have appeared since the last check and not yet been tried. */
+    val newCandidateCount: Int = 0,
+    val lastCheckedAt: Instant? = null,
+    /** When the server will look again. In the future, so it formats as a countdown, not an age. */
+    val nextCheckAt: Instant? = null,
+    /** What the last look turned up, in the server's own words. */
+    val lastOutcome: String? = null,
+    val createdAt: Instant? = null,
+    val year: Int? = null,
+)
+
+/**
+ * An album the server is actively re-attempting, with an attempt budget.
+ *
+ * Carried separately from [WantedWatch] because the server counts it separately: `count` on the
+ * response counts the watches only. A retrying item is not a dormant wish, it is a download the
+ * server is about to try again, so it reads as a countdown and an attempt number rather than as a
+ * watch state.
+ */
+public data class WantedRetry(
+    val releaseGroupMbid: ReleaseGroupMbid,
+    /** May be blank; guard every render site. */
+    val albumTitle: String,
+    /** May be blank; guarded the same way. */
+    val artistName: String,
+    val retryCount: Int = 0,
+    val maxAttempts: Int = 0,
+    /** Epoch seconds on the wire, like everything else on this lane. */
+    val nextRetryAt: Instant? = null,
+    val year: Int? = null,
+)
+
+/**
+ * The whole of `GET /api/v1/requests/wanted`.
+ *
+ * Not a page, and deliberately not shaped like one: this endpoint has **no paging at all** and
+ * returns the entire list, exactly as `requests/active` does. Modelling it as a page would invite a
+ * caller to ask for a second one, which the server has no way of answering.
+ */
+public data class WantedList(
+    val watches: List<WantedWatch> = emptyList(),
+    val retrying: List<WantedRetry> = emptyList(),
+) {
+    public val isEmpty: Boolean get() = watches.isEmpty() && retrying.isEmpty()
+
+    /** Everything on the list. The response's own `count` covers [watches] only. */
+    public val size: Int get() = watches.size + retrying.size
+
+    public companion object {
+        public val Empty: WantedList = WantedList()
+    }
+}

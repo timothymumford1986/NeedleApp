@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The pull glyph, traced from the SVG on screens 15 and 18:
+
+      <path d="M12 4v11M7 10l5 5 5-5"/>   stroke-width 1.8, round caps
+      <path d="M4 19h16"/>
+
+  The same shape :app draws on the Pulls nav item, which is deliberate: one
+  glyph for one idea, so the home screen and the bottom bar agree about what
+  "pulls" looks like.
+
+  Stroked in NeedlerColors.positive, as the pack draws it. The colour is baked
+  in rather than applied with Glance's tint, for the reason
+  widget_ic_previous.xml sets out — every tint is another RemoteViews action the
+  launcher replays on each rebind — which is also why the resting state is its
+  own drawable (widget_ic_pull_idle.xml) rather than this one recoloured.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <path
+        android:pathData="M12,4 v11 M7,10 l5,5 l5,-5"
+        android:strokeColor="@color/needler_widget_positive"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <path
+        android:pathData="M4,19 h16"
+        android:strokeColor="@color/needler_widget_positive"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round" />
+
+</vector>

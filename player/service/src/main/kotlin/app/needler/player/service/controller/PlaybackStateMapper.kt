@@ -6,6 +6,7 @@ import app.needler.core.domain.model.PlayQueue
 import app.needler.core.domain.model.PlaybackSpeed
 import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.QueueItemSource
+import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.core.domain.playback.PlaybackState
@@ -30,6 +31,14 @@ public data class SessionSnapshot(
     public val shuffleEnabled: Boolean = false,
     public val repeatMode: RepeatMode = RepeatMode.OFF,
     public val speed: PlaybackSpeed = PlaybackSpeed.Normal,
+    /**
+     * The armed sleep timer.
+     *
+     * Not a session value at all - the Media3 session has no sleep timer to read - so it is carried
+     * here from `PlaybackSettingsRepository`, alongside [output], which arrives the same way and for the
+     * same reason: both are things the player shows that the session does not know.
+     */
+    public val sleepTimer: SleepTimer = SleepTimer.Off,
     public val output: OutputTarget? = null,
     public val error: NeedlerError? = null,
 )
@@ -81,6 +90,7 @@ public object PlaybackStateMapper {
         shuffleEnabled = snapshot.shuffleEnabled,
         repeatMode = snapshot.repeatMode,
         speed = snapshot.speed,
+        sleepTimer = snapshot.sleepTimer,
         output = snapshot.output,
         error = snapshot.error,
     )

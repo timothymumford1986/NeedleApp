@@ -9,7 +9,9 @@ import app.needler.feature.pulls.SamplePulls
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -157,6 +159,93 @@ class PullsFormatTest {
         assertEquals(
             "Back Street Crawler, Paul Kossoff, failed, no source found, 3d ago",
             PullsFormat.spokenRow(SamplePulls.failed, now),
+        )
+    }
+
+    // ---- a pull the mirror cannot name --------------------------------------
+    //
+    // The case that made this screen unusable on a real device: 34 of 35 rows
+    // had an empty `albumTitle`, so the queue drew 34 blank title lines and 34
+    // Cancel buttons whose content description was "Cancel the pull of " with
+    // nothing after it. Every fixture supplied a title, so nothing here failed.
+
+    @Test
+    fun `an empty title becomes a name rather than a hole`() {
+        assertEquals("Untitled album", PullsFormat.albumTitle(SamplePulls.untitled))
+        assertEquals("Fever", PullsFormat.albumTitle(SamplePulls.searching))
+    }
+
+    @Test
+    fun `a title of nothing but spaces is treated as no title`() {
+        // `isEmpty` would let this through and draw an invisible title. The guard
+        // is on `isBlank` for exactly this row.
+        assertEquals("Untitled album", PullsFormat.albumTitle(SamplePulls.titleAllSpaces))
+    }
+
+    @Test
+    fun `an action label never trails off after its preposition`() {
+        // "Cancel the pull of " + title was the bug, verbatim.
+        assertEquals("this album", PullsFormat.albumPhrase(SamplePulls.untitled))
+        assertEquals("this album", PullsFormat.albumPhrase(SamplePulls.titleAllSpaces))
+        assertEquals("Fever", PullsFormat.albumPhrase(SamplePulls.searching))
+
+        val label: String = "Cancel the pull of " + PullsFormat.albumPhrase(SamplePulls.untitled)
+        assertEquals("Cancel the pull of this album", label)
+    }
+
+    @Test
+    fun `every label the screen builds names something, for every fixture`() {
+        // The sweep the screen never had. A label that ends in "of", "of " or the
+        // word "Play" alone names no target, which REQUIREMENTS.md
+        // "Accessibility" does not accept from a control's content description.
+        val everyPull = SamplePulls.everyState + SamplePulls.withMissingTitles
+        for (pull in everyPull) {
+            val phrase: String = PullsFormat.albumPhrase(pull)
+            val drawn: String = PullsFormat.albumTitle(pull)
+            assertTrue("blank phrase for " + pull.releaseGroupMbid.value, phrase.isNotBlank())
+            assertTrue("blank title for " + pull.releaseGroupMbid.value, drawn.isNotBlank())
+            for (label in listOf(
+                "Cancel the pull of " + phrase,
+                "Retry the pull of " + phrase,
+                "Play " + phrase,
+            )) {
+                assertEquals("untrimmed label: '" + label + "'", label.trim(), label)
+                assertFalse("dangling label: '" + label + "'", label.endsWith("of"))
+            }
+        }
+    }
+
+    @Test
+    fun `the spoken row still starts with a name when there is no title`() {
+        assertEquals(
+            "Untitled album, Kelly Lee Owens, pulling, 35 percent, 4 of 11 files",
+            PullsFormat.spokenRow(SamplePulls.untitled, now),
+        )
+        // A blank first element used to leave the phrase starting ", Kelly...".
+        assertFalse(PullsFormat.spokenRow(SamplePulls.untitled, now).startsWith(","))
+    }
+
+    @Test
+    fun `a pull with neither a title nor an artist still reads as a sentence`() {
+        assertEquals("no source found · 2d ago", PullsFormat.subtitle(SamplePulls.anonymous, now))
+        assertEquals(
+            "Untitled album, failed, no source found, 2d ago",
+            PullsFormat.spokenRow(SamplePulls.anonymous, now),
+        )
+    }
+
+    @Test
+    fun `a missing title does not change the subtitle, which is the other half of the row`() {
+        // The split `stateDetail` makes — the badge says the state, the subtitle
+        // explains it — was never the problem, and this pins that: the subtitle
+        // of an unnamed pull is exactly the subtitle of a named one.
+        assertEquals(
+            "Kelly Lee Owens · 4 of 11 files",
+            PullsFormat.subtitle(SamplePulls.untitled, now),
+        )
+        assertEquals(
+            "Actress · FLAC · today",
+            PullsFormat.subtitle(SamplePulls.titleAllSpaces, now),
         )
     }
 }

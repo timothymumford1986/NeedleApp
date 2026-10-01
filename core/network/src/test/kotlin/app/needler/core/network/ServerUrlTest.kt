@@ -223,4 +223,63 @@ class ServerUrlTest {
         assertEquals("http://nas.local:8688", ServerUrl.parseOrNull("nas.local")?.baseUrl)
         assertNull(ServerUrl.parseOrNull("ftp://nas.local"))
     }
+
+    // ----------------------------------------------------------- the ladder
+
+    private fun ladder(raw: String): List<String> = valid(raw).ladder().map { it.baseUrl }
+
+    @Test
+    fun `a bare domain name tries https before anything cleartext`() {
+        assertEquals(
+            listOf(
+                "https://mymusic.mydomain.com",
+                "http://mymusic.mydomain.com:8688",
+                "http://mymusic.mydomain.com",
+            ),
+            ladder("mymusic.mydomain.com"),
+        )
+    }
+
+    @Test
+    fun `a typed scheme is obeyed exactly and never falls back`() {
+        assertEquals(listOf("https://music.yourhome.net"), ladder("https://music.yourhome.net"))
+        assertEquals(listOf("http://192.168.1.50:8688"), ladder("http://192.168.1.50:8688"))
+    }
+
+    @Test
+    fun `a lan address keeps DroppedNeedle's port first and tries tls last`() {
+        assertEquals(
+            listOf("http://192.168.1.50:8688", "http://192.168.1.50", "https://192.168.1.50"),
+            ladder("192.168.1.50"),
+        )
+    }
+
+    @Test
+    fun `a single label host is treated as a box on this network`() {
+        assertEquals(listOf("http://nas:8688", "http://nas", "https://nas"), ladder("nas"))
+    }
+
+    @Test
+    fun `an ipv6 literal is treated as a box on this network`() {
+        assertEquals(
+            listOf("http://[fd00::1]:8688", "http://[fd00::1]", "https://[fd00::1]"),
+            ladder("[fd00::1]"),
+        )
+    }
+
+    @Test
+    fun `a typed port is carried onto every rung`() {
+        assertEquals(
+            listOf("https://mymusic.mydomain.com:9000", "http://mymusic.mydomain.com:9000"),
+            ladder("mymusic.mydomain.com:9000"),
+        )
+    }
+
+    @Test
+    fun `a sub-path is carried onto every rung`() {
+        assertEquals(
+            listOf("https://home.net/music", "http://home.net:8688/music", "http://home.net/music"),
+            ladder("home.net/music"),
+        )
+    }
 }

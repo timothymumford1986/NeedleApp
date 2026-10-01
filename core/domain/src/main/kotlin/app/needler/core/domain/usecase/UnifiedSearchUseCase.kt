@@ -3,12 +3,14 @@ package app.needler.core.domain.usecase
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.CatalogueLaneState
+import app.needler.core.domain.model.CatalogueSearchPage
 import app.needler.core.domain.model.CatalogueSearchResults
 import app.needler.core.domain.model.LocalSearchResults
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.ArtistMbid
+import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.model.UnifiedSearchResults
 import app.needler.core.domain.repository.SearchRepository
@@ -34,9 +36,25 @@ import kotlinx.coroutines.sync.withLock
  * 2. After [DefaultCatalogueDebounce], the catalogue lane is queried through the server.
  * 3. Results are merged on release-group MBID. **An album present locally takes the local record** -
  *    it knows the real [app.needler.core.domain.model.AlbumState], track count, size and format - and
- *    the catalogue copy is discarded, so nothing appears twice.
+ *    the catalogue copy is discarded, so nothing appears twice. Artists get the same treatment with
+ *    the artist MBID as the join key, plus the name-collapse [mergeArtists] explains.
  * 4. Offline, or with an expired session, only library results are shown and
  *    [UnifiedSearchResults.catalogue] says why the other lane is missing.
+ *
+ * What the mirror returned always sorts above what only the catalogue knows, in both lists. The
+ * library is the music the user owns and can play right now; the catalogue is a shopping list, and a
+ * result order that buries the first under the second has the product backwards.
+ *
+ * ## Why the catalogue lane is one call and not two
+ *
+ * REQUIREMENTS.md requires that "results must stream in progressively rather than blocking on the
+ * slowest bucket", and rule 2 names a single endpoint that answers with both buckets at once. Both
+ * hold here because the streaming that matters is between the *lanes*: the mirror's answer is on
+ * screen while the catalogue call is still open, and it is never withheld waiting for it. Splitting
+ * the catalogue call into a per-bucket artists call and a per-bucket albums call would stream the two
+ * buckets independently but abandon rule 2's endpoint and double the upstream MusicBrainz traffic for
+ * every keystroke that survives the debounce, so rule 2 wins. The per-bucket endpoint is used for
+ * what rule 5 asks of it, paging - see [expand].
  *
  * This and `LibraryRepository.observeArtistDiscography` are the only two places in the codebase that
  * know both lanes exist.
@@ -174,51 +192,214 @@ public class UnifiedSearchUseCase(
             local: LocalSearchResults,
             catalogue: CatalogueSearchResults?,
             lane: CatalogueLaneState,
-        ): UnifiedSearchResults {
-            if (catalogue == null) {
-                return UnifiedSearchResults(
-                    query = query,
-                    artists = local.artists,
-                    albums = local.albums,
-                    tracks = local.tracks,
-                    catalogue = lane,
-                )
+        ): UnifiedSearchResults = UnifiedSearchResults(
+            query = query,
+            artists = mergeArtists(query, local.artists, catalogue?.artists.orEmpty()),
+            albums = mergeAlbums(local.albums, catalogue?.albums.orEmpty()),
+            // Catalogue search returns artists and albums only; tracks are library-only.
+            tracks = local.tracks,
+            catalogue = lane,
+        )
+
+        /**
+         * Artists from both lanes in the order the screen shows them: what you own, then what you
+         * could pull.
+         *
+         * Three rules, each of which shipped broken and is the reason this is its own function.
+         *
+         * 1. **The mirror's artists lead, whatever MusicBrainz thinks of them.** REQUIREMENTS.md
+         *    "Browse and search" orders artist detail "Owned albums first, then un-owned", and the same
+         *    logic decides this list: the library is the music the user has and can play now, the
+         *    catalogue is a shopping list. A search for "wonder" that puts three catalogue strangers
+         *    above the artist whose records are on the device has ordered the two lanes backwards.
+         * 2. **The artist MBID is the join key**, exactly as the release-group MBID is for albums
+         *    (rule 3). A catalogue hit for an artist the mirror already holds is dropped, because the
+         *    local row is the one that knows the owned album count and has artwork behind it.
+         * 3. **Byte-identical names collapse.** MusicBrainz holds several distinct artists called
+         *    "Wonder", and a search for "wonder" returned four rows, two of them the same string
+         *    twice, all subtitled "Not in your library yet". The MBID join cannot collapse those -
+         *    they are genuinely different MBIDs - so the catalogue half is additionally deduplicated
+         *    on the case-folded name. The alternative, telling them apart by MusicBrainz's
+         *    disambiguation comment, was rejected because [Artist] carries no such field and adding
+         *    one is a server-shape change well outside search; until it exists, two rows reading
+         *    exactly the same are indistinguishable to the user, and showing four of them is strictly
+         *    worse than showing one.
+         *
+         * Within each half the order is [artistRelevance] descending, and the sort is stable, so
+         * anything the two scores cannot separate keeps the order it arrived in - alphabetical for the
+         * mirror, MusicBrainz's own relevance for the catalogue.
+         */
+        public fun mergeArtists(
+            query: String,
+            local: List<Artist>,
+            catalogue: List<Artist>,
+        ): List<Artist> {
+            val owned: LinkedHashMap<ArtistMbid, Artist> = LinkedHashMap(local.size)
+            for (artist in local) {
+                // Only the MBID deduplicates the mirror's own half. Two owned artists that share a
+                // name are two artists the user has music by, and dropping either would hide music
+                // that is on the device.
+                if (!owned.containsKey(artist.mbid)) owned[artist.mbid] = artist
+            }
+            val ranked: List<Artist> = owned.values.sortedByDescending { artist ->
+                artistRelevance(query, artist.name)
             }
 
-            val ownedMbids: Set<ReleaseGroupMbid> =
-                local.albums.mapTo(LinkedHashSet<ReleaseGroupMbid>()) { album ->
-                    album.releaseGroupMbid
-                }
-            val mergedAlbums: MutableList<Album> =
-                ArrayList<Album>(local.albums.size + catalogue.albums.size)
-            mergedAlbums.addAll(local.albums)
-            for (candidate in catalogue.albums) {
-                if (!ownedMbids.contains(candidate.releaseGroupMbid)) {
-                    mergedAlbums.add(candidate)
-                }
+            val seenNames: MutableSet<String> = ranked.mapTo(HashSet(ranked.size)) { artist ->
+                nameKey(artist.name)
+            }
+            val fromCatalogue: MutableList<Artist> = ArrayList(catalogue.size)
+            for (candidate in catalogue) {
+                if (owned.containsKey(candidate.mbid)) continue
+                if (!seenNames.add(nameKey(candidate.name))) continue
+                fromCatalogue.add(candidate)
             }
 
-            val knownArtists: Set<ArtistMbid> =
-                local.artists.mapTo(LinkedHashSet<ArtistMbid>()) { artist ->
-                    artist.mbid
-                }
-            val mergedArtists: MutableList<Artist> =
-                ArrayList<Artist>(local.artists.size + catalogue.artists.size)
-            mergedArtists.addAll(local.artists)
-            for (candidate in catalogue.artists) {
-                if (!knownArtists.contains(candidate.mbid)) {
-                    mergedArtists.add(candidate)
-                }
+            return ranked + fromCatalogue.sortedByDescending { artist ->
+                artistRelevance(query, artist.name)
             }
-
-            return UnifiedSearchResults(
-                query = query,
-                artists = mergedArtists,
-                albums = mergedAlbums,
-                // Catalogue search returns artists and albums only; tracks are library-only.
-                tracks = local.tracks,
-                catalogue = lane,
-            )
         }
+
+        /**
+         * Albums from both lanes, merged on release-group MBID per REQUIREMENTS.md rule 3, owned
+         * first.
+         *
+         * Deliberately **not** deduplicated on title the way [mergeArtists] deduplicates on name. Two
+         * release groups with the same title are the normal case in MusicBrainz - a live record, a
+         * reissue, a soundtrack that shares its film's name - and collapsing them would hide albums
+         * that really are different records. An artist's name carries no such distinction.
+         */
+        public fun mergeAlbums(local: List<Album>, catalogue: List<Album>): List<Album> {
+            val seen: MutableSet<ReleaseGroupMbid> = HashSet(local.size + catalogue.size)
+            val merged: MutableList<Album> = ArrayList(local.size + catalogue.size)
+            for (album in local) {
+                if (seen.add(album.releaseGroupMbid)) merged.add(album)
+            }
+            for (album in catalogue) {
+                // Also catches a release group the catalogue half returned twice, which one upstream
+                // response genuinely can.
+                if (seen.add(album.releaseGroupMbid)) merged.add(album)
+            }
+            return merged
+        }
+
+        /**
+         * Folds one more page of a single catalogue bucket into an already merged result.
+         *
+         * REQUIREMENTS.md rule 5: "Paginate a single bucket through
+         * `GET /api/v1/search/{artists|albums}` with `limit` and `offset`." A page arrives after the
+         * user has already read the list, so this **appends and never reorders**: re-ranking the rows
+         * already on screen would shuffle them under the reader's finger, and everything a later page
+         * can contain is catalogue content, which sorts below everything already there anyway.
+         *
+         * A page that reports upstream degradation upgrades [CatalogueLaneState.Ready] so the quiet
+         * inline note appears; a page that reports nothing leaves a previously reported degradation
+         * alone, because one healthy page is not evidence that MusicBrainz has recovered.
+         */
+        public fun expand(base: UnifiedSearchResults, page: CatalogueSearchPage): UnifiedSearchResults {
+            val lane: CatalogueLaneState = when {
+                page.serviceStatus?.isDegraded != true -> base.catalogue
+                base.catalogue is CatalogueLaneState.Ready ->
+                    CatalogueLaneState.Ready(page.serviceStatus)
+                else -> base.catalogue
+            }
+            return when (page.bucket) {
+                SearchBucket.ARTISTS -> {
+                    val known: Set<ArtistMbid> = base.artists.mapTo(HashSet()) { it.mbid }
+                    val names: MutableSet<String> = base.artists.mapTo(HashSet()) { nameKey(it.name) }
+                    val added: List<Artist> = page.artists
+                        .filter { candidate ->
+                            !known.contains(candidate.mbid) && names.add(nameKey(candidate.name))
+                        }
+                        .sortedByDescending { artist -> artistRelevance(base.query, artist.name) }
+                    base.copy(artists = base.artists + added, catalogue = lane)
+                }
+                SearchBucket.ALBUMS -> {
+                    val known: MutableSet<ReleaseGroupMbid> =
+                        base.albums.mapTo(HashSet()) { it.releaseGroupMbid }
+                    val added: List<Album> = page.albums.filter { candidate ->
+                        known.add(candidate.releaseGroupMbid)
+                    }
+                    base.copy(albums = base.albums + added, catalogue = lane)
+                }
+            }
+        }
+
+        /**
+         * How well an artist's name answers what the user typed. Higher is better, [NoRelevance] is
+         * "the server thought so and this app cannot see why".
+         *
+         * The catalogue lane ranks by MusicBrainz's own scoring, which weighs aliases, recording
+         * credits and popularity, and that is how a search for "wonder" put "Jr. Wonder" at the top of
+         * the list. What a person typing into a search field means is much narrower, so the name they
+         * typed is scored against the name on the row and nothing else:
+         *
+         * | Score | Match |
+         * | --- | --- |
+         * | [ExactName] | the whole name, case-folded |
+         * | [NamePrefix] | the name starts with what was typed |
+         * | [WordPrefix] | every word typed begins a word of the name, in any position |
+         * | [Substring] | what was typed appears somewhere inside the name |
+         * | [NoRelevance] | none of the above; the upstream match is on something not shown |
+         *
+         * [WordPrefix] is the row that matters: it is what makes "wonder" find "Oh Wonder", which a
+         * prefix test on the sort name cannot do and which was the whole of the missing-artist bug.
+         */
+        public fun artistRelevance(query: String, name: String): Int {
+            val typed: String = nameKey(query)
+            val actual: String = nameKey(name)
+            if (typed.isEmpty() || actual.isEmpty()) return NoRelevance
+            return when {
+                actual == typed -> ExactName
+                actual.startsWith(typed) -> NamePrefix
+                wordsMatch(actual, typed) -> WordPrefix
+                actual.contains(typed) -> Substring
+                else -> NoRelevance
+            }
+        }
+
+        /** The name matched what was typed well enough to be shown as an artist in its own right. */
+        public fun artistMatches(query: String, name: String): Boolean =
+            artistRelevance(query, name) > NoRelevance
+
+        /** The whole name, case-folded: "Oh Wonder" for "oh  wonder". */
+        public const val ExactName: Int = 100
+
+        /** The name begins with what was typed: "Wonderland" for "wonder". */
+        public const val NamePrefix: Int = 80
+
+        /** Every word typed begins a word of the name: "Oh Wonder" for "wonder". */
+        public const val WordPrefix: Int = 60
+
+        /** What was typed is in there somewhere: "Stevie Wonderful" for "onder". */
+        public const val Substring: Int = 40
+
+        /** Nothing this app can see matched. Kept, and shown last, because upstream matched something. */
+        public const val NoRelevance: Int = 0
+
+        /**
+         * True when every word of [typed] begins a word of [actual].
+         *
+         * Word-start rather than whole-word, so the score still rises while the user is halfway
+         * through typing - the same reason the FTS expression behind the local lane makes its last
+         * term a prefix.
+         */
+        private fun wordsMatch(actual: String, typed: String): Boolean {
+            val words: List<String> = actual.split(' ')
+            return typed.split(' ').all { part ->
+                part.isNotEmpty() && words.any { word -> word.startsWith(part) }
+            }
+        }
+
+        /**
+         * The key two names are compared on: case-folded, with runs of whitespace collapsed.
+         *
+         * Punctuation is deliberately kept. "!!!" is a real artist and stripping its name leaves
+         * nothing at all to compare, which is the same reason the mirror's sort keys keep theirs.
+         */
+        private fun nameKey(value: String): String =
+            value.trim().replace(WHITESPACE, " ").lowercase()
+
+        private val WHITESPACE: Regex = Regex("\\s+")
     }
 }

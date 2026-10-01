@@ -137,6 +137,55 @@
             android:name=".update.UpdateInstallReceiver"
             android:exported="false" />
 
+        <!--
+          Android Auto. REQUIREMENTS.md "Android Auto" keeps the browse tree in
+          v1 because retrofitting it means restructuring playback; this meta-data
+          is what makes Auto look for the MediaLibraryService :player:service
+          already publishes. See res/xml/automotive_app_desc.xml.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
+        <!--
+          The phone half of the Wear link. REQUIREMENTS.md "Surfaces beyond the
+          app > Wear OS" makes the watch a client of a bridge rather than of the
+          session directly, because a MediaController cannot reach a MediaSession
+          in another process on another device.
+
+          exported="true" is mandatory and is not a hole: Google Play services
+          is the only caller, the intent-filter is scoped to the wear:// scheme
+          and to Needler's own data-layer paths, and the service verifies the
+          sending node before acting.
+        -->
+        <service
+            android:name=".wear.NeedlerWearListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <action android:name="com.google.android.gms.wearable.CAPABILITY_CHANGED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/needler" />
+            </intent-filter>
+        </service>
+
+        <!--
+          Sharing the diagnostics log as a file, and nothing else. See
+          res/xml/diagnostics_paths.xml for why the path is narrowed to one
+          directory rather than rooted at the cache.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.diagnostics"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/diagnostics_paths" />
+        </provider>
+
     </application>
 
 </manifest>

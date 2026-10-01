@@ -216,7 +216,7 @@ public class NeedlerAudioDataSource(
                 val length: Long = source.open(request)
                 delegate = source
                 openedUri = source.uri
-                sink = openWriteThrough(plan, format, request)
+                sink = openWriteThrough(plan, format, request, declaredWholeFileLength(length, request))
                 return length
             } catch (failure: Throwable) {
                 closeQuietly(source)
@@ -265,16 +265,45 @@ public class NeedlerAudioDataSource(
     }
 
     /**
+     * The length the response declared for the **whole file**, or null when it declared none this read can
+     * honestly describe.
+     *
+     * `DataSource.open` answers how many bytes are readable from the position it was opened at, so its answer
+     * is only the whole file's length when the read covers the whole file. Two conditions make that true and
+     * both are checked rather than assumed: the read starts at byte zero, and it asked for no range of its own
+     * - a length in the [DataSpec] means the answer describes that slice. Media3's progressive loader sets
+     * neither, so the ordinary case passes; the `416` recovery in [openHttpStream] is the one place that
+     * touches the spec's length, which is exactly the case this must not mistake for a whole file.
+     *
+     * `C.LENGTH_UNSET` is -1, so the non-positive test covers "the server sent no `Content-Length`" as well as
+     * a nonsense reading. Null is not a failure: [AudioCacheWriter.openWrite] then falls back to the size the
+     * mirror recorded, which is what this path had before the response arrived.
+     */
+    private fun declaredWholeFileLength(openedLength: Long, request: DataSpec): Long? {
+        if (openedLength <= 0L) return null
+        if (request.position != 0L) return null
+        if (request.length != C.LENGTH_UNSET.toLong()) return null
+        return openedLength
+    }
+
+    /**
      * Opens a write-through handle, or returns null when these bytes must not be retained.
      *
      * Null is an ordinary answer and is respected silently. Four ways to get it, and the caller needs none of
      * them: the format is a transcode, the read does not start at byte zero, the store says there is no room,
      * or the track is already on the device.
+     *
+     * [declaredLengthBytes] is the response's own view of how long the file is, and it is handed to the store
+     * because the store's alternative is the metadata mirror - a number from the last sync, which a
+     * server-side quality upgrade makes wrong. The store checks the finished write against it, so a stale
+     * number there is a complete body recorded as truncated and thrown away, on every play of that track. See
+     * [AudioCacheWriter.openWrite].
      */
     private fun openWriteThrough(
         plan: SourcePlan.HttpStream,
         format: StreamFormat,
         request: DataSpec,
+        declaredLengthBytes: Long?,
     ): WriteThroughSink? {
         // The format may have changed under us: a 429 on a transcode falls back to the original stream, and
         // original bytes are exactly the bytes the store is allowed to keep. So retention follows the format
@@ -294,7 +323,7 @@ public class NeedlerAudioDataSource(
             cacheWhileStreaming = true,
         )
         val handle: AudioCacheWriteHandle = try {
-            runBlocking { cacheWriter.openWrite(source) } ?: return null
+            runBlocking { cacheWriter.openWrite(source, declaredLengthBytes) } ?: return null
         } catch (error: Throwable) {
             if (error is InterruptedException) Thread.currentThread().interrupt()
             // A store that will not open a write is not a reason to stop the music.

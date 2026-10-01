@@ -1,6 +1,7 @@
 package app.needler.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,9 +16,14 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -35,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerHairline
 import app.needler.core.design.component.NeedlerIconButton
+import app.needler.core.design.component.NeedlerPillButton
 import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerSectionHeader
 import app.needler.core.design.component.NeedlerSettingsRow
@@ -44,6 +51,8 @@ import app.needler.core.design.component.NeedlerToggleRow
 import app.needler.core.design.component.PathClose
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.DownloadedAlbum
+import app.needler.core.domain.model.StreamRung
+import app.needler.licences.NeedlerLegal
 
 /**
  * Every callback the Settings screen needs, in one value.
@@ -54,9 +63,10 @@ import app.needler.core.domain.model.DownloadedAlbum
  *
  * **Nothing here has a default.** A `() -> Unit` default of `{}` is precisely the inert tap target
  * `NeedlerNavHost` already refuses to create for the output picker: it compiles, it renders, it does
- * nothing, and there is no way to tell from the screen which one was forgotten. The two genuinely
+ * nothing, and there is no way to tell from the screen which one was forgotten. The three genuinely
  * optional callbacks are nullable instead, and their absence removes the affordance rather than
- * leaving it dead.
+ * leaving it dead - the licences row, the diagnostics row and the expiry action each disappear when
+ * the host has not wired them, rather than sitting there doing nothing.
  */
 data class SettingsCallbacks(
     val onSyncNow: () -> Unit,
@@ -64,7 +74,8 @@ data class SettingsCallbacks(
     val onGaplessChange: (Boolean) -> Unit,
     val onOpenCrossfade: () -> Unit,
     val onOpenEqualiser: () -> Unit,
-    val onTranscodeOnMobileDataChange: (Boolean) -> Unit,
+    val onWifiRungChange: (StreamRung) -> Unit,
+    val onDataRungChange: (StreamRung) -> Unit,
     val onScrobblingChange: (Boolean) -> Unit,
     val onNotifyPullFinishedChange: (Boolean) -> Unit,
     val onNotifyPullFailedChange: (Boolean) -> Unit,
@@ -79,8 +90,18 @@ data class SettingsCallbacks(
     val onConfirmDestructiveAction: () -> Unit,
 
     /**
-     * Opens the licences and full terms. Null until a screen exists for it, which removes the link
-     * rather than drawing one that does nothing.
+     * Opens the diagnostics log - `app.needler.diagnostics.DiagnosticsRoute`.
+     *
+     * Nullable for the same reason as [onOpenLicences]: until `NeedlerNavHost` registers the route,
+     * the row is not drawn at all rather than drawn and inert.
+     */
+    val onOpenDiagnostics: (() -> Unit)? = null,
+
+    /**
+     * Opens the licences and full terms - `app.needler.licences.LicencesRoute`.
+     *
+     * Nullable so that a host which has not registered the route draws no link, rather than one that
+     * does nothing.
      */
     val onOpenLicences: (() -> Unit)? = null,
 
@@ -107,7 +128,7 @@ data class SettingsCallbacks(
  * | --- | --- | --- |
  * | Server | Server | Both rows lose their chevrons; nothing is behind them |
  * | Pulling | *gone* | Both of its rows left - see [SettingsUiState] |
- * | Playing | Playing | Two quality rows collapse into one; the transcode row is capability-gated |
+ * | Playing | Playing | Both quality rows are rung pickers now, and both are capability-gated |
  * | Notifications | Notifications | Unchanged |
  * | Storage | Storage | Rewritten: no budget, usage split by tier, albums listed and removable |
  * | *(legal block)* | About | Gains the version row; the rest is the pack's copy verbatim |
@@ -237,17 +258,47 @@ fun SettingsScreen(
 /**
  * The pack's **Server** block.
  *
+ * ## The two rows the pack draws chevrons on, and the one row that earns one
+ *
  * The address row and the "Last synced" row are drawn with chevrons on the artboard, as though each
- * opened a detail screen. Neither exists: REQUIREMENTS.md puts multiple server profiles and the
- * diagnostics log outside v1, so there is nothing behind either row to open. They are drawn without
- * chevrons and are not clickable, because a tap target that does nothing is worse than a row that
- * never offered one.
+ * opened a detail screen. Neither does, and each has its own reason.
+ *
+ * The **address row** cannot. REQUIREMENTS.md's "Out of scope" table lists "Multiple server
+ * profiles" outright, so there is no second server to choose between and no profile detail to open.
+ * "Change server" below the rows is the whole of what this app does with a server address.
+ *
+ * The **"Last synced" row** reports a time and nothing else, because the pack has no sync-history
+ * artboard and inventing one is a design decision rather than an implementation of one. What a user
+ * wanting to know *what* the last sync did is looking for is the diagnostics log, which is the row
+ * below.
+ *
+ * ## The diagnostics row is not out of scope, and an earlier version of this comment said it was
+ *
+ * REQUIREMENTS.md "Observability" requires it outright - "A local, user-viewable diagnostics log
+ * covering the last session: request URLs with secrets redacted, status codes, sync summaries and
+ * playback errors. It must be shareable as a file for bug reports, and it must never leave the
+ * device automatically" - and it appears nowhere in the "Out of scope" table. This comment used to
+ * claim the opposite, and that claim is the whole reason the feature had no screen: it read as a
+ * decision that had been taken rather than as work that had not been done.
+ *
+ * So Server has a third row, and it is the one row in this block with a chevron. It belongs here
+ * rather than in About because a request log answers a question about the server - "why has it
+ * stopped answering me" - and Settings' Server block is where a user goes with that question.
+ *
+ * The row is drawn only when [SettingsCallbacks.onOpenDiagnostics] is non-null, which keeps this
+ * block's original rule intact: a chevron on a row that goes nowhere is the same lie as an inert tap
+ * target.
  */
 @Composable
 private fun ServerSection(state: ServerSectionState, callbacks: SettingsCallbacks) {
     SettingsSection(title = "Server") {
         NeedlerSettingsRow(label = state.hostLabel, value = state.username)
         NeedlerSettingsRow(label = "Last synced", value = state.lastSyncedLabel)
+
+        val openDiagnostics: (() -> Unit)? = callbacks.onOpenDiagnostics
+        if (openDiagnostics != null) {
+            NeedlerSettingsRow(label = "Diagnostics log", onClick = openDiagnostics)
+        }
 
         // Offline is a fact, not an error. REQUIREMENTS.md: "The whole UI works with no network" -
         // only streaming un-cached audio and pulling new music need a connection - so the line says
@@ -286,28 +337,40 @@ private fun ServerSection(state: ServerSectionState, callbacks: SettingsCallback
 /**
  * The pack's **Playing** block, plus the two rows that lead to the sub-screens.
  *
- * ## The two quality rows are one control
+ * ## The two quality rows really are two controls
  *
  * Screen 12 draws "Stream quality: Original" and "Stream on mobile data: MP3 320" as two rows with
- * chevrons, implying two pickers. The domain models the pair as a single
- * `StreamQualityPreference` with two values, and `MP3_320_ON_METERED` already *means* "original on
- * unmetered, MP3 320 while metered" - so there is one decision to make, not two, and it is a yes or
- * a no. It is therefore drawn as a switch, and the quality row above it reports "Original" without
- * a chevron rather than offering a picker with one entry.
+ * chevrons, and that is right: they are two independent ceilings, one per connection. For a while
+ * the domain could only express "Original" or "Original on Wi-Fi, MP3 320 on mobile data", so this
+ * screen drew one switch and a row that reported "Original" without offering anything. Both rows are
+ * pickers now, over a ladder of Original, Opus 192/128/96 and MP3 320/256/192/128.
  *
- * That is not a shortcut. REQUIREMENTS.md is emphatic that original bytes are the default and that
- * transcoding is a scarce, shared resource - "the server allows one transcode per user and two in
- * total, so a household with two listeners can exhaust it" - so the only quality choice the product
- * actually has is whether to spend one of those slots while on mobile data.
+ * REQUIREMENTS.md is still emphatic that original bytes are the default and that transcoding is a
+ * scarce, shared resource - "the server allows one transcode per user and two in total, so a
+ * household with two listeners can exhaust it" - which is why Wi-Fi defaults to Original and is
+ * normally left there. A rung is also a *ceiling*: it never re-encodes a file that is already at or
+ * below it, so picking MP3 320 on an MP3 320 library changes nothing at all.
  *
- * ## The transcode row disappears rather than greying out
+ * ## The picker expands in place
+ *
+ * The chips are drawn under the row rather than on a sub-screen because a sub-screen needs a
+ * navigation destination, and this control is eight one-word choices. Only one picker is open at a
+ * time: two open pickers put sixteen chips on screen and make it easy to set the wrong one.
+ *
+ * ## Both pickers disappear rather than greying out
  *
  * REQUIREMENTS.md rule 3 of "Streaming": hide it entirely unless `transcoding:1` is advertised
  * *and* the server reports transcoding enabled. A disabled row invites a user to go looking for the
- * switch that would enable it, and on a server without ffmpeg there is nothing to find.
+ * switch that would enable it, and on a server without ffmpeg there is nothing to find. What is left
+ * in that case is one row reporting "Original", which is the truth on such a server: every rung
+ * resolves to original bytes.
  */
 @Composable
 private fun PlayingSection(state: PlayingSectionState, callbacks: SettingsCallbacks) {
+    // Which rung picker is expanded, if either. Screen-local: it is not a preference, it does not
+    // survive leaving the screen, and nothing else can act on it.
+    var openPicker: StreamRungPicker? by remember { mutableStateOf<StreamRungPicker?>(null) }
+
     SettingsSection(title = "Playing") {
         NeedlerToggleRow(
             label = "Gapless playback",
@@ -324,14 +387,33 @@ private fun PlayingSection(state: PlayingSectionState, callbacks: SettingsCallba
             value = state.equaliserLabel,
             onClick = callbacks.onOpenEqualiser,
         )
-        NeedlerSettingsRow(label = "Stream quality", value = state.streamQualityLabel)
         if (state.transcodingAvailable) {
-            NeedlerToggleRow(
-                label = "Stream MP3 320 on mobile data",
-                checked = state.transcodeOnMobileData,
-                onCheckedChange = callbacks.onTranscodeOnMobileDataChange,
-                subtitle = "Original quality returns on Wi-Fi.",
+            StreamRungRow(
+                label = "Stream quality on Wi-Fi",
+                selected = state.wifiRung,
+                notice = state.wifiRungCacheNotice,
+                expanded = openPicker == StreamRungPicker.WIFI,
+                onToggleExpanded = {
+                    openPicker =
+                        if (openPicker == StreamRungPicker.WIFI) null else StreamRungPicker.WIFI
+                },
+                onSelect = callbacks.onWifiRungChange,
             )
+            StreamRungRow(
+                label = "Stream quality on mobile data",
+                selected = state.dataRung,
+                notice = state.dataRungCacheNotice,
+                expanded = openPicker == StreamRungPicker.DATA,
+                onToggleExpanded = {
+                    openPicker =
+                        if (openPicker == StreamRungPicker.DATA) null else StreamRungPicker.DATA
+                },
+                onSelect = callbacks.onDataRungChange,
+            )
+        } else {
+            // Nothing to choose between: without ffmpeg the server serves original bytes whatever it
+            // is asked for. The row reports rather than offering, and carries no chevron.
+            NeedlerSettingsRow(label = "Stream quality", value = "Original")
         }
         NeedlerToggleRow(
             label = state.scrobbleLabel,
@@ -340,6 +422,70 @@ private fun PlayingSection(state: PlayingSectionState, callbacks: SettingsCallba
             subtitle = state.scrobbleSubtitle,
             showDivider = false,
         )
+    }
+}
+
+/** Which of the two rung pickers is open. Screen-local state, not a preference. */
+private enum class StreamRungPicker { WIFI, DATA }
+
+/**
+ * One rung picker: a row that names its current rung, and the ladder underneath it when tapped.
+ *
+ * The chips scroll horizontally rather than wrapping. Eight rungs wrap to three lines at 200% text,
+ * and a settings section that changes height by three lines when a row is tapped loses the reader's
+ * place; a scrolling strip keeps the row where it was. The selected chip is the `selected` variant of
+ * [NeedlerPillButton], which is a filled fill rather than a colour change, so the choice is not
+ * carried by hue.
+ *
+ * @param notice the cache-cliff sentence for this rung, or null when the rung keeps its bytes. It sits
+ *   on the row as a subtitle, where it is visible without opening the picker - the point of it is to
+ *   be read by someone who is *not* currently thinking about caching.
+ */
+@Composable
+private fun StreamRungRow(
+    label: String,
+    selected: StreamRung,
+    notice: String?,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onSelect: (StreamRung) -> Unit,
+) {
+    val colors = NeedlerTheme.colors
+    val typography = NeedlerTheme.typography
+    Column(modifier = Modifier.fillMaxWidth()) {
+        NeedlerSettingsRow(
+            label = label,
+            value = SettingsFormat.rung(selected),
+            onClick = onToggleExpanded,
+            showDivider = notice == null && !expanded,
+        )
+        if (notice != null) {
+            Text(
+                text = notice,
+                style = typography.caption,
+                color = colors.textMuted,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
+        if (expanded) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                StreamRung.entries.forEach { rung ->
+                    NeedlerPillButton(
+                        text = SettingsFormat.rung(rung),
+                        onClick = { onSelect(rung) },
+                        selected = rung == selected,
+                        contentDescription = label + ", " + SettingsFormat.spokenRung(rung),
+                    )
+                }
+            }
+        }
+        if (notice != null || expanded) NeedlerHairline()
     }
 }
 
@@ -546,6 +692,12 @@ private fun DownloadedAlbumRow(
  * makes the same point about the product's shape, and rewording any of it here would be a legal
  * change made by a UI file.
  *
+ * It is read from [NeedlerLegal] rather than held here, because the Licences screen shows the same
+ * four paragraphs - they are what "Licences and full terms" promises - and a legal statement that
+ * exists twice in a codebase is a legal statement that will eventually say two different things.
+ * REQUIREMENTS.md "Legal and attribution" calls this text "a requirement rather than decoration",
+ * and a requirement with two copies has no single answer to "what does it say".
+ *
  * The one addition is the version row. The pack draws "Needler 0.1" inside the legal block; a row
  * at the top of the section is where a person actually looks for a version number, and it carries
  * the build number too, which is the only thing that distinguishes two builds of the same release.
@@ -587,17 +739,17 @@ private fun AboutSection(
         ) {
             Text(
                 text = buildAnnotatedString {
-                    append("With thanks to ")
-                    CREDITS.forEachIndexed { index, name ->
+                    append(NeedlerLegal.CREDITS_PREFIX)
+                    NeedlerLegal.credits.forEachIndexed { index, name ->
                         withStyle(SpanStyle(color = colors.textSecondary)) { append(name) }
-                        if (index < CREDITS.lastIndex) append(" · ")
+                        if (index < NeedlerLegal.credits.lastIndex) append(" · ")
                     }
-                    append(". All the heavy lifting is theirs.")
+                    append(NeedlerLegal.CREDITS_SUFFIX)
                 },
                 style = typography.caption,
                 color = colors.textMuted,
             )
-            LEGAL.forEach { paragraph ->
+            NeedlerLegal.disclaimer.forEach { paragraph ->
                 Text(text = paragraph, style = typography.caption, color = colors.textMuted)
             }
             if (onOpenLicences != null) {
@@ -752,30 +904,3 @@ private const val TITLE: String = "Settings"
  */
 private val TABLET_CONTENT_MAX_WIDTH: Dp = 640.dp
 
-/** The services the pack credits, in its order. */
-private val CREDITS: List<String> = listOf(
-    "Dropped Needle",
-    "slskd",
-    "MusicBrainz",
-    "ListenBrainz",
-    "Cover Art Archive",
-)
-
-/** The pack's legal copy, verbatim. Do not reword without advice. */
-private val LEGAL: List<String> = listOf(
-    "Needler is an independent client for a Dropped Needle server that you install, configure and " +
-        "operate yourself. It is not affiliated with, endorsed by or sponsored by Dropped Needle, " +
-        "slskd, Soulseek, MusicBrainz, ListenBrainz or any other service it talks to.",
-    "Needler does not host, store, index, search for or transmit any music. Every search, download " +
-        "and stream is performed by your own server and the services you have connected to it, " +
-        "under your control and your accounts.",
-    "You are solely responsible for what you search for, download and play, for holding the rights " +
-        "to do so, and for complying with copyright law and the terms of every service you use. " +
-        "Needler makes no representation that any content is licensed or lawful to obtain in your " +
-        "country.",
-    "Needler is provided \"as is\" and \"as available\", without warranty of any kind, express or " +
-        "implied, including fitness for a particular purpose, non-infringement and uninterrupted " +
-        "operation. To the fullest extent permitted by law, the developer accepts no liability for " +
-        "any loss, damage or claim arising from your use of Needler or of any server or service it " +
-        "connects to.",
-)

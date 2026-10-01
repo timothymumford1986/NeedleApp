@@ -4,6 +4,8 @@ import app.needler.core.data.local.dao.AudioCacheDao
 import app.needler.core.data.local.entity.AudioCacheEntity
 import app.needler.core.domain.cache.AudioCacheWriteHandle
 import app.needler.core.domain.cache.AudioCacheWriter
+import app.needler.core.domain.cache.AudioRetentionEvent
+import app.needler.core.domain.diagnostics.DiagnosticsSink
 import app.needler.core.domain.model.AudioFormat
 import app.needler.core.domain.model.CachedAudio
 import app.needler.core.domain.model.NeedlerError
@@ -70,6 +72,21 @@ public class AudioCacheStoreWriter(
     /** App-private internal storage: no permissions, and it goes away on uninstall. */
     private val audioDirectory: File,
     /**
+     * Where this store says what it did with a stream, and why.
+     *
+     * Given to the store rather than returned to the caller, which is the whole shape of this seam.
+     * [AudioCacheWriter.openWrite] still answers with a plain nullable handle and its KDoc still
+     * forbids the caller from telling the refusals apart, because a caller that branched on the reason
+     * would be setting retention policy at the call site. The reason is nonetheless worth exactly one
+     * line in the log REQUIREMENTS.md "Observability" already requires, and this is where it goes.
+     *
+     * Defaults to silence so every existing test and every call that has nothing to say about
+     * diagnostics is unchanged, and so that a forgotten wiring degrades to the behaviour this path had
+     * before rather than to a crash on the playback thread. See [AudioRetentionEvent] for what the
+     * lines say and why each one is worth a line at all.
+     */
+    private val diagnostics: DiagnosticsSink = DiagnosticsSink.None,
+    /**
      * Unlinks a file. Supplied rather than called directly for the same reason [CacheIndex] takes
      * one: exactly one layer is responsible for deleting bytes, and tests can watch it.
      */
@@ -78,18 +95,57 @@ public class AudioCacheStoreWriter(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : AudioCacheWriter, AudioDownloadStore {
 
-    override suspend fun openWrite(source: PlayableSource.Stream): AudioCacheWriteHandle? {
+    /**
+     * Writes one line about what happened to a stream.
+     *
+     * The message is built even when the sink is [DiagnosticsSink.None], which is one short string per
+     * played track and not worth an inline lambda to avoid. What is worth something is that the line
+     * is composed in `:core:domain` by [AudioRetentionEvent] rather than here: a description of a
+     * refusal that lived inside the class whose refusals are under suspicion could not be asserted on
+     * without standing up the whole store.
+     */
+    private fun report(event: AudioRetentionEvent) {
+        diagnostics.record(event.level, event.line)
+    }
+
+    /**
+     * [report], then null - the shape every refusal in [openWrite] takes.
+     *
+     * Returning the null rather than leaving it to the call site is deliberate: it makes each refusal a
+     * single statement, so the next one added cannot be the one that records nothing.
+     */
+    private fun refuse(event: AudioRetentionEvent): AudioCacheWriteHandle? {
+        report(event)
+        return null
+    }
+
+    override suspend fun openWrite(
+        source: PlayableSource.Stream,
+        declaredLengthBytes: Long?,
+    ): AudioCacheWriteHandle? {
         // 1. Transcoded bytes are never retained. The resolver set this flag from the format it
         //    resolved; nothing downstream may override it, or a 320 kbps rendering becomes a FLAC
         //    track's permanent offline copy and the user is never told.
-        if (!source.cacheWhileStreaming) return null
+        if (!source.cacheWhileStreaming) {
+            return refuse(
+                AudioRetentionEvent.TranscodedStream(key = source.key, format = source.format),
+            )
+        }
 
-        // 2. An unknown length cannot be checked against the free-space floor before the write, and
-        //    a floor discovered after the bytes are on disk is not a floor. The server reports a
-        //    size for every library track, so refusing here costs a re-fetch in a case that should
-        //    not arise rather than risking the one thing the floor exists to prevent.
-        val expectedSize: Long = source.fetchHandle.sizeBytes ?: return null
-        if (expectedSize <= 0L) return null
+        // 2. The length the response declared, falling back to the size the mirror recorded at the
+        //    last sync. That order is the whole point and is not a preference: the response measures
+        //    these bytes, the mirror only describes them, and the two disagree whenever the server
+        //    has replaced the file since the last sync. Checking a complete body against the stale
+        //    number makes it look truncated, which discards it - on every play, for ever, with
+        //    nothing reporting a fault. The download path already refuses to trust the mirror here
+        //    (see FileDownloadSlot.commit); this is the streaming path held to the same rule.
+        //
+        //    Having neither is a refusal rather than a guess: an unknown length cannot be
+        //    checked against the free-space floor before the write, and a floor discovered
+        //    after the bytes are on disk is not a floor.
+        val expectedSize: Long = declaredLengthBytes?.takeIf { it > 0L }
+            ?: source.fetchHandle.sizeBytes?.takeIf { it > 0L }
+            ?: return refuse(AudioRetentionEvent.LengthUnknown(key = source.key))
 
         // 3. Already on the device, from the same server-side file: there is nothing to gain by
         //    rewriting identical bytes. A row whose fingerprint has moved on is a different matter -
@@ -103,7 +159,9 @@ public class AudioCacheStoreWriter(
             existing.complete &&
             existing.sourceFileId == source.fetchHandle.fileId.value
         ) {
-            return null
+            return refuse(
+                AudioRetentionEvent.AlreadyOnDevice(key = source.key, bytes = existing.sizeBytes),
+            )
         }
 
         // 4. Make room first, so the floor is a floor rather than a line the device drops below and
@@ -114,7 +172,19 @@ public class AudioCacheStoreWriter(
             incomingBytes = expectedSize,
             deleteFile = deleteFile,
         )
-        if (plan.skipsIncoming) return null
+        if (plan.skipsIncoming) {
+            // The plan already carries CacheWarning.INCOMING_NOT_CACHED and every figure the decision
+            // was taken against. Discarding it here, which is what this line used to do, is how a
+            // device on a nearly full volume came to retain nothing at all and say nothing about it.
+            return refuse(
+                AudioRetentionEvent.NoRoomAboveFloor(
+                    key = source.key,
+                    incomingBytes = expectedSize,
+                    freeBytes = plan.resultingFreeBytes,
+                    floorBytes = plan.floorBytes,
+                ),
+            )
+        }
 
         // 5. The stream's own partial, which is deliberately *not* the download's. Deleting it here
         //    is right for a stream and catastrophic for a download, and one filename cannot be both
@@ -129,7 +199,7 @@ public class AudioCacheStoreWriter(
                 // The store is unwritable. Playback is unaffected; it simply is not retained.
                 null
             }
-        } ?: return null
+        } ?: return refuse(AudioRetentionEvent.StoreUnwritable(key = source.key))
 
         return FileWriteHandle(
             key = source.key,
@@ -372,6 +442,19 @@ public class AudioCacheStoreWriter(
                 // A short body is a truncated fetch however cleanly the connection closed. Publishing
                 // it would produce silent playback that stops early, months from now, with no error
                 // to trace it by.
+                //
+                // The two byte counts go to the log as well as into the returned error, because the
+                // caller of commit() is a Media3 data source that has nowhere to show one: the failure
+                // arrived as a refusal to cache, not as a playback error, and the last time these two
+                // numbers disagreed the symptom was a device that streamed perfectly and retained
+                // nothing, on every play, for a whole release.
+                report(
+                    AudioRetentionEvent.IncompleteWrite(
+                        key = key,
+                        writtenBytes = written,
+                        declaredBytes = expected,
+                    ),
+                )
                 discardLocked()
                 return Outcome.Failure(
                     NeedlerError.ProtocolViolation(
@@ -404,6 +487,11 @@ public class AudioCacheStoreWriter(
                 pinnedByThisWrite = false,
             )
             finished = true
+            // The positive line, and it is not decoration. A bug report with three of these and a
+            // Storage section still reading 0 B points at the accounting query; the same report with
+            // none of them points at this path. Without it the absence of evidence has two
+            // explanations, which is exactly the ambiguity that cost a full source trace.
+            report(AudioRetentionEvent.Cached(key = key, bytes = written))
             return Outcome.Success(row)
         }
 
@@ -494,6 +582,13 @@ public class AudioCacheStoreWriter(
             // The fingerprint of the file *as it was fetched*, which is what makes the staleness
             // check possible: sync overwrites the mirror, so a comparison against the mirror would
             // only ever compare it with itself.
+            //
+            // Note which number goes in here. The handle's size is recorded even when the response
+            // declared a different one - the completeness check uses the response, this does not -
+            // because the other side of this comparison is `track.size_bytes`, and a fingerprint
+            // written in one vocabulary and compared against another would report a difference that
+            // is really a disagreement between two sources. A file the server has genuinely replaced
+            // is still caught: its `file_id` moves, and that is the signal compared directly.
             sourceFileId = fetchHandle.fileId.value,
             sourceSizeBytes = fetchHandle.sizeBytes,
             sourceDurationMs = fetchHandle.durationMs,

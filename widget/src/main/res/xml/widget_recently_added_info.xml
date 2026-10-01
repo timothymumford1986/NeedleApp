@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Metadata for the recently added widget, read by the launcher before any of our
+  code runs.
+
+  ## Sizes
+
+  design/html/15-Widget.html draws this card as a 166dp square on a 390dp phone;
+  design/html/18-TabletWidget.html draws the same card at 200dp. One fluid
+  composition serves both — RecentlyAddedWidget uses SizeMode.Exact and reads the
+  real size from LocalSize — so the numbers below describe a square cell block
+  rather than a breakpoint.
+
+  The conventional translation from grid cells to dp is `70 * n - 30`, which puts
+  166dp between two cells (110dp) and three (180dp). The card is declared as 2x2
+  because that is what a square glanceable widget is on every launcher's grid,
+  and the dp minima below are stated as the floor at which the card can still
+  draw what it is for rather than as a cell count:
+
+    * minWidth 140dp — the 56dp cover, the 40dp Play disc and 28dp of padding
+      leave 16dp for the album title at anything narrower, which is not a title.
+      Below WidgetSquareDimensions.playButtonMinWidth (150dp) the disc drops
+      first and the title gets its 40dp back, so the card degrades rather than
+      breaking at the boundary.
+    * minHeight 140dp — 56dp of cover, 28dp of padding and three text lines is
+      about 130dp. Below WidgetSquareDimensions.subtitleMinHeight (130dp) the
+      artist line drops, which is the one of the three lines a person can infer.
+    * minResize* are lower than both, because a user resizing a widget below
+      what it advertises gets a card that has already been designed to shed
+      content in a stated order rather than one that clips.
+    * maxResize* are generous but not unlimited: nothing in the design grows
+      usefully past about twice its drawn size, and a 400dp-tall card headed
+      "Recently added" would be one cover and a great deal of nothing.
+
+  ## updatePeriodMillis is 0, deliberately
+
+  The platform clamps this to 30 minutes and wakes the device to honour it. The
+  newest album changes when a library sync writes one and at no other time, so a
+  timer would be a battery cost paid to redraw an identical card. While the app's
+  process is alive the Glance session recomposes from the Room query; when it is
+  not, the redraw is pushed by NeedlerWidgets.refreshRecentlyAdded from whoever
+  finished the sync. See RecentlyAddedWidget's KDoc.
+
+  ## previewLayout
+
+  widget_recently_added_preview.xml, which draws the empty state. The Android 12+
+  picker inflates a preview in its own process with no Hilt graph and no app
+  process running, so it cannot be the real card; drawing the empty state means
+  the picture is the one a user actually gets on a fresh install, rather than a
+  promise about an album this device may not have. initialLayout is Glance's own
+  loading layout, shown for the few milliseconds before the first composition
+  arrives.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_recently_added_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="140dp"
+    android:minHeight="140dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:maxResizeWidth="320dp"
+    android:maxResizeHeight="320dp"
+    android:previewLayout="@layout/widget_recently_added_preview"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

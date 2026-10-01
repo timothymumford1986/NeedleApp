@@ -1,8 +1,6 @@
 package app.needler.widget.nowplaying
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -19,7 +17,6 @@ import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionRunCallback
-import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -44,6 +41,7 @@ import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.widget.R
 import app.needler.widget.internal.WidgetArtwork
 import app.needler.widget.internal.WidgetDependencies
+import app.needler.widget.internal.WidgetLaunch
 import app.needler.widget.internal.WidgetDimensions
 import app.needler.widget.internal.WidgetText
 import kotlinx.coroutines.delay
@@ -131,11 +129,11 @@ import kotlinx.coroutines.flow.map
  *
  * ## What is deliberately not here
  *
- *  * **The other two widgets.** REQUIREMENTS.md "Widgets" and `widget/build.gradle.kts` both name
- *    three - now playing, recently added, and the active pull with its percentage, all drawn on
- *    screens 15 and 18. Only this one is written. The other two need `LibraryRepository` and
- *    `PullRepository` rather than the session, and they will bring their own receiver, their own
- *    `appwidget-provider` and their own entry in the manifest.
+ *  * **The other two cards on screens 15 and 18.** REQUIREMENTS.md "Widgets" names three, and the
+ *    other two are their own widgets with their own receivers, not sizes of this one: see
+ *    `app.needler.widget.recent.RecentlyAddedWidget` and `app.needler.widget.pulls.PullWidget`.
+ *    They read `LibraryRepository` and `PullRepository` rather than the session, which is also why
+ *    they go stale for entirely different reasons - see `app.needler.widget.NeedlerWidgets`.
  *  * **Glance's `stateDefinition`.** Left at its default and never read. There is nothing for a
  *    widget to persist: the session is the state, and a `DataStore` file per widget instance would
  *    be a stale copy of it that outlives the thing it describes.
@@ -164,7 +162,7 @@ internal class NowPlayingWidget : GlanceAppWidget() {
         val cornerPx: Float =
             WidgetDimensions.artworkCorner.value * context.resources.displayMetrics.density
         val models: Flow<NowPlayingModel> = nowPlayingModels(controller, artwork, coverPx, cornerPx)
-        val openApp: Action = openAppAction(context)
+        val openApp: Action = WidgetLaunch.openApp(context)
 
         provideContent {
             val model: NowPlayingModel by models.collectAsState(initial = NowPlayingModel.Idle)
@@ -237,32 +235,6 @@ internal class NowPlayingWidget : GlanceAppWidget() {
         const val PROGRESS_SAMPLE_MS: Long = 10_000L
     }
 }
-
-/**
- * The tap target for the card itself: open Needler.
- *
- * It resolves the launcher intent through `PackageManager` rather than naming `MainActivity`
- * directly, for two reasons. `:app` depends on `:widget`, so this module cannot see that class
- * without inverting the module graph. And the launch intent carries `ACTION_MAIN` and
- * `CATEGORY_LAUNCHER`, which is what makes Android *resume the existing task* instead of starting a
- * second copy of a single-activity app - a bare `ComponentName` would leave a user with two Needlers
- * in their recents.
- *
- * The literal fallback is the component `:app`'s manifest declares, `app.needler/.MainActivity`, and
- * it should never be reached: `getLaunchIntentForPackage` only returns null when the package has no
- * launcher activity at all.
- */
-private fun openAppAction(context: Context): Action {
-    val launch: Intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-        ?: Intent(Intent.ACTION_MAIN).apply {
-            addCategory(Intent.CATEGORY_LAUNCHER)
-            component = ComponentName(context.packageName, FALLBACK_MAIN_ACTIVITY)
-        }
-    return actionStartActivity(launch)
-}
-
-/** `:app`'s one activity, as `app/src/main/AndroidManifest.xml` declares it. */
-private const val FALLBACK_MAIN_ACTIVITY: String = "app.needler.MainActivity"
 
 /**
  * The card: a 22dp translucent surface with a cover, two lines, the transport and the position row.

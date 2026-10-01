@@ -87,8 +87,8 @@ class WriteThroughSinkTest {
 
     /** A cancelled load, a dropped connection, a seek away from the track: all the same answer. */
     @Test
-    fun `a load that was closed early is abandoned`() {
-        val handle = FakeHandle(expectedSizeBytes = 4L)
+    fun `a load closed early short of the declared length is abandoned`() {
+        val handle = FakeHandle(expectedSizeBytes = 10L)
         val sink = WriteThroughSink(handle)
 
         sink.write(byteArrayOf(1, 2, 3, 4), 0, 4)
@@ -96,6 +96,40 @@ class WriteThroughSinkTest {
 
         assertFalse(published)
         assertFalse(handle.committed)
+        assertTrue(handle.abandoned)
+    }
+
+    /**
+     * The regression this sink was losing tracks to.
+     *
+     * Every byte the response declared is on disk, so the file is whole by measurement. Media3 closes a
+     * `DataSource` when the load ends, and a load can end having taken the last byte without the reader
+     * asking once more and being told there is nothing left. Requiring end-of-input *as well as* the byte
+     * count threw those writes away - and a discarded write looks exactly like a write that was never
+     * opened: the track plays, nothing is retained, and no error is raised anywhere.
+     */
+    @Test
+    fun `a load that received every declared byte is committed without end-of-input`() {
+        val handle = FakeHandle(expectedSizeBytes = 4L)
+        val sink = WriteThroughSink(handle)
+
+        sink.write(byteArrayOf(1, 2, 3, 4), 0, 4)
+        val published = sink.finish(readToEnd = false)
+
+        assertTrue(published)
+        assertTrue(handle.committed)
+        assertFalse(handle.abandoned)
+    }
+
+    /** With no declared length there is nothing to measure, so a clean end is all there is to go on. */
+    @Test
+    fun `an early close with no declared length is abandoned`() {
+        val handle = FakeHandle(expectedSizeBytes = null)
+        val sink = WriteThroughSink(handle)
+
+        sink.write(byteArrayOf(1, 2, 3), 0, 3)
+
+        assertFalse(sink.finish(readToEnd = false))
         assertTrue(handle.abandoned)
     }
 

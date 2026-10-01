@@ -8,9 +8,14 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
+import app.needler.core.domain.repository.FavouriteRepository
 import app.needler.core.domain.repository.LibraryRepository
+import app.needler.core.domain.repository.PinRepository
 import app.needler.core.domain.repository.PlaybackSettingsRepository
+import app.needler.core.domain.repository.PlaylistRepository
+import app.needler.core.domain.repository.SearchRepository
 import app.needler.player.service.audio.EqualiserAudioProcessor
+import app.needler.player.service.media.BrowseTree
 import app.needler.player.service.media.TrackCatalogue
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -31,8 +36,9 @@ import kotlinx.coroutines.cancel
  *
  * `MediaSessionService` would be enough for the phone. Android Auto needs `MediaLibraryService` and its
  * `MediaBrowserService` intent filter, and REQUIREMENTS.md wants Auto from the start precisely because
- * retrofitting browse means restructuring playback. The tree itself is the next piece of work; the shape it
- * has to grow into is here already.
+ * retrofitting browse means restructuring playback. The tree it serves is
+ * [app.needler.player.service.media.BrowseTree], built here from the five repositories it reads and handed to
+ * the session callback: the service owns the wiring, and the tree owns what each node holds.
  *
  * ## Foreground service
  *
@@ -49,6 +55,14 @@ public class NeedlerPlaybackService : MediaLibraryService() {
     @Inject internal lateinit var settingsRepository: PlaybackSettingsRepository
 
     @Inject internal lateinit var libraryRepository: LibraryRepository
+
+    @Inject internal lateinit var playlistRepository: PlaylistRepository
+
+    @Inject internal lateinit var favouriteRepository: FavouriteRepository
+
+    @Inject internal lateinit var pinRepository: PinRepository
+
+    @Inject internal lateinit var searchRepository: SearchRepository
 
     @Inject internal lateinit var equaliser: EqualiserAudioProcessor
 
@@ -71,6 +85,13 @@ public class NeedlerPlaybackService : MediaLibraryService() {
         )
         val callback = NeedlerSessionCallback(
             catalogue = catalogue,
+            browseTree = BrowseTree(
+                library = libraryRepository,
+                playlists = playlistRepository,
+                favourites = favouriteRepository,
+                pins = pinRepository,
+                search = searchRepository,
+            ),
             settingsRepository = settingsRepository,
             coordinator = playbackCoordinator,
             scope = scope,

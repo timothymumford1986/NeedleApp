@@ -38,10 +38,11 @@ import app.needler.core.domain.model.UnifiedSearchResults
  * REQUIREMENTS.md's merged list drawn in full: four different trailing
  * treatments, one [Album] type, one [AlbumState] deciding between them.
  *
- * Artwork is an [ArtworkRef] with no resolver behind it in a unit test, so every
- * rendered tile is the placeholder tint. That is the one deliberate difference
- * from the pack, and it is a consequence of artwork URLs not being resolvable in
- * any module below `:app`.
+ * Artwork is an [ArtworkRef] with no resolver behind it in a unit test — Coil's
+ * mapper lives in `:app` — so every rendered tile is `:core:design`'s placeholder:
+ * the record's initial over a tint derived from its release-group MBID. That is
+ * the one deliberate difference from the pack, and it is what a device shows too
+ * for an album whose cover the server has none of.
  */
 internal object SampleSearch {
 
@@ -257,6 +258,126 @@ internal object SampleSearch {
         ),
         catalogue = CatalogueLaneState.Ready(),
     )
+
+    // ---- "wonder": the search that shipped wrong ----------------------------
+
+    /**
+     * The search from the device report, as the screen now orders it.
+     *
+     * Searching "wonder" returned four catalogue artists — "Jr. Wonder", "Wonder",
+     * "wonder", "wonder", two of them the same string twice, all four subtitled
+     * "Not in your library yet" — and did not return "Oh Wonder", three of whose
+     * albums were on the server. Below them came two owned albums and then twenty
+     * catalogue albums, which put the Songs block sixteen swipes down.
+     *
+     * This fixture is that same query after the merge was fixed: the owned artist
+     * leads, the duplicate names are collapsed, the library's own albums and songs
+     * come before anything un-owned, and the un-owned tail is capped with a row
+     * that reveals the rest.
+     */
+    val ohWonder: Artist = Artist(
+        mbid = artistMbid("ohwonder"),
+        name = "Oh Wonder",
+        ownedAlbumCount = 3,
+    )
+
+    /**
+     * Artists in the order [app.needler.core.domain.usecase.UnifiedSearchUseCase]
+     * now produces: the owned one first, then the catalogue by how well the name
+     * answers what was typed. "Wonder" is an exact match, "Stevie Wonder" and the
+     * rest match a word.
+     */
+    val wonderArtists: List<Artist> = listOf(
+        ohWonder,
+        catalogueArtist("wonder-mb", "Wonder"),
+        catalogueArtist("jr-wonder", "Jr. Wonder"),
+        catalogueArtist("wonder-boy", "Wonder Boy"),
+        catalogueArtist("stevie-wonder", "Stevie Wonder"),
+    )
+
+    private val ownedWonderAlbums: List<Album> = listOf(
+        album(
+            slug = "ultralife",
+            title = "Ultralife",
+            artistName = "Oh Wonder",
+            artistSlug = "ohwonder",
+            year = 2017,
+            trackCount = 12,
+            state = pinned(),
+        ),
+        album(
+            slug = "no-one-else",
+            title = "No One Else Can Wear Your Crown",
+            artistName = "Oh Wonder",
+            artistSlug = "ohwonder",
+            year = 2020,
+            trackCount = 11,
+            state = AlbumState.Owned,
+        ),
+        album(
+            slug = "22-break",
+            title = "22 Break",
+            artistName = "Oh Wonder",
+            artistSlug = "ohwonder",
+            year = 2021,
+            trackCount = 12,
+            state = AlbumState.Owned,
+        ),
+    )
+
+    /** Ten un-owned release groups: two more than the block shows before it is expanded. */
+    private val catalogueWonderAlbums: List<Album> = listOf(
+        "Wonder" to "Hillsong United",
+        "Wonderland" to "Taylor Swift",
+        "Wonder Where We Land" to "SBTRKT",
+        "Wonderful Wonderful" to "The Killers",
+        "Wonders of the Younger" to "Plain White T's",
+        "Stevie Wonder Live" to "Stevie Wonder",
+        "Wonder Cycle" to "Chris Cohen",
+        "Wonderful Crazy Night" to "Elton John",
+        "Wonderful Rainbow" to "Lightning Bolt",
+        "Wonder Years" to "The Wonder Years",
+    ).mapIndexed { index, (title, artist) ->
+        album(
+            slug = "wonder-catalogue-$index",
+            title = title,
+            artistName = artist,
+            year = 2000 + index,
+            state = AlbumState.NotOwned,
+            format = null,
+        )
+    }
+
+    private val wonderTracks: List<Track> = listOf(
+        track(
+            albumSlug = "ultralife",
+            number = 1,
+            title = "Solo",
+            artistName = "Oh Wonder",
+            albumTitle = "Ultralife",
+            durationMs = 194_000L,
+        ),
+        track(
+            albumSlug = "22-break",
+            number = 3,
+            title = "Free",
+            artistName = "Oh Wonder",
+            albumTitle = "22 Break",
+            durationMs = 181_000L,
+        ),
+    )
+
+    /** One artist you own, four you do not, three albums, two songs, ten to pull. */
+    val wonderResults: UnifiedSearchResults = UnifiedSearchResults(
+        query = "wonder",
+        artists = wonderArtists,
+        albums = ownedWonderAlbums + catalogueWonderAlbums,
+        tracks = wonderTracks,
+        catalogue = CatalogueLaneState.Ready(),
+    )
+
+    private fun catalogueArtist(slug: String, name: String): Artist =
+        Artist(mbid = artistMbid(slug), name = name)
 
     // ---- the states the pack does not draw ----------------------------------
 

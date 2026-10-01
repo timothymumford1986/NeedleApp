@@ -1,19 +1,22 @@
 package app.needler.widget.internal
 
 import app.needler.core.domain.model.QueueItem
+import kotlin.math.roundToInt
 
 /**
- * The three strings the now-playing widget prints, and the one it reads aloud.
+ * The strings the widgets print, and the one they read aloud.
  *
- * `:feature:player` has all of this already, in `PlayerFormat`, and this is not an improvement on
- * it - it is a copy of the two functions the widget needs. Feature modules are not each other's
- * dependencies (REQUIREMENTS.md "Architecture > Modules"), and hoisting a handful of string
- * formatting into `:core:domain` to share it would put presentation in the layer that exists to hold
- * none. Two small functions restated is the cheaper of the two mistakes.
+ * `:feature:player` has the timecode and the artist line already, in `PlayerFormat`, and
+ * `:feature:pulls` has the percentage in `PullsFormat`. This is not an improvement on either - it is
+ * a copy of the handful of functions the three widgets need. Feature modules are not each other's
+ * dependencies (REQUIREMENTS.md "Architecture > Modules"), and hoisting a few lines of string
+ * formatting into `:core:domain` to share them would put presentation in the layer that exists to
+ * hold none. A few small functions restated is the cheaper of the two mistakes.
  *
- * They are kept byte-identical to `PlayerFormat`'s on purpose. The widget and the mini player are
- * often on screen within seconds of each other, and a user who sees `3:20` in one and `03:20` in
- * the other has found a bug even though neither is wrong. If `PlayerFormat` changes, this changes.
+ * They are kept byte-identical to the originals on purpose. A widget and the screen it is a glance
+ * at are often in front of a user within seconds of each other, and someone who sees `3:20` in one
+ * and `03:20` in the other has found a bug even though neither is wrong. If `PlayerFormat` or
+ * `PullsFormat` changes, this changes.
  */
 internal object WidgetFormat {
 
@@ -22,6 +25,34 @@ internal object WidgetFormat {
 
     /** An unknown timecode, as `PlayerFormat.UNKNOWN_TIME`. Must match `R.string.widget_unknown_time`. */
     const val UNKNOWN_TIME: String = "--:--"
+
+    /**
+     * `62%`, the pull card's one number, or null when the server has not said.
+     *
+     * Rounded rather than truncated, and rounded the same way `PullsFormat.percent` rounds it on the
+     * Pulls screen, so a pull at 61.6 percent does not read 62 in the app and 61 on the home screen.
+     * The fraction it is given has already preferred the server's own `progress_percent` over a byte
+     * or file count - see `PullProgress.fraction` - so this function does no deciding of its own.
+     *
+     * Null rather than `0%` for a pull the server is still searching for. A percentage is a claim
+     * about how far along something is, and a pull with no candidate chosen is not zero percent
+     * downloaded; it has not started. See `PullCardModel` for what the card draws instead.
+     */
+    fun percent(fraction: Float?): String? {
+        val value: Float = fraction ?: return null
+        return (value.coerceIn(0f, 1f) * 100f).roundToInt().toString() + "%"
+    }
+
+    /** `Searching · Black Classical Music`: the pack's own separator, joining whatever is present. */
+    fun withSeparator(first: String?, second: String?): String {
+        val left: String? = first?.takeIf { it.isNotBlank() }
+        val right: String? = second?.takeIf { it.isNotBlank() }
+        return when {
+            left == null -> right.orEmpty()
+            right == null -> left
+            else -> left + DOT + right
+        }
+    }
 
     /**
      * A position or duration as the pack prints it: `1:16`, `21:04`, `1:02:03`.

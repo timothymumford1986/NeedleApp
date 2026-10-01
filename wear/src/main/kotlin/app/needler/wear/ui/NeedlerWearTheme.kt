@@ -68,6 +68,23 @@ object NeedlerWearColours {
     /** Borders and dividers. `rgba(242,245,238,0.08)`. */
     val hairline: Color = Color(0xFFF2F5EE).copy(alpha = 0.08f)
 
+    /**
+     * Removal, and "this will not fit". `#e8908a`.
+     *
+     * `NeedlerColors` records where this value came from and it is a requirement rather than a
+     * preference: REQUIREMENTS.md "Accessibility" says the design pack "draws none, which meant 'Remove
+     * all from device' rendered in the same accent blue as 'Connect' and 'Play' - permanent data loss
+     * styled exactly like the primary action", and adds `#e8908a` as "a pale, desaturated red in the
+     * same family as the pack's other two signal colours, rather than a saturated warning red that
+     * would be louder than anything else in the design".
+     *
+     * The watch needs it for the same reason and rather more sharply. Removing an album from a wrist is
+     * not a re-download away: it is minutes of Bluetooth transfer, and it may be unrecoverable if the
+     * phone has since dropped the download. It measures 7.93:1 on the canvas, which is the figure
+     * REQUIREMENTS.md records, so the small type it is used at clears AA comfortably.
+     */
+    val destructive: Color = Color(0xFFE8908A)
+
     /** Light band of the vinyl grooves on the record placeholder. `#171e13`. */
     val recordGrooveLight: Color = Color(0xFF171E13)
 

@@ -6,6 +6,7 @@
 
 package app.needler.settings
 
+import app.needler.core.domain.model.StreamRung
 import kotlin.math.roundToInt
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -109,6 +110,43 @@ internal object SettingsFormat {
         0 -> ""
         1 -> items[0]
         else -> items.dropLast(1).joinToString(separator = ", ") + " and " + items.last()
+    }
+
+    // ---- stream quality -----------------------------------------------------
+
+    /**
+     * A rung as a picker label: `Original`, `MP3 320`, `Opus 128`.
+     *
+     * **[StreamRung.ORIGINAL] is not labelled "FLAC", deliberately**, however much it means FLAC to
+     * someone whose library is lossless. It means *whatever the file already is*, and on an MP3
+     * library it yields MP3. A label that named a format the server may not hold would promise
+     * something this setting cannot deliver - and the one library this was built against is entirely
+     * MP3 320, where "FLAC" would be wrong on every record.
+     *
+     * The codec is spelled the way each project spells it - `MP3` shouted, `Opus` not - rather than
+     * uppercasing both, because `OPUS` reads as an acronym and it is not one.
+     */
+    fun rung(rung: StreamRung): String = when (rung) {
+        StreamRung.ORIGINAL -> "Original"
+        StreamRung.OPUS_192 -> "Opus 192"
+        StreamRung.OPUS_128 -> "Opus 128"
+        StreamRung.OPUS_96 -> "Opus 96"
+        StreamRung.MP3_320 -> "MP3 320"
+        StreamRung.MP3_256 -> "MP3 256"
+        StreamRung.MP3_192 -> "MP3 192"
+        StreamRung.MP3_128 -> "MP3 128"
+    }
+
+    /**
+     * The same, spoken: `Original quality`, `M P 3, 320 kilobits`.
+     *
+     * TalkBack reads `MP3 320` as "em pee three three hundred and twenty", which is a number with no
+     * unit attached to it. The spoken form says what the number is.
+     */
+    fun spokenRung(rung: StreamRung): String {
+        val bitrate: Int = rung.maxBitrateKbps ?: return "Original quality"
+        val codec: String = if (rung.codec == "opus") "Opus" else "M P 3"
+        return codec + ", " + bitrate + " kilobits per second"
     }
 
     private const val UNIT: Long = 1_024L

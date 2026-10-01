@@ -2,6 +2,7 @@ package app.needler.core.design.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -188,9 +190,15 @@ fun NeedlerPullButton(
 /**
  * The format badge: FLAC, MP3 320.
  *
- * A 6dp-cornered outline in the positive green with Space Grotesk 11sp/700 at `0.08em`, from Now
- * Playing (07) and the tablet sidebar (09). Screen 13 draws the same information as a green label
- * with the on-device glyph instead; that variant is a [NeedlerStateBadge] plus a text run, not this.
+ * A 6dp-cornered outline in the positive green with Space Grotesk 11sp/700 at `0.08em`, as the pack
+ * draws it on Now Playing (07) and the tablet sidebar (09). Screen 13 draws the same information as a
+ * green label with the on-device glyph instead; that variant is a [NeedlerStateBadge] plus a text run,
+ * not this.
+ *
+ * **The player no longer uses it.** One badge could only state one format, and the player has two
+ * facts to state that are frequently different - what is on the device, and what the server would send
+ * over this connection - so both surfaces draw [NeedlerQualityTag] twice instead. This is kept for any
+ * surface that genuinely has one format to report, which is the shape the pack drew.
  */
 @Composable
 fun NeedlerFormatBadge(
@@ -213,6 +221,96 @@ fun NeedlerFormatBadge(
             color = tint,
             maxLines = 1,
         )
+    }
+}
+
+/**
+ * Which of a pair of quality tags is the one actually in force.
+ *
+ * Not styling for its own sake: a local copy always wins over any streaming setting, so a screen that
+ * drew `Server: MP3 192` and `Pulled: FLAC` as equals would imply the 192 is what you are hearing,
+ * which it is not.
+ */
+enum class NeedlerQualityTagEmphasis {
+    /** What the next play will actually use. Drawn as a chip in the positive green. */
+    Active,
+
+    /** True, and not in force. Drawn as muted text with no chip. */
+    Dormant,
+}
+
+/**
+ * One half of the quality tag pair: `Server: MP3 192` or `Pulled: FLAC`.
+ *
+ * The pair answers two different questions, which is why there are two tags and not one badge.
+ * **Server** is what pressing play would fetch right now - live and network-dependent, so the same
+ * album reads `Server: FLAC` at home and `Server: MP3 192` on mobile data. **Pulled** is what is
+ * actually on this device, and is only ever shown for a *downloaded* copy: an opportunistically
+ * cached one is evictable under disk pressure, and promising offline availability the app cannot keep
+ * is worse than saying nothing.
+ *
+ * ## Why the emphasis is carried by shape as well as colour
+ *
+ * [Active] gets a chip drawn around it and the positive green; [Dormant] gets muted text and no chip.
+ * Colour alone would be a WCAG 1.4.1 failure of exactly the kind the album row's format label already
+ * had to fix, and this one matters more, because "which of these two is real" is the entire point of
+ * drawing both.
+ *
+ * TalkBack gets the sentence rather than the two words: pass [contentDescription] saying what the tag
+ * means ("Pulled: FLAC, playing from this device"), because a chip border says nothing at all to a
+ * screen reader.
+ *
+ * @param label the tag's name, with its colon - `Server:` or `Pulled:`.
+ * @param value the format or rate, already formatted: `FLAC`, `MP3 192`, `Opus 128`.
+ * @param onClick what tapping does, or null for a tag that only reports. Tapping **Server** opens the
+ *   rung picker and writes an override; tapping **Pulled** pulls or removes the download. They are
+ *   deliberately not the same kind of control, which is why each screen passes its own.
+ */
+@Composable
+fun NeedlerQualityTag(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    emphasis: NeedlerQualityTagEmphasis = NeedlerQualityTagEmphasis.Active,
+    onClick: (() -> Unit)? = null,
+    contentDescription: String? = null,
+) {
+    val colors = NeedlerTheme.colors
+    val typography = NeedlerTheme.typography
+    val shape = NeedlerTheme.shapes.formatBadge
+    val active: Boolean = emphasis == NeedlerQualityTagEmphasis.Active
+    val valueColour: Color = if (active) colors.positive else colors.textMuted
+    val labelColour: Color = if (active) colors.textSecondary else colors.textMuted
+
+    Row(
+        modifier = modifier
+            .then(
+                if (active) {
+                    Modifier
+                        .clip(shape)
+                        .border(NeedlerTheme.sizes.hairlineThickness, colors.positive, shape)
+                } else {
+                    Modifier
+                },
+            )
+            .then(
+                if (onClick == null) {
+                    Modifier
+                } else {
+                    // Clipped above, so the ripple follows the chip rather than a rectangle round it.
+                    Modifier.clickable(role = Role.Button, onClick = onClick)
+                },
+            )
+            .defaultMinSize(minHeight = 24.dp)
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .semantics(mergeDescendants = true) {
+                this.contentDescription = contentDescription ?: (label + " " + value)
+            },
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text = label, style = typography.meta, color = labelColour, maxLines = 1)
+        Text(text = value, style = typography.badge, color = valueColour, maxLines = 1)
     }
 }
 

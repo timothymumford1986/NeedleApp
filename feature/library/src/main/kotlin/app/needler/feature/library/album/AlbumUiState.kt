@@ -2,10 +2,15 @@ package app.needler.feature.library.album
 
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
+import app.needler.core.domain.model.AudioQuality
 import app.needler.core.domain.model.OfflineDownloadState
 import app.needler.core.domain.model.RequestStatus
+import app.needler.core.domain.model.StreamFormat
+import app.needler.core.domain.model.StreamRung
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
+import app.needler.feature.library.common.LibraryFormat
+import app.needler.feature.library.common.RequestSheetState
 
 /**
  * Everything the album screen renders — screens 04 (owned) and 05 (not owned),
@@ -49,10 +54,50 @@ data class AlbumUiState(
 
     /** The result of the last action, or an explanation the screen owes the user. */
     val notice: AlbumNotice? = null,
+
+    /**
+     * The pull sheet, open, or null when it is closed.
+     *
+     * Pulling is two steps rather than one now: tapping **Pull this album** opens
+     * this, and confirming places the request. REQUIREMENTS.md "Placing a
+     * request" requires the `monitor_artist` toggle to live on a request sheet,
+     * and there was no sheet, so the flag `RequestAlbumUseCase` has always taken
+     * had no caller anywhere in the app.
+     */
+    val requestSheet: RequestSheetState? = null,
+
+    /**
+     * What the server would send for this album's tracks if play were pressed right now, or null
+     * before it is known.
+     *
+     * Resolved by the same pure function playback uses, from this album's own quality, the rung for
+     * the current connection and any override on it - so the tag and the fetch cannot disagree. It is
+     * live and network-dependent: the same album reads `Server: FLAC` at home and `Server: MP3 192`
+     * on mobile data, which is the entire point of showing it.
+     *
+     * Album-wide rather than per track, because the tag is drawn once in the header. A record whose
+     * tracks are not all the same format is possible and rare; `Album.quality` is the denormalised
+     * figure every row already badges, so the header agrees with the rows.
+     */
+    val serverFormat: StreamFormat? = null,
+
+    /** The album's own override, or null when it follows the mode default for the connection. */
+    val qualityOverride: StreamRung? = null,
 ) {
 
     /** The mirror answered and had nothing. A pulled album that was later removed, usually. */
     val notFound: Boolean get() = !loading && album == null
+
+    /**
+     * Whether this album is starred.
+     *
+     * Read off [Album.isFavourite] rather than from a second flow, because
+     * `LibraryRepository.observeAlbum` already joins the favourite table - the
+     * mirror is the read path for this as much as for the title - so a separate
+     * `observeIsFavourite` subscription would be a second answer to one question
+     * and the two could disagree for a frame.
+     */
+    val isFavourite: Boolean get() = album?.isFavourite == true
 
     /** Tracks the server never delivered. REQUIREMENTS.md "Partial content is a normal state". */
     val missingTracks: List<AlbumTrack> get() = tracks.filter { !it.available }
@@ -67,6 +112,68 @@ data class AlbumUiState(
     /** True when there is at least one track that can actually be played. */
     val hasPlayableTracks: Boolean get() = tracks.any { it.available }
 
+    // ---- the quality tag pair -----------------------------------------------
+    // Two tags rather than one format badge, because the header answers two different questions and
+    // they are frequently not the same: what is already here, and what a play would fetch. A local
+    // copy always wins - `ResolvePlayableSourceUseCase` checks local bytes before any streaming
+    // decision - so when an album is downloaded, `Pulled:` is what is in force and `Server:` is not.
+
+    /**
+     * True when this record is fully downloaded, and therefore what plays.
+     *
+     * **Downloaded, not cached.** [Album.isFullyOnDevice] is `AlbumState.Pinned` with a complete
+     * download, so a part-downloaded album and one whose tracks merely happen to be in the listening
+     * cache both read as not pulled. A cached copy is evictable under disk pressure, and a tag that
+     * promised offline availability the app cannot keep would be worse than no tag.
+     */
+    val isPulled: Boolean get() = album?.isFullyOnDevice == true
+
+    /** `FLAC`, `MP3 192` - what the server would send now, or null when nothing is known yet. */
+    val serverTagValue: String? get() = serverTagLabel(serverFormat, album?.quality)
+
+    /** `FLAC` - the downloaded copy's quality, which is always the source's own. */
+    val pulledTagValue: String?
+        get() = if (isPulled) LibraryFormat.quality(album?.quality) else null
+
+    /** The Server tag spoken, saying whether it is in force - a chip border is nothing to TalkBack. */
+    val serverTagDescription: String?
+        get() {
+            val value: String = serverTagValue ?: return null
+            return when {
+                isPulled -> "From the server, " + value + ", not in use while this is on the device"
+                serverFormat is StreamFormat.Transcoded ->
+                    "Streaming " + value + ", re-encoded by the server and not kept on this device"
+                else -> "Streaming " + value + ", original quality"
+            }
+        }
+
+    /** The Pulled tag spoken. */
+    val pulledTagDescription: String?
+        get() {
+            val value: String = pulledTagValue ?: return null
+            return "Downloaded to this device, " + value + ", playing from here"
+        }
+
+    /**
+     * A line saying that streaming this record will not build an offline copy of it, or null.
+     *
+     * The cache cliff, for one album, where it can be stated as a fact rather than as a conditional:
+     * this record's quality is known, so the resolver has already decided whether the server will
+     * re-encode it, and REQUIREMENTS.md "Why transcoded bytes are never cached" then guarantees those
+     * bytes are discarded. Settings can only say it conditionally - the answer varies record by record -
+     * and this is the screen where it does not have to.
+     *
+     * Absent while the album is pulled: there is already a copy on the device, so nothing is being
+     * missed and the line would be a warning about a problem the user has solved.
+     */
+    val serverCacheNotice: String?
+        get() = if (isPulled || serverFormat !is StreamFormat.Transcoded) {
+            null
+        } else {
+            "Your setting has the server re-encode this album, and re-encoded audio is never kept " +
+                "on this device. Pull it, or choose Original above, to keep it for offline."
+        }
+
     /**
      * What the primary action is, derived from the one place that knows:
      * [AlbumState.offeredActions].
@@ -80,6 +187,48 @@ data class AlbumUiState(
             is AlbumState.Failed -> AlbumPrimaryAction.RETRY
             AlbumState.Owned, is AlbumState.Pinned -> AlbumPrimaryAction.PLAY
         }
+}
+
+/**
+ * What the **Server** tag shows.
+ *
+ * [StreamFormat.Original] means the file is sent untouched, so the honest label is the *source's* own
+ * quality; the rung is a ceiling and a ceiling nobody reached is not news. A transcode is labelled
+ * with what it re-encodes to, which is genuinely different from what the library holds.
+ *
+ * A private function in this file rather than a member of `LibraryFormat`: that object is shared by
+ * every screen in the module and this string belongs to one header.
+ */
+private fun serverTagLabel(format: StreamFormat?, source: AudioQuality?): String? = when (format) {
+    null -> null
+    StreamFormat.Original -> LibraryFormat.quality(source)
+    is StreamFormat.Transcoded -> codecName(format.codec) + " " + format.maxBitrateKbps
+}
+
+/** `MP3`, `Opus` - the codec the resolver names for a URL, spelled the way the project spells it. */
+private fun codecName(codec: String): String = when (codec.lowercase()) {
+    "mp3" -> "MP3"
+    "opus" -> "Opus"
+    // A codec this build has no house spelling for. Shown as the server names it rather than dropped:
+    // a bitrate with no format beside it is worse than an odd-looking one.
+    else -> codec.uppercase()
+}
+
+/**
+ * A rung as a chip label.
+ *
+ * `Original` is never labelled FLAC, however much it means FLAC on a lossless library: it means
+ * whatever the file already is, and on an MP3 library it yields MP3.
+ */
+internal fun rungLabel(rung: StreamRung): String = when (rung) {
+    StreamRung.ORIGINAL -> "Original"
+    StreamRung.OPUS_192 -> "Opus 192"
+    StreamRung.OPUS_128 -> "Opus 128"
+    StreamRung.OPUS_96 -> "Opus 96"
+    StreamRung.MP3_320 -> "MP3 320"
+    StreamRung.MP3_256 -> "MP3 256"
+    StreamRung.MP3_192 -> "MP3 192"
+    StreamRung.MP3_128 -> "MP3 128"
 }
 
 /**

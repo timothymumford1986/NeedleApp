@@ -11,7 +11,8 @@ import app.needler.core.domain.model.PlaybackSpeed
 import app.needler.core.domain.model.ScrobbleEvent
 import app.needler.core.domain.model.ScrobblePreferences
 import app.needler.core.domain.model.SleepTimer
-import app.needler.core.domain.model.StreamQualityPreference
+import app.needler.core.domain.model.StreamOverrideScope
+import app.needler.core.domain.model.StreamRung
 import app.needler.core.domain.repository.PlaybackSettingsRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +44,15 @@ class FakePlaybackSettingsRepository(
     private val queueFlow = MutableStateFlow(queue)
     private val preferencesFlow = MutableStateFlow(PlaybackPreferences())
     private val scrobbleFlow = MutableStateFlow(ScrobblePreferences(reportingEnabled = true))
+
+    /**
+     * Per-item rung overrides, keyed the way the real table's composite primary key is.
+     *
+     * A map rather than a single value because precedence - track, then album - is only testable when
+     * both scopes can hold different rungs at once.
+     */
+    private val overridesFlow: MutableStateFlow<Map<Pair<StreamOverrideScope, String>, StreamRung>> =
+        MutableStateFlow(emptyMap())
 
     /** What [selectOutput] returns. Set it to a failure to exercise the picker's error line. */
     var selectOutputResult: Outcome<Unit> = Outcome.Ok
@@ -81,8 +91,32 @@ class FakePlaybackSettingsRepository(
         preferencesFlow.value = preferencesFlow.value.copy(sleepTimer = timer)
     }
 
-    override suspend fun setStreamQuality(preference: StreamQualityPreference) {
-        preferencesFlow.value = preferencesFlow.value.copy(streamQuality = preference)
+    override suspend fun setWifiStreamRung(rung: StreamRung) {
+        preferencesFlow.value = preferencesFlow.value.copy(wifiQuality = rung)
+    }
+
+    override suspend fun setDataStreamRung(rung: StreamRung) {
+        preferencesFlow.value = preferencesFlow.value.copy(dataQuality = rung)
+    }
+
+    override suspend fun getStreamOverride(scope: StreamOverrideScope, id: String): StreamRung? =
+        overridesFlow.value[scope to id]
+
+    override fun observeStreamOverride(
+        scope: StreamOverrideScope,
+        id: String,
+    ): Flow<StreamRung?> = overridesFlow.map { it[scope to id] }
+
+    override suspend fun setStreamOverride(
+        scope: StreamOverrideScope,
+        id: String,
+        rung: StreamRung,
+    ) {
+        overridesFlow.value = overridesFlow.value + ((scope to id) to rung)
+    }
+
+    override suspend fun clearStreamOverride(scope: StreamOverrideScope, id: String) {
+        overridesFlow.value = overridesFlow.value - (scope to id)
     }
 
     override suspend fun setScrobblingEnabled(enabled: Boolean) {
@@ -124,6 +158,9 @@ class FakePlaybackSettingsRepository(
 
     /** The same for crossfade. */
     val currentCrossfade: CrossfadeSettings get() = crossfadeFlow.value
+
+    /** Every override currently set, for a test that wants to assert on the write rather than the read. */
+    val currentOverrides: Map<Pair<StreamOverrideScope, String>, StreamRung> get() = overridesFlow.value
 
     /** The selected output's name, as a flow, for tests that want to watch it change. */
     fun observeSelectedName(): Flow<String> = selectedFlow.map { it.displayName }

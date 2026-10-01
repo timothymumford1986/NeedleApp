@@ -9,9 +9,12 @@
 # the product to find out.
 
 # Glance instantiates an ActionCallback reflectively, by the class name it wrote
-# into the PendingIntent when the composition was built. R8 sees three classes
-# nobody constructs. These are the widget's transport buttons; see
-# widget/src/main/kotlin/app/needler/widget/nowplaying/TransportActions.kt.
+# into the PendingIntent when the composition was built. R8 sees classes nobody
+# constructs. These are the now-playing card's three transport buttons (see
+# widget/src/main/kotlin/app/needler/widget/nowplaying/TransportActions.kt) and
+# the recently added card's Play disc (recent/PlayRecentAlbumAction.kt). The rule
+# matches on the interface rather than naming them, so a new widget button is
+# kept without anyone having to remember this file.
 -keep class * implements androidx.glance.appwidget.action.ActionCallback {
     <init>();
 }

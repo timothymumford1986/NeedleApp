@@ -10,6 +10,9 @@ package app.needler.core.network
  *  * `https://home.net/music`                — sub-path deployment (server `base_path`)
  *  * `192.168.1.50` / `192.168.1.50:8688`    — bare host, defaulted to `http://` port 8688
  *
+ * A bare host is a guess, not an instruction, so [ladder] turns one into the several
+ * addresses worth trying. [parse] itself still answers with a single normalised address.
+ *
  * Normalisation rules applied here:
  *  * surrounding whitespace is trimmed;
  *  * the scheme and host are lower-cased (the base path is **not** — the server's
@@ -71,6 +74,52 @@ public class ServerUrl internal constructor(
     /** Port actually dialled, filling in the scheme default. */
     public fun effectivePort(): Int = port ?: if (scheme == "https") 443 else 80
 
+    /**
+     * The addresses to try, in order, for what the user typed.
+     *
+     * A typed scheme is obeyed exactly - one rung, no fallback. Silently retrying a typed
+     * `https://` over cleartext would undo a decision the user made, so it never happens.
+     *
+     * A bare host carries no such decision, and assuming `http` on [DEFAULT_PORT] is the wrong
+     * guess for the common case of a domain name behind TLS. So a bare host becomes a ladder,
+     * ordered by what the host looks like:
+     *
+     *  * `mymusic.mydomain.com` - a dotted name is reachable from the internet and almost
+     *    certainly has a certificate: `https`, then `http` on [DEFAULT_PORT], then `http` on 80.
+     *  * `192.168.1.50`, `nas` - an IP literal or a single label is a box on this network, where
+     *    DroppedNeedle's own port is the likeliest answer and TLS the least likely. The old order
+     *    is kept, so a LAN address still answers on the first rung instead of waiting out a TLS
+     *    attempt that was never going to work.
+     *
+     * A typed port is carried onto every rung: `192.168.1.50:8688` means that port, whichever
+     * scheme answers on it.
+     */
+    public fun ladder(): List<ServerUrl> {
+        if (!schemeWasAssumed) return listOf(this)
+        val typedPort: Int? = if (portWasAssumed) null else port
+        val rungs: List<ServerUrl> = if (typedPort != null) {
+            listOf(withScheme("https", typedPort), withScheme("http", typedPort))
+        } else {
+            listOf(withScheme("https", null), withScheme("http", DEFAULT_PORT), withScheme("http", null))
+        }
+        if (!looksLikeLan()) return rungs.distinct()
+        return (rungs.filter { it.isCleartext } + rungs.filterNot { it.isCleartext }).distinct()
+    }
+
+    /** True for an IP literal or a single-label name - the shapes that mean "a box on this network". */
+    private fun looksLikeLan(): Boolean =
+        host.contains(':') || IPV4.matches(host) || !host.contains('.')
+
+    /** One rung of [ladder], reusing this address's host and base path. */
+    private fun withScheme(scheme: String, port: Int?): ServerUrl = ServerUrl(
+        scheme = scheme,
+        host = host,
+        port = port?.takeUnless { isDefaultPort(scheme, it) },
+        basePath = basePath,
+        schemeWasAssumed = true,
+        portWasAssumed = port == DEFAULT_PORT && scheme == "http",
+    )
+
     override fun toString(): String = baseUrl
 
     /**
@@ -107,6 +156,8 @@ public class ServerUrl internal constructor(
 
         private val HOST_NAME = Regex("^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\\.?$")
         private val IPV6_CHARS = Regex("^[0-9A-Fa-f:.]+$")
+        /** Dotted-quad shape only - [HOST_NAME] has already vouched for the characters. */
+        private val IPV4 = Regex("^[0-9]{1,3}([.][0-9]{1,3}){3}$")
 
         /** Same character class the server's `normalize_base_path` allows per segment. */
         private val BASE_PATH_SEGMENT = Regex("^[A-Za-z0-9._~-]+$")

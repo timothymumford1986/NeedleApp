@@ -53,12 +53,14 @@ import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumGridCell
 import app.needler.core.design.component.NeedlerAlbumRow
 import app.needler.core.design.component.NeedlerChevronDownIcon
+import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerOnDeviceIcon
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerSearchFieldButton
 import app.needler.core.design.component.NeedlerSegmentedTabs
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.NeedlerTrackRow
+import app.needler.core.design.component.PathPlay
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
@@ -67,7 +69,9 @@ import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
 import app.needler.feature.library.common.AlbumArtwork
+import app.needler.feature.library.common.AlbumFormatLabel
 import app.needler.feature.library.common.LibraryFormat
+import app.needler.feature.library.common.albumFormatSpokenLabel
 import app.needler.feature.library.common.hasPlayableFile
 import app.needler.feature.library.common.showsOnDeviceCheck
 
@@ -172,6 +176,7 @@ fun LibraryScreen(
                     albums = state.albums,
                     gutter = gutter,
                     onAlbumClick = onAlbumClick,
+                    onAlbumPlay = onAlbumPlay,
                 )
 
                 state.tab == LibraryTab.ARTISTS -> ArtistList(
@@ -483,8 +488,12 @@ private fun AlbumGrid(
         ) { index ->
             val album: Album = albums[index]
             NeedlerAlbumGridCell(
-                title = album.title,
-                artistName = album.artistName,
+                // Guarded: `Album.title` can be blank, because `ReleaseItemDto.title`
+                // is nullable and the catalogue mapper maps it with `.orEmpty()`. The
+                // cell builds its own spoken description and its "Play <title>" label
+                // from these two strings, so guarding here fixes all three at once.
+                title = LibraryFormat.albumTitle(album.title),
+                artistName = LibraryFormat.artistName(album.artistName),
                 onClick = { onAlbumClick(album.releaseGroupMbid) },
                 onDevice = album.showsOnDeviceCheck,
                 onPlayClick = { onAlbumPlay(album.releaseGroupMbid) },
@@ -502,21 +511,42 @@ private fun AlbumGrid(
 }
 
 /**
- * Screen 13: the same albums as rows, each badged with its format.
+ * Screen 13: the same albums as rows, each badged with its format and each with a
+ * play button.
  *
- * The badge is drawn in the positive green with the on-device glyph when the
- * album is on this device, and in the muted grey without one when it is only in
- * the library — which makes the list view the one place in the app where "what
- * quality is this, and do I have it with me" is answerable at a glance.
+ * ## Why the row gained a Play
+ *
+ * The grid cell has a play affordance and the list row had none, so the same
+ * albums offered a different capability depending on which way the view toggle
+ * happened to be set — a toggle whose label says "Switch to list view", promising
+ * a different *layout* and delivering a different *feature set*.
+ *
+ * Of the two ways to make that consistent, the row gains a button rather than the
+ * cell losing one. Three reasons, in order of weight. The cell's affordance is
+ * drawn in the design pack (screens 02 and 09) and the row's absence is not a
+ * drawn decision, it is an omission. Playing an album without opening it is the
+ * commonest thing anyone does on a library screen, and removing it would be a
+ * regression dressed as a fix. And a list row has room the cell does not: the
+ * trailing column already holds the format label, and a 48dp button beside it fits
+ * inside the pack's own 76dp row height.
+ *
+ * REQUIREMENTS.md "Accessibility" is satisfied the same way the grid cell
+ * satisfies it — `NeedlerIconButton` expands any visual size to a 48dp target — so
+ * the button is drawn at the pack's 32dp weight and still reaches the minimum.
+ *
+ * The format label is [AlbumFormatLabel], which is also what the artist screen
+ * uses, so "what quality is this, and do I have it with me" is answered the same
+ * way on both. It no longer leans on hue alone; see that function for why that
+ * mattered.
  */
 @Composable
 private fun AlbumList(
     albums: List<Album>,
     gutter: Dp,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
+    onAlbumPlay: (ReleaseGroupMbid) -> Unit,
 ) {
     val colors = NeedlerTheme.colors
-    val typography = NeedlerTheme.typography
     val sizes = NeedlerTheme.sizes
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -527,23 +557,24 @@ private fun AlbumList(
         ),
     ) {
         items(items = albums, key = { it.releaseGroupMbid.value }) { album ->
-            val format: String? = LibraryFormat.quality(album.quality)
             val onDevice: Boolean = album.showsOnDeviceCheck
+            val title: String = LibraryFormat.albumTitle(album.title)
             NeedlerAlbumRow(
-                title = album.title,
-                subtitle = album.artistName,
+                title = title,
+                subtitle = LibraryFormat.artistName(album.artistName),
                 minHeight = sizes.albumListRowMinHeight,
                 onClick = { onAlbumClick(album.releaseGroupMbid) },
                 showDivider = true,
                 contentDescription = buildString {
-                    append(album.title)
+                    append(title)
                     append(", ")
-                    append(album.artistName)
-                    if (format != null) {
+                    append(LibraryFormat.artistName(album.artistName))
+                    // The chip border that marks a lossless format on screen is nothing
+                    // at all to a screen reader, so the words go here instead.
+                    albumFormatSpokenLabel(album.quality, onDevice)?.let {
                         append(", ")
-                        append(format)
+                        append(it)
                     }
-                    if (onDevice) append(", on device")
                 },
                 artwork = {
                     AlbumArtwork(
@@ -554,19 +585,18 @@ private fun AlbumList(
                     )
                 },
                 trailing = {
-                    if (format != null) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            if (onDevice) NeedlerOnDeviceIcon(tint = colors.positive, size = 14.dp)
-                            Text(
-                                text = format,
-                                style = typography.caption,
-                                color = if (onDevice) colors.positive else colors.textMuted,
-                                maxLines = 1,
-                            )
-                        }
+                    AlbumFormatLabel(quality = album.quality, onDevice = onDevice)
+                    NeedlerIconButton(
+                        contentDescription = "Play " + title,
+                        onClick = { onAlbumPlay(album.releaseGroupMbid) },
+                        visualSize = 32.dp,
+                    ) {
+                        NeedlerStrokeIcon(
+                            pathData = PathPlay,
+                            tint = colors.accent,
+                            size = 16.dp,
+                            filled = true,
+                        )
                     }
                 },
             )
@@ -590,7 +620,7 @@ private fun ArtistList(
     ) {
         items(items = artists, key = { it.mbid.value }) { artist ->
             NeedlerAlbumRow(
-                title = artist.name,
+                title = LibraryFormat.artistName(artist.name),
                 subtitle = LibraryFormat.artistRowSubtitle(
                     ownedAlbumCount = artist.ownedAlbumCount,
                     catalogueAlbumCount = artist.catalogueAlbumCount,
@@ -629,8 +659,9 @@ private fun SongList(
     ) {
         items(items = songs, key = { it.key.canonicalString }) { track ->
             val playable: Boolean = track.hasPlayableFile
+            val title: String = LibraryFormat.trackTitle(track.title)
             NeedlerAlbumRow(
-                title = track.title,
+                title = title,
                 subtitle = LibraryFormat.songRowSubtitle(track),
                 isPlaying = track.key == nowPlayingTrackKey,
                 onClick = if (playable) ({ onSongPlay(track) }) else null,
@@ -639,7 +670,7 @@ private fun SongList(
                 // description it is given, so adding it as well would have TalkBack
                 // say it twice.
                 contentDescription = buildString {
-                    append(track.title)
+                    append(title)
                     append(", ")
                     append(LibraryFormat.songRowSubtitle(track))
                     LibraryFormat.spokenDuration(track.durationMs)?.let {
@@ -874,7 +905,10 @@ internal fun LibraryTrackRow(
 ) {
     NeedlerTrackRow(
         index = index,
-        title = track.title,
+        // `CatalogueTrackDto.title` defaults to the empty string, so a catalogue
+        // track list can arrive with nothing to draw. A blank line beside a track
+        // number reads as a rendering fault rather than as missing metadata.
+        title = LibraryFormat.trackTitle(track.title),
         duration = LibraryFormat.duration(track.durationMs) ?: "--:--",
         modifier = modifier,
         isPlaying = isPlaying,

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Metadata for the pull widget, read by the launcher before any of our code runs.
+
+  ## Sizes
+
+  The same square as the recently added card — 166dp on design/html/15-Widget.html,
+  200dp on design/html/18-TabletWidget.html, one fluid composition at both — so
+  the cell counts and the minima match it deliberately. Two cards drawn side by
+  side on the same artboard that snapped to different cell sizes would not sit
+  level on a real home screen.
+
+  The one difference is the vertical floor. This card has no artwork, so its
+  content is a 22dp glyph, a 36sp number, a title line and a 4dp bar:
+
+    * minWidth 140dp — the 36sp percentage and the album title are both single
+      lines, and 140dp is where a title stops being a word.
+    * minHeight 140dp — glyph, number, title and bar with 28dp of padding. Below
+      WidgetSquareDimensions.barMinHeight (120dp) the bar drops, because it is
+      the only thing on the card the percentage above it already says.
+    * maxResizeHeight is 320dp for the same reason as the other square: there is
+      nothing here that grows.
+
+  ## updatePeriodMillis is 0, deliberately
+
+  Twice deliberately, on this card. The platform's own period is clamped to 30
+  minutes and wakes the device, and REQUIREMENTS.md "Polling schedule" already
+  has a background poller checking the activity summary on a schedule designed
+  around battery — so a widget period would be a second, worse poller running
+  beside the good one, and the numbers it drew would be no fresher. While the
+  process is alive the Glance session recomposes from the mirrored pull table as
+  polls write to it; when it is not, the redraw is pushed by
+  NeedlerWidgets.refreshPulls when the summary's revision moves. See PullWidget's
+  KDoc.
+
+  ## previewLayout
+
+  widget_pull_preview.xml, which draws the resting card — an em dash, "Nothing
+  pulling" and an empty track, in the muted grey rather than the positive green.
+  That is the honest preview: it is what the card shows nearly all the time, and
+  a picker promising "62%" would be advertising a pull the user has not placed.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_pulls_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minWidth="140dp"
+    android:minHeight="140dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:maxResizeWidth="320dp"
+    android:maxResizeHeight="320dp"
+    android:previewLayout="@layout/widget_pull_preview"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

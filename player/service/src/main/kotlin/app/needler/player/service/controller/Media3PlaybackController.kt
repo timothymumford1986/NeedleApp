@@ -17,6 +17,7 @@ import app.needler.core.domain.model.PlaybackSpeed
 import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.QueueItemSource
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.playback.PlaybackProgress
@@ -83,13 +84,35 @@ public class Media3PlaybackController @Inject constructor(
 
     // ------------------------------------------------------------------- the flows
 
+    /**
+     * The transport, the modes, the output and the armed sleep timer.
+     *
+     * Three sources, not one, because only the first of them is the session: the output target and the
+     * sleep timer are things the player *shows* that Media3 has never heard of. Both are narrowed before
+     * they are combined - the timer through a `map` and `distinctUntilChanged` - so an unrelated settings
+     * change, a crossfade length or an EQ band, cannot re-emit a playback state that has not changed.
+     */
     override fun observeState(): Flow<PlaybackState> = combine(
         sessionEvents(STATE_EVENTS),
         settingsRepository.observeSelectedOutput(),
-    ) { session, output -> readState(session, output) }
+        armedSleepTimer(),
+    ) { session, output, timer -> readState(session, output, timer) }
         .flowOn(Dispatchers.Main.immediate)
         .distinctUntilChanged()
 
+    /**
+     * Position, polled.
+     *
+     * `distinctUntilChanged` is not tidiness here, it is what lets a paused player settle. The poll keeps
+     * running - a seek while paused does move the position, and stopping would miss it - but a paused
+     * player reads the same numbers every time, and every emission of them is a recomposition of the
+     * scrubber and a fresh `ProgressBarRangeInfo` on the accessibility tree. A stream of those is a
+     * surface that never reaches idle: TalkBack re-announces, and automated tests that wait for
+     * quiescence never get it. With the operator, a paused player emits nothing at all.
+     *
+     * A polling coroutine costs a delayed main-thread wake-up and no invalidation, which is why the poll
+     * itself is left alone.
+     */
     override fun observeProgress(): Flow<PlaybackProgress> = flow {
         val session: MediaController = connect()
         while (true) {
@@ -100,7 +123,7 @@ public class Media3PlaybackController @Inject constructor(
             // seek while paused does move the position.
             delay(if (session.isPlaying) PROGRESS_TICK_MS else IDLE_TICK_MS)
         }
-    }.flowOn(Dispatchers.Main.immediate)
+    }.distinctUntilChanged().flowOn(Dispatchers.Main.immediate)
 
     override fun observeQueue(): Flow<PlayQueue> = sessionEvents(QUEUE_EVENTS)
         .map { session -> readQueue(session) }
@@ -108,7 +131,11 @@ public class Media3PlaybackController @Inject constructor(
         .distinctUntilChanged()
 
     override suspend fun currentState(): PlaybackState = withContext(Dispatchers.Main.immediate) {
-        readState(connect(), settingsRepository.observeSelectedOutput().first())
+        readState(
+            session = connect(),
+            output = settingsRepository.observeSelectedOutput().first(),
+            sleepTimer = armedSleepTimer().first(),
+        )
     }
 
     // ---------------------------------------------------------------- the transport
@@ -230,10 +257,25 @@ public class Media3PlaybackController @Inject constructor(
     }
 
     override suspend fun setPlaybackSpeed(speed: PlaybackSpeed) {
-        // Persisted as well as applied: the speed is a preference, and a session rebuilt after a process death
-        // would otherwise silently drop back to 1x.
+        // Recorded as well as applied: the repository publishes the speed the coordinator re-applies on every
+        // preferences emission, so a session rebuilt after a process death does not silently drop back to 1x.
         settingsRepository.setPlaybackSpeed(speed)
         command { session -> session.setPlaybackSpeed(speed.value) }
+    }
+
+    /**
+     * Arms the sleep timer, and sends nothing to the session.
+     *
+     * There is nothing to send: Media3 has no sleep timer. `PlaybackCoordinator` collects
+     * `observePlaybackPreferences` inside the service, evaluates `SleepTimerDecision` on its own position
+     * tick and calls `stop()` on the player when the moment comes - which is the only arrangement that
+     * also fires with no UI alive, and the only one that cannot fire while playback is paused. Posting a
+     * delayed callback from here would do neither.
+     *
+     * Not connecting to the session is deliberate too: arming a timer must not be what starts the service.
+     */
+    override suspend fun setSleepTimer(timer: SleepTimer) {
+        settingsRepository.setSleepTimer(timer)
     }
 
     override suspend fun stop(): Unit = command { session -> session.stop() }
@@ -308,7 +350,16 @@ public class Media3PlaybackController @Inject constructor(
         awaitClose { session.removeListener(listener) }
     }
 
-    private suspend fun readState(session: MediaController, output: OutputTarget?): PlaybackState {
+    /** The armed timer alone, so a crossfade or EQ change on the same flow does not re-emit a state. */
+    private fun armedSleepTimer(): Flow<SleepTimer> = settingsRepository.observePlaybackPreferences()
+        .map { preferences -> preferences.sleepTimer }
+        .distinctUntilChanged()
+
+    private suspend fun readState(
+        session: MediaController,
+        output: OutputTarget?,
+        sleepTimer: SleepTimer,
+    ): PlaybackState {
         val item: MediaItem? = session.currentMediaItem
         val track: Track? = catalogue.resolveOne(item?.mediaId)
         val row: QueueItem? = if (track != null && item != null) {
@@ -325,6 +376,7 @@ public class Media3PlaybackController @Inject constructor(
                 shuffleEnabled = session.shuffleModeEnabled,
                 repeatMode = PlaybackStateMapper.toDomainRepeatMode(session.repeatMode),
                 speed = speedOf(session),
+                sleepTimer = sleepTimer,
                 output = output,
                 error = errorOf(session.playerError),
             ),

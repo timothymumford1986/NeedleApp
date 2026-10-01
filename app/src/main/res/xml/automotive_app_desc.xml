@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Declares Needler to Android Auto as a media app.
+
+  REQUIREMENTS.md "Android Auto" puts the browse tree in v1 because retrofitting
+  it means restructuring playback. This file is the whole of the declaration:
+  Auto reads it, finds `uses name="media"`, and then talks to the
+  MediaLibraryService that :player:service already publishes. There is no second
+  activity and no Auto-specific UI to write - the browse tree in
+  NeedlerSessionCallback is what Auto draws.
+
+  The sideloading constraint from "Surfaces beyond the app" is not expressible
+  here. A user installing the APK from GitHub still has to enable "Unknown
+  sources" in Auto's own developer settings before this declaration is honoured.
+-->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>

@@ -203,6 +203,9 @@ class PlayerSettingsScreenshotTest {
             onToggleShuffle = {},
             onCycleRepeat = {},
             onChooseOutput = {},
+            onToggleFavourite = {},
+            onChooseSleepTimer = {},
+            onOpenArtist = {},
         )
     }
 

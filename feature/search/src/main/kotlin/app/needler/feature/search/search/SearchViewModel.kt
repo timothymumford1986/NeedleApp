@@ -5,8 +5,10 @@ package app.needler.feature.search.search
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.needler.core.domain.model.Album
+import app.needler.core.domain.model.CatalogueSearchPage
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.RequestReceipt
+import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.SearchSuggestion
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
@@ -60,20 +62,26 @@ import kotlinx.coroutines.launch
  *  6. cover art per lane — an `ArtworkRef` carried on each result and resolved
  *     by `:app`'s Coil mapper.
  *
- * What is left here is rule 2's other half, the `suggest` call, and the
- * plumbing: one query flow, recent searches, and the single action this screen
- * offers.
+ * What is left here is rule 2's other half, the `suggest` call, rule 5's paging,
+ * and the plumbing: one query flow, recent searches, and the single action this
+ * screen offers.
  *
- * ## Rule 5 is deliberately not implemented
+ * ## Rule 5, and where the second page goes
  *
  * "Paginate a single bucket through `GET /api/v1/search/{artists|albums}`" is
- * `SearchRepository.searchCatalogueBucket`, and nothing calls it. Neither
- * screen 03 nor screen 10 draws a "more results" affordance, a bucket screen or
- * an infinite list — both show one capped block per kind — so there is nowhere
- * in the design for a second page to go, and building the paging without the
- * screen that reveals it would be building a mechanism no one can reach. It is
- * in the handover notes: a "See all albums" row under the Albums block is the
- * natural home, and the repository call it needs already exists.
+ * `SearchRepository.searchCatalogueBucket`, which was written and then called
+ * from nowhere, because neither screen 03 nor screen 10 draws a "more results"
+ * affordance and there was nowhere in the design for a second page to go. There
+ * is now: each block is capped at a preview, and the row under it either reveals
+ * what is already in hand or asks the bucket endpoint for the next page. The cap
+ * earns its place twice over — it is also what stopped a twenty-row MusicBrainz
+ * tail from burying the Songs block.
+ *
+ * Pages are accumulated here and folded onto the merged result by
+ * [UnifiedSearchUseCase.expand], so the deduplication rules live in one place
+ * and a paged-in row cannot appear twice or arrive above an owned one. They are
+ * dropped the moment the query changes: a page of "wonder" has nothing to say
+ * about "wonderland".
  *
  * ## Why the query is not debounced for the local lane
  *
@@ -107,6 +115,23 @@ class SearchViewModel @Inject constructor(
     private val busy = MutableStateFlow(false)
     private val notice = MutableStateFlow<SearchNotice?>(null)
 
+    /** Which buckets the user has expanded, and how far each has been paged. */
+    private val paging = MutableStateFlow(SearchPaging())
+
+    /** The album whose request sheet is open, and the `monitor_artist` flag on it. */
+    private val pullTarget = MutableStateFlow<Album?>(null)
+    private val monitorArtist = MutableStateFlow(false)
+
+    /**
+     * The bucket pages fetched for the current query, in the order they arrived.
+     *
+     * Held as the pages themselves rather than as an already-merged list, so the
+     * fold onto a fresh [UnifiedSearchResults] happens again whenever the base
+     * result changes — the mirror updating mid-search, or the catalogue lane
+     * landing after the first page was asked for.
+     */
+    private val pages = MutableStateFlow<List<CatalogueSearchPage>>(emptyList())
+
     /**
      * The trimmed query, changing no more often than the text actually does.
      *
@@ -119,6 +144,19 @@ class SearchViewModel @Inject constructor(
 
     private val results: Flow<UnifiedSearchResults> =
         committedQuery.flatMapLatest { text -> unifiedSearch(text) }
+
+    /**
+     * The merged result with every bucket page the user has asked for folded in.
+     *
+     * The fold is in [UnifiedSearchUseCase.expand] and not here: appending a page
+     * means applying the same MBID and name rules the first merge applied, and a
+     * second implementation of those in a ViewModel is how a paged-in row ends up
+     * above an album the user already owns.
+     */
+    private val paged: Flow<UnifiedSearchResults> =
+        combine(results, pages) { base: UnifiedSearchResults, fetched: List<CatalogueSearchPage> ->
+            fetched.fold(base) { merged, page -> UnifiedSearchUseCase.expand(merged, page) }
+        }
 
     /**
      * Completions, debounced by hand.
@@ -157,11 +195,17 @@ class SearchViewModel @Inject constructor(
             ?: flowOf(null)
 
     private val lanes: Flow<Lanes> = combine(
-        results,
+        paged,
         suggestions,
         search.observeRecentQueries(RECENT_QUERY_LIMIT),
-    ) { merged, completions, recents ->
-        Lanes(results = merged, suggestions = completions, recentQueries = recents)
+        paging,
+    ) { merged, completions, recents, bucketPaging ->
+        Lanes(
+            results = merged,
+            suggestions = completions,
+            recentQueries = recents,
+            paging = bucketPaging,
+        )
     }
 
     private val status: Flow<Status> = combine(
@@ -171,13 +215,28 @@ class SearchViewModel @Inject constructor(
         Status(offline = !connectivity.isOnline, nowPlayingTrackKey = playingKey)
     }
 
+    /**
+     * The one action this screen offers, in one flow.
+     *
+     * Grouped for the same reason [Lanes] and [Status] are: `combine` takes five
+     * flows, and the sheet's album, its toggle and the in-flight flag are three
+     * facts about the same tap.
+     */
+    private val pull: Flow<PullSheet> = combine(
+        pullTarget,
+        monitorArtist,
+        busy,
+    ) { album, monitor, isBusy ->
+        PullSheet(album = album, monitorArtist = monitor, busy = isBusy)
+    }
+
     val state: StateFlow<SearchUiState> = combine(
         query,
         lanes,
         status,
-        busy,
+        pull,
         notice,
-    ) { text, lane, current, isBusy, currentNotice ->
+    ) { text, lane, current, sheet, currentNotice ->
         SearchUiState(
             query = text,
             results = lane.results,
@@ -185,7 +244,10 @@ class SearchViewModel @Inject constructor(
             suggestions = lane.suggestions,
             nowPlayingTrackKey = current.nowPlayingTrackKey,
             offline = current.offline,
-            busy = isBusy,
+            busy = sheet.busy,
+            pullSheetAlbum = sheet.album,
+            monitorArtist = sheet.monitorArtist,
+            paging = lane.paging,
             notice = currentNotice,
         )
     }.stateIn(
@@ -197,6 +259,13 @@ class SearchViewModel @Inject constructor(
     // ---- intents ------------------------------------------------------------
 
     fun onQueryChange(text: String) {
+        // Compared on the trimmed text, for the same reason `committedQuery` is:
+        // typing a trailing space is not a new search, and throwing away the
+        // pages the user paged in would be a visible loss for no reason.
+        if (text.trim() != query.value.trim()) {
+            pages.value = emptyList()
+            paging.value = SearchPaging()
+        }
         query.value = text
         // A new search invalidates whatever the last one's action said. Leaving
         // "Pulling…" on screen while the user types something unrelated would
@@ -257,22 +326,133 @@ class SearchViewModel @Inject constructor(
     }
 
     /**
-     * Ask the server to acquire an un-owned album: the **Pull** button on
-     * screens 03 and 10.
+     * "Show all N" under a capped block.
+     *
+     * Local and instant: these rows are already in hand, and revealing them needs
+     * no network, which is why it is a separate intent from
+     * [onLoadMoreFromCatalogue] and why it still works offline.
+     */
+    fun onShowAll(bucket: SearchBucket) {
+        val current: BucketPaging = paging.value.of(bucket)
+        if (current.expanded) return
+        paging.value = paging.value.with(bucket, current.copy(expanded = true))
+    }
+
+    /**
+     * "More from MusicBrainz", and the retry on a page that failed: one page of
+     * one bucket, per REQUIREMENTS.md rule 5.
+     *
+     * Three things this deliberately does not do. It does not fire while a page is
+     * already in flight, because two identical calls to a slow upstream is the
+     * worst possible answer to an impatient second tap. It does not apply the
+     * result if the query changed while the call was open — a page of "wonder"
+     * folded into a search for "wonderland" would put rows on screen that match
+     * nothing in the field. And it does not advance the offset on a failure, so a
+     * retry asks for the page that was lost rather than the one after it.
+     */
+    fun onLoadMoreFromCatalogue(bucket: SearchBucket) {
+        val asked: String = query.value.trim()
+        if (asked.isEmpty()) return
+        val current: BucketPaging = paging.value.of(bucket)
+        if (current.loading || !current.hasMore) return
+
+        paging.value = paging.value.with(
+            bucket,
+            current.copy(expanded = true, loading = true, note = null, noteIsProblem = false),
+        )
+        viewModelScope.launch {
+            val result: Outcome<CatalogueSearchPage> = search.searchCatalogueBucket(
+                bucket = bucket,
+                query = asked,
+                limit = PAGE_SIZE,
+                offset = current.nextOffset,
+            )
+            if (query.value.trim() != asked) return@launch
+            val latest: BucketPaging = paging.value.of(bucket)
+            paging.value = paging.value.with(
+                bucket,
+                when (result) {
+                    is Outcome.Success -> {
+                        pages.value = pages.value + result.value
+                        latest.copy(
+                            loading = false,
+                            nextOffset = current.nextOffset + PAGE_SIZE,
+                            hasMore = result.value.hasMore,
+                            // There is no total on this endpoint, so a short page
+                            // is the only end-of-list signal there is.
+                            note = if (result.value.hasMore) {
+                                null
+                            } else {
+                                catalogueExhaustedNote(asked)
+                            },
+                            noteIsProblem = false,
+                        )
+                    }
+
+                    is Outcome.Failure -> latest.copy(
+                        loading = false,
+                        note = pageFailedNote(problemMessage(result.error)),
+                        noteIsProblem = true,
+                    )
+                },
+            )
+        }
+    }
+
+    /**
+     * The **Pull** button on screens 03 and 10: opens the request sheet.
+     *
+     * It does not place the request. REQUIREMENTS.md "Placing a request" requires
+     * the `monitor_artist` flag to be "a secondary toggle on the request sheet",
+     * and `:core:design`'s `NeedlerRequestSheet` is where that toggle lives — the
+     * same sheet the library screens open, so a pull is the same thing wherever it
+     * is started. Requesting is still one tap to reach, which is what the
+     * requirement asks; the confirm is one thumb-movement away.
+     *
+     * The toggle resets per album. It is a decision about this artist, and carrying
+     * a yes over to the next pull would subscribe the user to an artist they never
+     * agreed to follow.
+     */
+    fun onPull(album: Album) {
+        if (busy.value) return
+        monitorArtist.value = false
+        pullTarget.value = album
+    }
+
+    /** The `monitor_artist` toggle on the sheet. */
+    fun onMonitorArtistChange(enabled: Boolean) {
+        monitorArtist.value = enabled
+    }
+
+    /** Dismissed without requesting: the sheet's "Not now", and a tap on the scrim. */
+    fun onCancelPull() {
+        pullTarget.value = null
+    }
+
+    /**
+     * The sheet's **Pull**: place the request.
      *
      * The album is handed to the use case as `known`, which saves it a mirror
      * read and — more importantly — supplies the title, artist and year hints
      * the request body carries. Those are what the server uses to disambiguate a
      * release group whose MusicBrainz entry is thin, and a catalogue search
      * result is precisely the case where it often is.
+     *
+     * The sheet stays up with its buttons inert while the call is open, and closes
+     * when the server has answered, so the notice it leaves behind is read against
+     * the results rather than against a sheet that is no longer about anything.
      */
-    fun onPull(album: Album) {
+    fun onConfirmPull() {
+        val album: Album = pullTarget.value ?: return
         if (busy.value) return
         busy.value = true
         viewModelScope.launch {
             try {
-                val result: Outcome<RequestReceipt> =
-                    requestAlbum(album.releaseGroupMbid, known = album)
+                val result: Outcome<RequestReceipt> = requestAlbum(
+                    releaseGroupMbid = album.releaseGroupMbid,
+                    monitorArtist = monitorArtist.value,
+                    known = album,
+                )
                 notice.value = when (result) {
                     is Outcome.Success -> SearchNotice.forRequest(result.value.status)
                     is Outcome.Failure -> SearchNotice(
@@ -282,6 +462,7 @@ class SearchViewModel @Inject constructor(
                 }
             } finally {
                 busy.value = false
+                pullTarget.value = null
             }
         }
     }
@@ -316,11 +497,18 @@ class SearchViewModel @Inject constructor(
         val results: UnifiedSearchResults,
         val suggestions: List<SearchSuggestion>,
         val recentQueries: List<String>,
+        val paging: SearchPaging,
     )
 
     private data class Status(
         val offline: Boolean,
         val nowPlayingTrackKey: TrackKey?,
+    )
+
+    private data class PullSheet(
+        val album: Album?,
+        val monitorArtist: Boolean,
+        val busy: Boolean,
     )
 
     private companion object {
@@ -347,6 +535,16 @@ class SearchViewModel @Inject constructor(
 
         /** How many previous searches the empty state offers. */
         const val RECENT_QUERY_LIMIT: Int = 8
+
+        /**
+         * One page of a bucket.
+         *
+         * Larger than either limit the combined search of rule 2 uses, because a
+         * page walks the bucket from the top and its first rows are ones already
+         * on screen: a page of ten would spend most of itself on duplicates. The
+         * endpoint's own default page is twenty.
+         */
+        const val PAGE_SIZE: Int = 25
 
         /** One-character queries are not worth remembering; they are almost always a typo. */
         const val MIN_RECORDED_LENGTH: Int = 2

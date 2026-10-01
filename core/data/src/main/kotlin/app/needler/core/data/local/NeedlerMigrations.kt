@@ -16,10 +16,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * force a full re-sync." [NeedlerDatabase.create] therefore never calls it, and a missing migration
  * must surface as a crash in development rather than as silent data loss in the field.
  *
- * ## Version 1 is the first release, so this list is empty
+ * ## Version 2: `stream_override`
  *
- * It is not a placeholder: an empty array wired into the builder is what makes the *next* schema
- * change a one-line addition here instead of a decision about whether to add migrations at all.
+ * [MIGRATION_1_2] adds one table and touches nothing that exists. Per-item stream-quality overrides
+ * had nowhere to live: the mode rungs are settings and sit in `DataStore`, while "this record streams
+ * lossless wherever I am" is a row per item. Nothing is copied, no table is rewritten, and the search
+ * triggers are untouched because neither `album` nor `track` is involved.
  *
  * ## Writing one
  *
@@ -45,7 +47,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * A migration looks like this:
  *
  * ```
- * internal val MIGRATION_1_2: Migration = object : Migration(1, 2) {
+ * internal val MIGRATION_2_3: Migration = object : Migration(2, 3) {
  *     override fun migrate(db: SupportSQLiteDatabase) {
  *         db.execSQL("ALTER TABLE album ADD COLUMN label TEXT")
  *         // Recreate the search triggers if a content table was rewritten:
@@ -60,10 +62,36 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 public object NeedlerMigrations {
 
     /**
+     * Adds `stream_override`: one row per track or album the user has pinned a stream rung to.
+     *
+     * The DDL matches exactly what Room generates for `StreamOverrideEntity` - column order, the
+     * `NOT NULL`s, the composite primary key and the backtick quoting - because Room validates the
+     * live table against its own idea of the schema on the next open and fails the migration
+     * otherwise. `IF NOT EXISTS` so that a build installed over a partially migrated database does
+     * not abort on the table already being there.
+     *
+     * Nothing is dropped, copied or renamed, so rules 1 to 3 in this file's header do not apply:
+     * no foreign key points at this table, no content table is rewritten, and no file path changes.
+     */
+    internal val MIGRATION_1_2: Migration = object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `stream_override` (" +
+                    "`scope` TEXT NOT NULL, " +
+                    "`item_id` TEXT NOT NULL, " +
+                    "`rung` TEXT NOT NULL, " +
+                    "`updated_at` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`scope`, `item_id`)" +
+                    ")",
+            )
+        }
+    }
+
+    /**
      * Every migration, in ascending order. Passed to `addMigrations` as a whole, so Room can also
      * compose them to skip versions.
      */
-    public val ALL: Array<Migration> = emptyArray()
+    public val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
 
     /**
      * Convenience for a migration that has rewritten `album` or `track`: drops the search triggers,

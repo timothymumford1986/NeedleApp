@@ -31,6 +31,23 @@ public abstract class PlaylistDao {
     @Query("SELECT * FROM playlist ORDER BY name_normalised ASC")
     public abstract fun observePlaylists(): Flow<List<PlaylistEntity>>
 
+    /**
+     * One window of the same alphabetical list, for a caller that renders a page rather than a screen.
+     *
+     * Ordered off `name_normalised` exactly as [observePlaylists] is, so a page is a slice of the
+     * screen's own order and not a second opinion about it. It exists because Android Auto's
+     * `onGetChildren` read every playlist on every page turn and sliced in Kotlin; REQUIREMENTS.md
+     * "Performance budgets" is written against a library, not against twenty rows.
+     */
+    @Query(
+        """
+        SELECT * FROM playlist
+        ORDER BY name_normalised ASC
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    public abstract fun observePlaylistsPaged(limit: Int, offset: Int): Flow<List<PlaylistEntity>>
+
     @Query("SELECT * FROM playlist WHERE playlist_id = :playlistId")
     public abstract fun observePlaylist(playlistId: String): Flow<PlaylistEntity?>
 

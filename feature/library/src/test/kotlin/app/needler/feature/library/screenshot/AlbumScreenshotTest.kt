@@ -14,6 +14,7 @@ import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.album.AlbumScreen
 import app.needler.feature.library.album.AlbumTrack
 import app.needler.feature.library.album.AlbumUiState
+import app.needler.feature.library.common.RequestSheetState
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -192,6 +193,65 @@ class AlbumScreenshotTest {
         capture("album-large-text", NeedlerDevice.Phone, owned(), fontScale = 2f)
     }
 
+    // ---- the new controls ---------------------------------------------------
+
+    @Test
+    fun `a starred album, with a starred track in the list`() {
+        capture("album-starred", NeedlerDevice.Phone, starred())
+    }
+
+    @Test
+    fun `the request sheet, with the monitor artist toggle`() {
+        capture(
+            "album-request-sheet",
+            NeedlerDevice.Phone,
+            notOwned().copy(requestSheet = RequestSheetState.forAlbum(SampleLibrary.blackClassicalMusic)),
+        )
+    }
+
+    @Test
+    fun `the request sheet with monitoring turned on`() {
+        capture(
+            "album-request-sheet-monitoring",
+            NeedlerDevice.Phone,
+            notOwned().copy(
+                requestSheet = RequestSheetState
+                    .forAlbum(SampleLibrary.blackClassicalMusic)
+                    .copy(monitorArtist = true),
+            ),
+        )
+    }
+
+    @Test
+    fun `the request sheet at 200 percent text size`() {
+        capture(
+            "album-request-sheet-large-text",
+            NeedlerDevice.Phone,
+            notOwned().copy(requestSheet = RequestSheetState.forAlbum(SampleLibrary.blackClassicalMusic)),
+            fontScale = 2f,
+        )
+    }
+
+    // ---- nothing the server sent is guaranteed to be there ------------------
+
+    /**
+     * An album with no title, no artist and no cover.
+     *
+     * Every fixture in this file supplied all three, which is exactly why a screen that
+     * concatenated `album.title` into six accessibility labels shipped: nothing rendered
+     * here could show it. `ReleaseItemDto.title` is nullable and the catalogue mapper maps
+     * it with `.orEmpty()`, so this is a real state and not a hypothetical.
+     */
+    @Test
+    fun `an album the catalogue named with nothing`() {
+        capture("album-untitled", NeedlerDevice.Phone, untitled())
+    }
+
+    @Test
+    fun `an album the catalogue named with nothing, at 200 percent text size`() {
+        capture("album-untitled-large-text", NeedlerDevice.Phone, untitled(), fontScale = 2f)
+    }
+
     // ---- plumbing -----------------------------------------------------------
 
     private fun capture(
@@ -229,6 +289,11 @@ class AlbumScreenshotTest {
             onRetryTrack = {},
             onOpenArtist = {},
             onDismissNotice = {},
+            onToggleFavourite = {},
+            onToggleTrackFavourite = {},
+            onMonitorArtistChange = {},
+            onConfirmRequest = {},
+            onDismissRequestSheet = {},
         )
     }
 
@@ -263,5 +328,20 @@ class AlbumScreenshotTest {
         loading = false,
         album = SampleLibrary.submarine.copy(state = AlbumState.Owned),
         tracks = rows(SampleLibrary.submarinePartialTracks, owned = true),
+    )
+
+    private fun starred(): AlbumUiState = owned().let { state ->
+        state.copy(
+            album = state.album?.copy(isFavourite = true),
+            tracks = state.tracks.mapIndexed { index, row ->
+                if (index == 0) row.copy(track = row.track.copy(isFavourite = true)) else row
+            },
+        )
+    }
+
+    private fun untitled(): AlbumUiState = AlbumUiState(
+        loading = false,
+        album = SampleLibrary.untitledAlbum,
+        tracks = rows(SampleLibrary.untitledTracks, owned = false),
     )
 }

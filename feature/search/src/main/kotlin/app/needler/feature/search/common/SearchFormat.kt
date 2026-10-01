@@ -39,6 +39,10 @@ import app.needler.core.domain.model.Track
  */
 internal object SearchFormat {
 
+    /** Matches `LibraryFormat.UNTITLED_ALBUM`. */
+    const val UNTITLED_ALBUM: String = "Untitled album"
+
+
     // ---- durations ----------------------------------------------------------
 
     /** `3:47`, as the song rows on screen 03 draw it. Null for an unknown duration. */
@@ -87,6 +91,24 @@ internal object SearchFormat {
      * as a placeholder, because a release group with no date is common in
      * MusicBrainz and "Khruangbin · —" says nothing a blank does not.
      */
+    /**
+     * An album title that is safe to render.
+     *
+     * The wire DTO defaults `title` to the empty string and `CatalogueMappers`
+     * carries that through with `orEmpty()`, so a catalogue result legitimately
+     * reaches the UI with nothing to show. Drawing it raw is what left the Pulls
+     * screen with 34 blank rows on a real device, and what made its Cancel label
+     * read "Cancel the pull of " with nothing after it.
+     *
+     * The wording matches `:feature:library`'s `LibraryFormat.albumTitle`
+     * deliberately - the same album must not be "Untitled album" on one screen
+     * and something else on the next. It is duplicated rather than shared
+     * because a feature module may not depend on another feature module; the
+     * shared home, if this spreads further, is `:core:design`.
+     */
+    fun albumTitle(raw: String?): String =
+        raw?.trim()?.takeIf { it.isNotEmpty() } ?: UNTITLED_ALBUM
+
     fun albumRowSubtitle(album: Album): String {
         val parts: List<String> = buildList {
             if (album.artistName.isNotBlank()) add(album.artistName)
@@ -138,16 +160,10 @@ internal object SearchFormat {
     fun plural(count: Long, noun: String): String =
         if (count == 1L) "$count $noun" else "$count ${noun}s"
 
-    /**
-     * The letter drawn in an artist avatar when there is no artist image: `K`
-     * for Khruangbin, `Y` for Yussef Dayes, exactly as the pack draws them.
-     *
-     * A name that is blank, or that starts with something with no uppercase
-     * form, falls back to a question mark rather than to an empty circle, so the
-     * avatar never renders as a hole in the row.
-     */
-    fun initial(name: String): String =
-        name.trim().firstOrNull()?.uppercase()?.take(1) ?: "?"
+    // The letter drawn in an artist avatar when there is no image used to be computed here. It is
+    // `:core:design`'s `artworkPlaceholderInitial` now, behind `NeedlerArtwork`, which draws the
+    // letter and the tint together for albums, artists and widgets alike. Two copies of that rule
+    // meant the search screen's coverless tiles looked like nowhere else in the app.
 
     private fun pad(value: Long): String = if (value < 10L) "0$value" else value.toString()
 }

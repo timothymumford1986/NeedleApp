@@ -14,6 +14,20 @@ import app.needler.core.domain.model.ReleaseGroupMbid
  * `:app` builds this route as `artist/{artistId}`, where the argument name is
  * [ArtistViewModel.ARTIST_ID_ARG] and the value is the bare artist MBID — not
  * the `ar-` prefixed Subsonic id.
+ *
+ * ## Two optional arguments `:app` has to add
+ *
+ * [ArtistViewModel.ARTIST_NAME_ARG] and [ArtistViewModel.ARTIST_SUBTITLE_ARG] carry
+ * what the caller already knew, and the one caller that needs them is catalogue
+ * search. An artist found there has no row in the mirror — `refreshArtistDiscography`
+ * writes album rows and never an artist row — so without the name this screen cannot
+ * say who it is about, which is how tapping a search result came to land on "That
+ * artist is not here". The full route is
+ * `artist/{artistId}?artistName={artistName}&artistSubtitle={artistSubtitle}`.
+ *
+ * They are read from the `SavedStateHandle` rather than passed down through this
+ * composable so that they survive a rotation and process death, and so that
+ * `:feature:search` needs to know nothing but the route.
  */
 @Composable
 fun ArtistRoute(
@@ -31,6 +45,15 @@ fun ArtistRoute(
         onBack = onBack,
         onAlbumClick = onOpenAlbum,
         onPull = viewModel::onPull,
+        onPullArtist = viewModel::onPullArtist,
+        onRetryDiscography = viewModel::refreshDiscography,
+        onPlay = viewModel::onPlay,
+        onShuffle = viewModel::onShuffle,
+        onPlayAlbum = viewModel::onPlayAlbum,
+        onToggleFavourite = viewModel::onToggleFavourite,
+        onMonitorArtistChange = viewModel::onMonitorArtistChange,
+        onConfirmRequest = viewModel::onConfirmRequest,
+        onDismissRequestSheet = viewModel::onDismissRequestSheet,
         modifier = modifier,
     )
 }

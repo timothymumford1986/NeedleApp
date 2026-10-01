@@ -38,6 +38,7 @@ import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
 import app.needler.core.domain.model.TrackFetchHandle
 import app.needler.core.domain.model.TrackKey
+import app.needler.core.domain.repository.DownloadedAlbumOrder
 import app.needler.core.domain.repository.PinRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -116,13 +117,37 @@ public class DefaultPinRepository(
                 // An unmeasurable volume reports zero free rather than a guess. Guessing low deletes
                 // a healthy device's music and guessing high fills it, so the eviction pass suspends
                 // itself instead - see `canCacheBytes`.
+                //
+                // The flag beside it is what stops the *warning* drawing the opposite conclusion from
+                // the same reading. Zero-because-unreadable and zero-because-full are the same number
+                // and opposite situations, and without the flag the Storage screen told a user whose
+                // StatFs had thrown that their device was low on space and to free about 2 GB.
                 deviceFreeBytes = if (FreeSpaceFloor.isUnknown(free)) 0L else free,
                 freeSpaceFloorBytes = deviceFreeSpace.floorBytes(),
+                freeSpaceUnknown = FreeSpaceFloor.isUnknown(free),
             )
         }
 
-    override fun observeDownloadedAlbums(): Flow<List<DownloadedAlbum>> =
-        pinDao.observeDownloadedAlbums().map { rows -> rows.map(EntityMappers::downloadedAlbum) }
+    /**
+     * Downloaded albums, in the order the caller asked for, one window at a time.
+     *
+     * Both orderings are statements rather than one statement plus a Kotlin sort, because a page taken
+     * in one order and re-sorted in another is a page of the wrong albums: size-ordered page one
+     * alphabetised is the twenty largest downloads in title order, and its membership moves as a
+     * download grows. The browse tree used to read every download and sort by title for exactly that
+     * reason, which is the whole-table read this replaces.
+     */
+    override fun observeDownloadedAlbums(
+        order: DownloadedAlbumOrder,
+        limit: Int,
+        offset: Int,
+    ): Flow<List<DownloadedAlbum>> = when (order) {
+        DownloadedAlbumOrder.LARGEST_FIRST ->
+            pinDao.observeDownloadedAlbumsPaged(limit, offset)
+
+        DownloadedAlbumOrder.ALPHABETICAL_BY_TITLE ->
+            pinDao.observeDownloadedAlbumsByTitlePaged(limit, offset)
+    }.map { rows -> rows.map(EntityMappers::downloadedAlbum) }
 
     override fun observeStoragePreferences(): Flow<StoragePreferences> =
         settingsStore.storage.map { settings: StorageSettings ->

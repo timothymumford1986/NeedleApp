@@ -21,6 +21,10 @@ public interface SearchRepository {
     /**
      * Local FTS over the mirror (`album_fts`, `track_fts`). Emits immediately, works offline, and must
      * return in under 50 ms for a 10,000-album library.
+     *
+     * Artists are part of this, and are found by name rather than by the leading word of their sort
+     * name: "wonder" must return "Oh Wonder" when the mirror holds their records, because an owned
+     * artist missing from an artist search reads as music the app has lost.
      */
     public fun searchLocal(query: String, limit: Int = 50): Flow<LocalSearchResults>
 
@@ -39,7 +43,14 @@ public interface SearchRepository {
         limitAlbums: Int = 20,
     ): Outcome<CatalogueSearchResults>
 
-    /** One page of a single bucket, via `GET /api/v1/search/{artists|albums}`. */
+    /**
+     * One page of a single bucket, via `GET /api/v1/search/{artists|albums}`, per REQUIREMENTS.md rule
+     * 5.
+     *
+     * This is what the "show all" row under a capped catalogue block calls, and then calls again for
+     * each further page. The combined search of rule 2 caps each bucket so the first screenful arrives
+     * quickly; everything past that cap comes from here.
+     */
     public suspend fun searchCatalogueBucket(
         bucket: SearchBucket,
         query: String,

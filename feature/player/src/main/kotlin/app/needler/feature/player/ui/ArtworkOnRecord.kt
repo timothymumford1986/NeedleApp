@@ -116,16 +116,28 @@ data class ArtworkOnRecordMetrics(
             artShape = NeedlerTheme.shapes.artworkHero,
         )
 
-        /** The tablet sidebar: a 250 dp sleeve under a 270 dp disc, in a 336 by 300 dp box. */
+        /**
+         * The tablet sidebar: a 250 dp sleeve under a 270 dp disc, in a 336 by 300 dp box.
+         *
+         * @param scale multiplies every measurement. 1f is the pack, exactly, and is what a tablet
+         *   draws. Anything less is a panel that has less height than screen 09 has - a phone turned to
+         *   landscape reaches `WindowWidthSizeClass.Expanded` at 844 dp wide and composes this sidebar
+         *   into 390 dp of height, where the pack's 300 dp box leaves nothing for the transport. Scaling
+         *   the whole set keeps the sleeve, the disc and the offsets in proportion; scaling only the box
+         *   would clip a record.
+         */
         @Composable
-        fun sidebar(): ArtworkOnRecordMetrics = ArtworkOnRecordMetrics(
-            artSize = 250.dp,
-            discSize = 270.dp,
-            discOffsetX = 66.dp,
-            artOffsetY = 25.dp,
-            discOffsetY = 15.dp,
-            boxHeight = 300.dp,
+        fun sidebar(scale: Float = 1f): ArtworkOnRecordMetrics = ArtworkOnRecordMetrics(
+            artSize = 250.dp * scale,
+            discSize = 270.dp * scale,
+            discOffsetX = 66.dp * scale,
+            artOffsetY = 25.dp * scale,
+            discOffsetY = 15.dp * scale,
+            boxHeight = SIDEBAR_BOX_HEIGHT * scale,
             artShape = NeedlerTheme.shapes.artworkHeroTablet,
         )
+
+        /** The pack's own box height for [sidebar], and the denominator a scale is worked out from. */
+        val SIDEBAR_BOX_HEIGHT: Dp = 300.dp
     }
 }

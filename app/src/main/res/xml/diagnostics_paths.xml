@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The one directory the diagnostics log may be shared out of.
+
+  REQUIREMENTS.md "Observability" requires the log to be shareable as a file for
+  bug reports and to "never leave the device automatically". A FileProvider is
+  what makes the first true without breaking the second: the file lives in the
+  app's own cache, and a share grants one consumer a read URI for it at the
+  moment the user taps share. Nothing is world-readable and nothing is uploaded.
+
+  The path is narrowed to `diagnostics/` rather than the whole cache on purpose.
+  The audio store is app-private too, and a provider rooted at the cache would
+  hand any consumer that asked a way to read cached music by guessing a path.
+-->
+<paths>
+    <cache-path
+        name="diagnostics"
+        path="diagnostics/" />
+</paths>

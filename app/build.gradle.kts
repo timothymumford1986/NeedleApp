@@ -103,6 +103,12 @@ dependencies {
     // Binding a MediaController to the session owned by :player:service.
     implementation(libs.media3.session)
 
+    // The phone half of the Wear link. REQUIREMENTS.md "Surfaces beyond the app
+    // > Wear OS": the watch is a client of a data-layer bridge rather than of
+    // the Media3 session, so the publisher and the command listener live here,
+    // beside the MediaController binding they read from.
+    implementation(libs.playServices.wearable)
+
     implementation(libs.kotlinx.coroutines.android)
 
     // Hilt instrumented testing is intentionally not wired up yet. When the

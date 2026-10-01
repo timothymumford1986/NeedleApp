@@ -62,6 +62,19 @@ enum class TransportSize(
  * would otherwise be reachable from no surface at all. That is the one deliberate departure from the
  * transport row as drawn, and it costs no route to the crate.
  *
+ * ## Off is not the same as unavailable
+ *
+ * Shuffle and Repeat have three appearances, not two, and they were drawn with two. Their "on" colour is
+ * the accent; their "off" colour was [app.needler.core.design.theme.NeedlerColors.textMuted], the same
+ * `#6f7a68` the disabled state uses - so an inactive shuffle button looked exactly like an inoperable
+ * one, at 4.21:1 on the canvas and 3.82:1 on the sidebar's surface, and a device audit reported both as
+ * hard to find at all. REQUIREMENTS.md keeps that value as drawn *for what the pack uses it for* -
+ * "placeholders, timecodes, disabled text, inactive nav items" - and a live control is none of those.
+ *
+ * So off is now `textSecondary` (`#a8b3a0`), which is already in the palette, already carries the pack's
+ * secondary text, and is findable; muted is kept for [enabled] false, which is precisely the disabled
+ * text the token is for. No new colour, and the three states now look like three states.
+ *
  * @param enabled false when nothing is loaded. The row is still drawn, because a transport that
  *   vanishes when the crate empties makes the screen jump; the buttons simply do nothing and are
  *   announced as unavailable.
@@ -95,7 +108,11 @@ fun TransportRow(
             visualSize = size.sideButton,
         ) {
             PlayerShuffleIcon(
-                tint = if (shuffleEnabled && enabled) colors.accent else colors.textMuted,
+                tint = when {
+                    !enabled -> colors.textMuted
+                    shuffleEnabled -> colors.accent
+                    else -> colors.textSecondary
+                },
                 size = size.sideIcon,
             )
         }
@@ -146,7 +163,11 @@ fun TransportRow(
             visualSize = size.sideButton,
         ) {
             PlayerRepeatIcon(
-                tint = if (repeatMode != RepeatMode.OFF && enabled) colors.accent else colors.textMuted,
+                tint = when {
+                    !enabled -> colors.textMuted
+                    repeatMode != RepeatMode.OFF -> colors.accent
+                    else -> colors.textSecondary
+                },
                 size = size.sideIcon,
                 one = repeatMode == RepeatMode.ONE,
             )

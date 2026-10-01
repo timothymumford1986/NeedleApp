@@ -21,25 +21,35 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerChevronDownIcon
-import app.needler.core.design.component.NeedlerFormatBadge
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.theme.NeedlerTheme
+import app.needler.core.domain.model.ArtistMbid
+import app.needler.core.domain.model.StreamRung
 import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.feature.player.PlayerUiState
 import app.needler.feature.player.ui.ArtworkOnRecord
 import app.needler.feature.player.ui.ArtworkOnRecordMetrics
-import app.needler.feature.player.ui.OutputChip
+import app.needler.feature.player.ui.FavouriteButton
 import app.needler.feature.player.ui.PlayerQueueIcon
+import app.needler.feature.player.ui.QualityTags
 import app.needler.feature.player.ui.Scrubber
+import app.needler.feature.player.ui.SessionControls
+import app.needler.feature.player.ui.SleepTimerChoice
+import app.needler.feature.player.ui.TrackByline
 import app.needler.feature.player.ui.TransportRow
 import app.needler.feature.player.ui.TransportSize
 
 /**
  * Now Playing, screen 07.
  *
- * Artwork on its record, the title with its format badge, elapsed and remaining in tabular numerals,
+ * Artwork on its record, the title, the quality tag pair, elapsed and remaining in tabular numerals,
  * the scrub bar, the transport, and the output named plainly underneath - "so a user never wonders
  * where sound is going".
+ *
+ * The pack draws one format badge beside the title. It is a pair now, on its own line - see
+ * [QualityTags] for why one badge could not answer the question it appeared to: what is playing and
+ * what the server would send are different facts whenever a rung transcodes or a download exists, and
+ * the badge silently showed the library's format in both cases.
  *
  * Stateless, like `ConnectScreen`: it takes a [PlayerUiState] and a handful of callbacks, which is
  * what lets every state of it be screenshot and asserted from a literal value with no session, no
@@ -51,10 +61,14 @@ import app.needler.feature.player.ui.TransportSize
  * placeholder tint carrying "Nothing playing", the record holds still, both timecodes read `--:--`,
  * the scrub bar is inert and the transport is disabled but still drawn - a transport that disappears
  * when the crate empties makes the screen jump the moment a listener reaches the end of an album.
- * The output chip stays, because where sound *would* go is still worth knowing.
+ * The output chip stays, because where sound *would* go is still worth knowing, and so does the
+ * sleep-timer chip, because the timer belongs to the session rather than to the track. The heart does
+ * not: there is nothing to favourite.
  *
  * @param progress a lambda, not a value. See [Scrubber] for why: it keeps the several-times-a-second
  *   position tick out of this composable and inside the two labels that actually show it.
+ * @param onOpenArtist the artist's page. `:app` supplies it; see [TrackByline] for why the line is
+ *   drawn as plain text until the artist has been resolved to an MBID.
  */
 @Composable
 fun NowPlayingScreen(
@@ -69,7 +83,12 @@ fun NowPlayingScreen(
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
     onChooseOutput: () -> Unit,
+    onToggleFavourite: () -> Unit,
+    onChooseSleepTimer: (SleepTimerChoice) -> Unit,
+    onOpenArtist: (ArtistMbid) -> Unit,
     modifier: Modifier = Modifier,
+    onOverrideQuality: ((StreamRung) -> Unit)? = null,
+    onClearQualityOverride: (() -> Unit)? = null,
 ) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
@@ -116,17 +135,45 @@ fun NowPlayingScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.semantics { heading() },
                     )
-                    Text(
-                        text = state.subtitle,
-                        style = typography.bodyLarge,
-                        color = colors.textSecondary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
+                    val artist: ArtistMbid? = state.artistMbid
+                    if (state.hasTrack) {
+                        TrackByline(
+                            artistName = state.artistName,
+                            albumTitle = state.albumTitle,
+                            // The form the crate rows use for their optional accessibility
+                            // actions: a nullable lambda from an `if`, with no inference to do.
+                            onOpenArtist = if (artist == null) {
+                                null
+                            } else {
+                                { onOpenArtist(artist) }
+                            },
+                            style = typography.bodyLarge,
+                        )
+                    } else {
+                        Text(
+                            text = state.subtitle,
+                            style = typography.bodyLarge,
+                            color = colors.textSecondary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                // Beside the title, where every player puts it and where the thing being favourited is
+                // named. Absent with nothing playing: there is no track to star.
+                if (state.hasTrack) {
+                    FavouriteButton(
+                        isFavourite = state.isFavourite,
+                        onToggle = onToggleFavourite,
                     )
                 }
-                val badge: String? = state.formatBadge
-                if (badge != null) NeedlerFormatBadge(format = badge)
             }
+
+            QualityTags(
+                state = state,
+                onSelectRung = onOverrideQuality,
+                onClearRung = onClearQualityOverride,
+            )
 
             Scrubber(
                 progress = progress,
@@ -135,7 +182,9 @@ fun NowPlayingScreen(
                 enabled = state.hasTrack,
             )
 
-            val error: String? = state.errorMessage
+            // Playback first: a track that will not play is the more urgent of the two, and a
+            // refused star is still true on the next frame.
+            val error: String? = state.errorMessage ?: state.favouriteErrorMessage
             if (error != null) {
                 Text(
                     text = error,
@@ -162,9 +211,13 @@ fun NowPlayingScreen(
                 enabled = state.hasTrack,
             )
 
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                OutputChip(target = state.output, onClick = onChooseOutput, emphasised = true)
-            }
+            SessionControls(
+                output = state.output,
+                onChooseOutput = onChooseOutput,
+                timer = state.sleepTimer,
+                onChooseSleepTimer = onChooseSleepTimer,
+                emphasised = true,
+            )
         }
     }
 }

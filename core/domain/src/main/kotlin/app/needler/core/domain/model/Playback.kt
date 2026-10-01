@@ -241,8 +241,37 @@ public enum class CrossfadeDuration(public val duration: Duration) {
     TWELVE_SECONDS(12.seconds),
 }
 
-/** The sleep timer. Not drawn in the design pack; the requirement is end-of-track or a duration. */
+/**
+ * The sleep timer.
+ *
+ * Not drawn in the design pack. REQUIREMENTS.md "Player features" gives the whole requirement in five
+ * words - "End of track or a duration" - so both arms exist here and nothing else does.
+ *
+ * ## Why a duration becomes an instant
+ *
+ * [At] holds the moment to stop at, not the length the user picked. A remaining duration has to be
+ * counted down by something, and the something is always wrong: a countdown that ticks while playback
+ * is paused stops a track the listener came back to, and one that stops ticking is not a sleep timer
+ * at all - it is a play-time budget. A wall-clock instant is the same answer from every surface, at
+ * any moment, with nobody counting.
+ *
+ * The cost of that choice is that the *choice* is not recoverable: nothing here records that "30
+ * minutes" was tapped rather than "45", and a UI that wants to light up the pill the user pressed has
+ * to infer it from what is left. That is a presentation problem and is solved in the presentation
+ * layer, deliberately, rather than by storing a duration the domain would then have to keep honest.
+ *
+ * ## Why it is session state
+ *
+ * A timer is armed against the thing that is playing and dies with it. Persisted, one set last night
+ * is still armed this morning and already elapsed, so the first track of the day stops itself - which
+ * reads as the app refusing to play. See `DefaultPlaybackSettingsRepository`, which holds this and the
+ * playback speed in memory for exactly that reason.
+ */
 public sealed interface SleepTimer {
+
+    /** True when a stop is scheduled at all, of either kind. */
+    public val isArmed: Boolean get() = this != Off
+
     public data object Off : SleepTimer
 
     /** Stop when the current track finishes. */
@@ -351,9 +380,29 @@ public data class PlaybackPreferences(
     val speed: PlaybackSpeed = PlaybackSpeed.Normal,
     val sleepTimer: SleepTimer = SleepTimer.Off,
     /**
-     * Stream quality. Original by default; the MP3 320 option is hidden entirely unless
-     * [ServerCapabilities.transcodingAvailable] is true.
+     * The ceiling for streaming on an unmetered connection. [StreamRung.ORIGINAL] by default.
+     *
+     * REQUIREMENTS.md "Streaming": "Default stream quality is Original". There is nothing to save on
+     * Wi-Fi and a scarce, shared transcode slot to spend, so the unmetered rung does not spend one
+     * unless the user moves it.
      */
-    val streamQuality: StreamQualityPreference = StreamQualityPreference.ORIGINAL,
+    val wifiQuality: StreamRung = StreamRungs.Default.wifi,
+
+    /**
+     * The ceiling for streaming while metered. [StreamRung.MP3_320] by default, which is the value
+     * the retired "Stream MP3 320 on mobile data" toggle already stored.
+     */
+    val dataQuality: StreamRung = StreamRungs.Default.data,
     val scrobblingEnabled: Boolean = true,
-)
+) {
+    /**
+     * The two rungs as one value, for the resolver.
+     *
+     * Derived rather than stored so the pair and the fields cannot disagree: they are one decision
+     * split across two networks, and
+     * [app.needler.core.domain.usecase.ResolvePlayableSourceUseCase] takes the pair because choosing
+     * between them is its job, not its caller's.
+     */
+    public val streamRungs: StreamRungs
+        get() = StreamRungs(wifi = wifiQuality, data = dataQuality)
+}

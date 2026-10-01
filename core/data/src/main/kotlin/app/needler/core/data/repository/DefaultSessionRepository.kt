@@ -29,6 +29,8 @@ import app.needler.core.network.v1.dto.AppPasswordListDto
 import app.needler.core.network.v1.dto.AuthResponseDto
 import app.needler.core.network.v1.dto.DeviceSessionResponseDto
 import app.needler.core.network.v1.dto.UserDto
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -97,6 +99,11 @@ public class DefaultSessionRepository(
      * or `/api/v1/status`, however much they look like health checks: both sit behind the bearer
      * middleware and answer `401` unauthenticated, so a correct address and a typo are
      * indistinguishable. A wrong URL must fail here, on the Connect screen, never later.
+     *
+     * When the user typed no scheme there is more than one address to try, so the probe walks
+     * [ServerUrl.ladder] and the first rung that answers wins - that rung's `baseUrl` is what
+     * comes back, and what `connect` then signs in against. A certificate the user has not
+     * trusted ends the walk rather than falling through to cleartext.
      */
     override suspend fun probeServer(rawUrl: String): Outcome<ServerProbe> {
         val parsed: ServerUrlResult = ServerUrl.parse(rawUrl)
@@ -106,22 +113,49 @@ public class DefaultSessionRepository(
             )
             is ServerUrlResult.Valid -> parsed.url
         }
-        credentials.saveServerUrl(url)
-
-        val call = networkCall { v1.authProviders() }
-        return when (call) {
-            is Outcome.Failure -> Outcome.Failure(probeFailure(call.error, url))
-            is Outcome.Success -> Outcome.Success(
-                ServerProbe(
-                    identity = ServerIdentity(baseUrl = url.baseUrl),
-                    apiVersion = null,
-                    // Whether the Subsonic shim is switched on is behind the bearer, so the Connect
-                    // screen cannot know it yet. It is discovered by `negotiateCapabilities` right
-                    // after sign-in, and that is where the "ask an admin" message comes from.
-                    subsonicEnabled = false,
-                ),
-            )
+        var lastFailure: NeedlerError? = null
+        for (candidate in url.ladder()) {
+            currentCoroutineContext().ensureActive()
+            credentials.saveServerUrl(candidate)
+            when (val call = networkCall { v1.authProviders() }) {
+                is Outcome.Success -> return Outcome.Success(
+                    ServerProbe(
+                        identity = ServerIdentity(baseUrl = candidate.baseUrl),
+                        apiVersion = null,
+                        // Whether the Subsonic shim is switched on is behind the bearer, so the
+                        // Connect screen cannot know it yet. It is discovered by
+                        // `negotiateCapabilities` right after sign-in, and that is where the
+                        // "ask an admin" message comes from.
+                        subsonicEnabled = false,
+                    ),
+                )
+                is Outcome.Failure -> {
+                    val failure: NeedlerError = probeFailure(call.error, candidate)
+                    if (endsTheLadder(failure)) return Outcome.Failure(failure)
+                    lastFailure = failure
+                }
+            }
         }
+
+        // Nothing answered. Leave the address the user typed saved rather than whichever rung was
+        // tried last, so Settings and a retry both show what they entered.
+        credentials.saveServerUrl(url)
+        return Outcome.Failure(lastFailure ?: NeedlerError.NotADroppedNeedleServer(url.baseUrl))
+    }
+
+    /**
+     * True for a probe failure that must not be answered by trying the next rung.
+     *
+     * An untrusted or changed certificate means TLS *worked* and the user has a decision to make.
+     * Falling through to cleartext would hide that prompt and quietly downgrade the connection,
+     * which is the one thing the ladder must never do.
+     */
+    private fun endsTheLadder(error: NeedlerError): Boolean = when (error) {
+        is NeedlerError.CertificateUntrusted,
+        is NeedlerError.CertificateChanged,
+        NeedlerError.Cancelled,
+        -> true
+        else -> false
     }
 
     override suspend fun trustCertificate(certificate: CertificateInfo): Outcome<Unit> {

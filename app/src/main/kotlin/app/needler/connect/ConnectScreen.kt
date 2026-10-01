@@ -89,6 +89,33 @@ data class ConnectProxyCallbacks(
  * user's own words, and Needler mints the app-password itself afterwards. The
  * user never sees one. Nothing else about the field changes.
  *
+ * ## No secret field carries a placeholder
+ *
+ * The pack draws sixteen bullets inside the password field, and that was
+ * transcribed literally as a `placeholder`. It is wrong twice over, which is why
+ * it is gone from all four secret fields here - the account password, the
+ * Cloudflare client secret, the proxy password and each custom header value.
+ *
+ * It is wrong on screen, because a placeholder is what an *empty* field shows:
+ * sixteen bullets are exactly what a filled password field looks like, so the
+ * one field on this screen that must be obviously empty before the user types
+ * was the one field that looked obviously full.
+ *
+ * It is wrong for a screen reader, because a placeholder is a text node inside
+ * the field's decoration. The account password field therefore announced its
+ * label and then sixteen bullet characters, which TalkBack reads out as sixteen
+ * bullets, in place of the guidance a field's supporting text exists to give.
+ *
+ * Masking is not a placeholder's job and never was: `PasswordVisualTransformation`
+ * does it, on the characters the user actually typed. What is left under the
+ * field is the thing REQUIREMENTS.md "Required change to the Connect screen"
+ * asks for - the label `PASSWORD` and the helper text *your Dropped Needle
+ * account password* - which is what someone hesitating over this field needs to
+ * read.
+ *
+ * Nothing about the keyboard changes: every field keeps its `KeyboardType`,
+ * its `ImeAction`, its disabled auto-correct and its place in the focus order.
+ *
  * ## Failures
  *
  * Every failure is rendered inline, above the form, by
@@ -385,7 +412,6 @@ private fun ConnectForm(
             label = "PASSWORD",
             value = state.password,
             onValueChange = onPasswordChange,
-            placeholder = PASSWORD_PLACEHOLDER,
             helperText = "your Dropped Needle account password",
             enabled = !state.connecting,
             visualTransformation = PasswordVisualTransformation(),
@@ -557,7 +583,6 @@ private fun ProxySection(
                     onValueChange = {
                         callbacks.onFieldChange(ProxyField.CloudflareClientSecret, it)
                     },
-                    placeholder = PASSWORD_PLACEHOLDER,
                     helperText = "Kept on this device only, with your other credentials.",
                     enabled = enabled,
                     visualTransformation = PasswordVisualTransformation(),
@@ -587,7 +612,6 @@ private fun ProxySection(
                     label = "PROXY PASSWORD",
                     value = proxy.basicPassword,
                     onValueChange = { callbacks.onFieldChange(ProxyField.BasicPassword, it) },
-                    placeholder = PASSWORD_PLACEHOLDER,
                     enabled = enabled,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
@@ -620,7 +644,6 @@ private fun ProxySection(
                         onValueChange = {
                             callbacks.onCustomHeaderChange(index, draft.name, it)
                         },
-                        placeholder = PASSWORD_PLACEHOLDER,
                         enabled = enabled,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(
@@ -782,9 +805,6 @@ private fun CertificateDetail(certificate: CertificateInfo, modifier: Modifier =
 
 /** The pack's headline, on both screens. */
 private const val HEADLINE = "Point me at your Dropped Needle."
-
-/** The pack draws sixteen bullets in the password field. */
-private const val PASSWORD_PLACEHOLDER = "••••••••••••••••"
 
 /**
  * Vendor-neutral on purpose. Cloudflare Access is the common case, but Authelia, authentik,

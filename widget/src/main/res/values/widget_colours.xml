@@ -38,4 +38,17 @@
     <!-- NeedlerColors.textMuted — #6f7a68. The two timecodes, as drawn. -->
     <color name="needler_widget_text_muted">#FF6F7A68</color>
 
+    <!--
+      NeedlerColors.positive — #bbdb9b. The pull card: its glyph, its percentage
+      and the filled half of its bar.
+
+      REQUIREMENTS.md "Design system" gives this colour one job, "Progress,
+      Ready, on-device check", and the pull card on screens 15 and 18 is drawn
+      almost entirely in it. That is load-bearing rather than decorative: the
+      green appears on a home screen only while the server is actually acquiring
+      something, and a resting card draws the same shapes in
+      needler_widget_text_muted. See PullCardModel.
+    -->
+    <color name="needler_widget_positive">#FFBBDB9B</color>
+
 </resources>

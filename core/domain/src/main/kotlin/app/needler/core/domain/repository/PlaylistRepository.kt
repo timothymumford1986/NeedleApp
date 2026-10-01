@@ -17,8 +17,25 @@ import kotlinx.coroutines.flow.Flow
  */
 public interface PlaylistRepository {
 
-    /** All playlists, alphabetical. */
-    public fun observePlaylists(): Flow<List<Playlist>>
+    /**
+     * Playlists, alphabetical.
+     *
+     * [limit] and [offset] are the window `LibraryRepository.observeAlbumList` and
+     * `LibraryRepository.observeTracks` already take, in the same order and with the same meaning,
+     * so that a caller paging one list pages them all the same way. Before it existed, Android
+     * Auto's `onGetChildren` read every playlist and its pending-edit state on every page turn and
+     * sliced the result in Kotlin - a whole table read to draw twenty rows, which is what
+     * REQUIREMENTS.md "Performance budgets" ("Cold start to library content - Under 1.2 s") is
+     * written against.
+     *
+     * The default is unbounded, because the Playlists screen is one alphabetical list the user
+     * scrolls end to end and a default page size would have silently cut it short. The window is
+     * opt-in.
+     */
+    public fun observePlaylists(
+        limit: Int = Int.MAX_VALUE,
+        offset: Int = 0,
+    ): Flow<List<Playlist>>
 
     public fun observePlaylist(id: PlaylistId): Flow<Playlist?>
 

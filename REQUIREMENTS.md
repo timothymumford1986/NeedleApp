@@ -614,7 +614,25 @@ One saved server, entered as a URL on the Connect screen. Remote access is the u
 - `https://music.yourhome.net`, the placeholder on screen 01
 - `http://192.168.1.50:8688`, plain HTTP on a local network
 - `https://home.net/music`, a sub-path deployment, which the server supports through its `base_path` setting
-- A port-only host with no scheme, defaulted to `http://` and port 8688
+- A bare host with no scheme, such as `mymusic.mydomain.com` or `192.168.1.50`
+
+A typed scheme is obeyed exactly. A bare host has no scheme to obey, so try more than one address
+and let the first that answers win:
+
+| Host shape | Order tried |
+| --- | --- |
+| A dotted name (`mymusic.mydomain.com`) | `https://`, then `http://` on 8688, then `http://` on 80 |
+| An IP literal or single label (`192.168.1.50`, `nas`) | `http://` on 8688, then `http://` on 80, then `https://` |
+
+A dotted name is reachable from the internet and almost certainly has a certificate, so TLS is
+tried first. An IP literal or a single label is a box on the local network, where DroppedNeedle's
+own port is the likeliest answer and TLS the least likely — that order keeps a LAN address
+answering on the first attempt rather than waiting out a TLS attempt that was never going to work.
+A typed port is carried onto every attempt.
+
+An untrusted or changed certificate ends the walk instead of falling through to the next address:
+TLS worked, and the user has a decision to make. Falling back to cleartext there would hide the
+fingerprint prompt and silently downgrade the connection.
 
 Normalise by trimming trailing slashes and probing **`GET /api/v1/auth/providers`** before accepting: it is public, so it answers before any credential exists. `GET /health` at the app root is the fallback for telling "not a DroppedNeedle" apart from "a DroppedNeedle that is unhappy". Do not probe `/api/v1/version` or `/api/v1/status` — both require a bearer, so on the Connect screen they answer `401` for a correct address and a typo alike. A wrong URL must fail on the Connect screen, never later.
 

@@ -42,8 +42,28 @@ public data class DownloadTaskDto(
     @SerialName("release_mbid") val releaseMbid: String? = null,
     @SerialName("release_track_mbid") val releaseTrackMbid: String? = null,
     @SerialName("recording_mbid") val recordingMbid: String? = null,
-    @SerialName("artist_name") val artistName: String = "",
-    @SerialName("album_title") val albumTitle: String = "",
+    /**
+     * The artist as the server recorded it against this task. See [albumTitle] for why it is
+     * nullable rather than defaulting to the empty string.
+     */
+    @SerialName("artist_name") val artistName: String? = null,
+    /**
+     * The album's title as the server recorded it against this task.
+     *
+     * **Nullable, and a blank string means exactly what absent means.** This field is frequently
+     * missing on this lane, and it used to default to `""`, which made "the server sent nothing"
+     * indistinguishable from "the server sent an empty title". That is how the Pulls screen came to
+     * draw 34 blank rows: the emptiness was stored in the `album` mirror as though it were a fact,
+     * and a stored blank is sticky in a way an absence is not. Modelled as `String?` so a reader has
+     * to decide, and so the decision is visible at the call site.
+     *
+     * It is a **hint**, not the thing a screen renders. REQUIREMENTS.md "Identity model" makes the
+     * release-group MBID the join key, and the title the Pulls screen draws is resolved from the
+     * `album` mirror on that key. This value exists to fill that mirror in when it holds nothing for
+     * a release group the downloads lane has just told us about — see
+     * `DefaultPullRepository.refreshPulls`.
+     */
+    @SerialName("album_title") val albumTitle: String? = null,
     @SerialName("track_title") val trackTitle: String? = null,
     @SerialName("year") val year: Int? = null,
     @SerialName("status") val status: String = "",

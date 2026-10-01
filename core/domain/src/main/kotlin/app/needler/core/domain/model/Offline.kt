@@ -118,6 +118,22 @@ public data class StorageUsage(
      * Defaults to the minimum, which is the honest answer when the volume could not be measured.
      */
     val freeSpaceFloorBytes: Long = MINIMUM_FREE_SPACE_FLOOR_BYTES,
+    /**
+     * True when the volume's free space could not be measured at all.
+     *
+     * Distinct from "zero bytes free", and the distinction is the whole point. `StatFs` can throw -
+     * adopted storage and multi-user devices are the usual reasons - and the producer reports zero
+     * in that case because it must report something. Without this flag the two are indistinguishable
+     * downstream, and everything that reads [deviceFreeBytes] concludes the device is full.
+     *
+     * REQUIREMENTS.md "Storage, and why there is no budget" point 4 already fixes the policy for the
+     * unmeasurable case: a failed reading "**suspends** the policy rather than guessing", because
+     * "guessing low deletes a healthy device's music, and guessing high fills the device". The
+     * eviction planner honours that. The warning did not, and told the user to free 2 GB on a device
+     * whose free space was simply unreadable - advice that is not merely useless but alarming, and
+     * unfalsifiable from inside the app.
+     */
+    val freeSpaceUnknown: Boolean = false,
 ) {
     /** Audio only: what the "Music kept on device" row shows before the artwork line. */
     public val audioBytes: Long get() = downloadedBytes + cachedBytes
@@ -133,7 +149,8 @@ public data class StorageUsage(
      * and when they do the correct response is to tell the user they are low on space and offer to
      * remove albums - never to evict a download they chose to keep.
      */
-    public val deviceLowOnSpace: Boolean get() = deviceFreeBytes < freeSpaceFloorBytes
+    public val deviceLowOnSpace: Boolean
+        get() = !freeSpaceUnknown && deviceFreeBytes < freeSpaceFloorBytes
 
     /**
      * How far below the floor the device is, in bytes; zero when it is above it.
@@ -142,11 +159,7 @@ public data class StorageUsage(
      * not close it, because the occupant is usually the downloaded tier or other apps' files.
      */
     public val freeSpaceShortfallBytes: Long
-        get() = if (deviceFreeBytes < freeSpaceFloorBytes) {
-            freeSpaceFloorBytes - deviceFreeBytes
-        } else {
-            0L
-        }
+        get() = if (deviceLowOnSpace) freeSpaceFloorBytes - deviceFreeBytes else 0L
 
     /**
      * Bytes a "Clear cached music" would free. Safe to offer behind a single tap: these bytes are

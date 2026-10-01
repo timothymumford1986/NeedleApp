@@ -50,5 +50,30 @@ dependencies {
     // The data layer, for syncing on-device audio and session state from the phone.
     implementation(libs.playServices.wearable)
 
+    // The watch's own playback. REQUIREMENTS.md "Surfaces beyond the app > Wear
+    // OS" ends Wear's v1 scope with "playback of on-device audio synced from the
+    // phone over the data layer", and a watch that plays with its screen off
+    // needs a media session in a foreground service — which is what
+    // media3-session provides and what the platform's own media controls drive.
+    //
+    // This is a much smaller slice of Media3 than :player:service takes, and the
+    // omissions are deliberate:
+    //   * no media3-datasource-okhttp and no okhttp, because the watch reads
+    //     files out of its own store and never a URL. It has no server
+    //     credentials and no route to DroppedNeedle, by design.
+    //   * no media3-cast: there is no output picker on a watch.
+    //   * no media3-database, for the reason :player:service gives — it exists
+    //     to back SimpleCache's index, which REQUIREMENTS.md rules out.
+    // media3-common is named as well as depended on transitively because
+    // MediaItem, MediaMetadata and Player are used directly.
+    implementation(libs.media3.common)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
+    // MediaSessionService extends LifecycleService. It arrives transitively with
+    // media3-session; named here for the same reason :player:service names it —
+    // the service class depends on it directly and a transitive compile
+    // dependency is not a contract.
+    implementation(libs.androidx.lifecycle.service)
+
     implementation(libs.kotlinx.coroutines.android)
 }

@@ -83,6 +83,23 @@ class CrateViewModel @Inject constructor(
     }
 
     /**
+     * Dropping one row out of the crate.
+     *
+     * By [app.needler.core.domain.model.QueueItem.id] and not by index, for the reason the id exists: the
+     * same track may legitimately appear twice in the crate, and a track finishing between the tap and
+     * the command shifts every index but no id.
+     *
+     * No optimistic copy, unlike [moveItem]. A drag has to look instant because the finger is already
+     * mid-gesture and a row that springs back reads as a dropped drag; a removal is one tap, the session
+     * echoes it back through `observeQueue` in the same frame budget, and holding a local copy of "this
+     * row is gone" would only create a second thing that can disagree with the session about what is in
+     * the crate.
+     */
+    fun removeItem(itemId: String) {
+        viewModelScope.launch { controller.removeQueueItem(itemId) }
+    }
+
+    /**
      * Clear.
      *
      * Stops playback, because nothing is left to play. The optimistic copy is dropped first so the

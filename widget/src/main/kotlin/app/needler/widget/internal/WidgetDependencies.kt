@@ -2,6 +2,8 @@ package app.needler.widget.internal
 
 import android.content.Context
 import app.needler.core.domain.playback.PlaybackController
+import app.needler.core.domain.repository.LibraryRepository
+import app.needler.core.domain.repository.PullRepository
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -27,15 +29,18 @@ import dagger.hilt.components.SingletonComponent
  * this module, not the other way round, and the one thing another module might legitimately want -
  * a way to nudge the widgets - is [app.needler.widget.NeedlerWidgets].
  *
- * ## What is deliberately not here
+ * ## Three dependencies, and why the list stops there
  *
- * Only [PlaybackController]. REQUIREMENTS.md "Widgets" says the widgets read through the domain
- * repositories and the controller and "never through `:core:data`", and the module's build file
- * declares `:core:domain` alone, so there is no way to break that rule by accident. The recently
- * added and pull-progress widgets on screens 15 and 18 will add `LibraryRepository` and
- * `PullRepository` here when they are written; they are not listed in advance, because an entry
- * point that names a dependency nothing asks for is a dependency the Hilt graph must satisfy at
- * build time for no reason.
+ * REQUIREMENTS.md "Widgets" says the widgets read through the domain repositories and the
+ * [PlaybackController] and "never through `:core:data`", and the module's build file declares
+ * `:core:domain` alone, so there is no way to break that rule by accident. The three named below
+ * are one per widget on screens 15 and 18 and nothing more: an entry point that lists a dependency
+ * no widget asks for is a dependency the Hilt graph must satisfy at build time for no reason, so a
+ * fourth belongs here only when a fourth card needs it.
+ *
+ * None of the three is a use case. A widget places no request, pins nothing and resolves no
+ * playable source - it reads, and it links into the app for anything else - so the use cases in
+ * `:core:domain` have no caller here.
  */
 @EntryPoint
 @InstallIn(SingletonComponent::class)
@@ -50,6 +55,26 @@ public interface WidgetEntryPoint {
      * `NowPlayingWidget`'s KDoc for what that means for a process that comes and goes.
      */
     public fun playbackController(): PlaybackController
+
+    /**
+     * The owned library, for the recently added card on screens 15 and 18.
+     *
+     * Every `observe` on it is served from the Room mirror, which is exactly what makes it safe on a
+     * home screen: REQUIREMENTS.md "Library browse" has all library browsing read the mirror "so it
+     * works identically online and offline", so the newest album is a local query that cannot fail
+     * and cannot block on a server that is switched off. The widget never calls a `refresh` - a
+     * widget must not decide to go to the network; sync does that, on its own schedule.
+     */
+    public fun libraryRepository(): LibraryRepository
+
+    /**
+     * Pulls, for the pull card on screens 15 and 18.
+     *
+     * Also mirror-backed, and also read-only from here. The pollers REQUIREMENTS.md "Polling
+     * schedule" describes are what move the numbers; a widget that called `refreshPulls` itself
+     * would be a home screen quietly polling a server every time a launcher asked it to redraw.
+     */
+    public fun pullRepository(): PullRepository
 }
 
 /** Convenience over [WidgetEntryPoint], so no caller has to name `EntryPointAccessors` twice. */
@@ -59,8 +84,14 @@ internal object WidgetDependencies {
      * @param context any context. The application context is taken from it, because a widget's
      *   context is a receiver's or a Glance session's and neither outlives the work being done.
      */
-    fun playbackController(context: Context): PlaybackController =
-        EntryPointAccessors
-            .fromApplication(context.applicationContext, WidgetEntryPoint::class.java)
-            .playbackController()
+    fun playbackController(context: Context): PlaybackController = entryPoint(context).playbackController()
+
+    /** @param context any context; see [playbackController]. */
+    fun libraryRepository(context: Context): LibraryRepository = entryPoint(context).libraryRepository()
+
+    /** @param context any context; see [playbackController]. */
+    fun pullRepository(context: Context): PullRepository = entryPoint(context).pullRepository()
+
+    private fun entryPoint(context: Context): WidgetEntryPoint =
+        EntryPointAccessors.fromApplication(context.applicationContext, WidgetEntryPoint::class.java)
 }

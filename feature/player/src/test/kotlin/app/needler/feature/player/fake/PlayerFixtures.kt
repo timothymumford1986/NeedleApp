@@ -1,5 +1,8 @@
 package app.needler.feature.player.fake
 
+import app.needler.core.domain.model.Album
+import app.needler.core.domain.model.AlbumState
+import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.AudioFormat
 import app.needler.core.domain.model.CastAvailability
 import app.needler.core.domain.model.FileId
@@ -80,6 +83,26 @@ object PlayerFixtures {
 
     /** A queue row. The id is queue-local, not a track identity: the same track may appear twice. */
     fun item(id: String, track: Track): QueueItem = QueueItem(id = id, track = track)
+
+    /** The MBID the player resolves Submarine's artist to, and therefore what the byline links to. */
+    val mariasMbid: ArtistMbid = ArtistMbid("f4a31f0a-0000-4000-8000-000000000001")
+
+    /**
+     * Submarine as the mirror holds it.
+     *
+     * The player has no artist MBID on a `Track` - only a name - so the byline's destination is resolved
+     * through the album. This is the row that resolution reads.
+     */
+    val submarine: Album = Album(
+        releaseGroupMbid = ReleaseGroupMbid(SUBMARINE),
+        title = "Submarine",
+        artistName = "The Marias",
+        artistMbid = mariasMbid,
+        state = AlbumState.Owned,
+    )
+
+    /** The same album as a server that never matched the artist to MusicBrainz reports it. */
+    val submarineWithoutArtistMbid: Album = submarine.copy(artistMbid = null)
 
     /** The crate exactly as screen 08 draws it: Sienna playing, six up next. */
     val crate: PlayQueue = PlayQueue(

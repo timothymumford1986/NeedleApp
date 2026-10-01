@@ -190,3 +190,28 @@ public enum class WriteOperationTypeDb(public val dbValue: String) {
             entries.firstOrNull { it.dbValue == value } ?: PULL_REQUEST
     }
 }
+
+/**
+ * What a `stream_override` row is attached to. Mirrors `StreamOverrideScope` in `:core:domain`.
+ *
+ * Resolution order is track, then album, then the mode default for the connection - decided by
+ * `ResolvePlayableSourceUseCase.requestedRung`, not here. This enum only says which of the two a row
+ * is about.
+ *
+ * [fromDbValue] falls back to [ALBUM] rather than throwing, on this file's own rule: a row written by
+ * a newer build must not crash a query the UI is collecting. An override read at the wrong scope
+ * simply never matches anything, which is the harmless failure of the two.
+ */
+public enum class StreamOverrideScopeDb(public val dbValue: String) {
+    /** One track, keyed on `TrackKey.canonicalString`. */
+    TRACK("track"),
+
+    /** A whole record, keyed on its release-group MBID. */
+    ALBUM("album"),
+    ;
+
+    public companion object {
+        public fun fromDbValue(value: String?): StreamOverrideScopeDb =
+            entries.firstOrNull { it.dbValue == value } ?: ALBUM
+    }
+}

@@ -10,7 +10,8 @@ import app.needler.core.domain.model.PlaybackSpeed
 import app.needler.core.domain.model.ScrobbleEvent
 import app.needler.core.domain.model.ScrobblePreferences
 import app.needler.core.domain.model.SleepTimer
-import app.needler.core.domain.model.StreamQualityPreference
+import app.needler.core.domain.model.StreamOverrideScope
+import app.needler.core.domain.model.StreamRung
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -64,14 +65,44 @@ public interface PlaybackSettingsRepository {
     public suspend fun setSleepTimer(timer: SleepTimer)
 
     /**
-     * Sets stream quality.
+     * The ceiling for streaming on an unmetered connection.
      *
-     * [StreamQualityPreference.MP3_320_ON_METERED] must only be offered when
+     * Any rung but [StreamRung.ORIGINAL] must only be offered when
      * [app.needler.core.domain.model.ServerCapabilities.transcodingAvailable] is true; the server caps
      * transcoding at one per user and two in total, so it is a scarce resource rather than a free
-     * setting.
+     * setting. The gate is the caller's, because hiding the control is better than failing the tap.
      */
-    public suspend fun setStreamQuality(preference: StreamQualityPreference)
+    public suspend fun setWifiStreamRung(rung: StreamRung)
+
+    /** The same ceiling for a metered connection. Defaults to [StreamRung.MP3_320]. */
+    public suspend fun setDataStreamRung(rung: StreamRung)
+
+    /**
+     * The rung pinned to one track or album, or null when it has none.
+     *
+     * A one-shot read, for the resolver: it runs once per track on the streaming path only, and a
+     * `Flow` there would mean a subscription per play.
+     *
+     * @param id [app.needler.core.domain.model.TrackKey.canonicalString] for
+     *   [StreamOverrideScope.TRACK], the release-group MBID for [StreamOverrideScope.ALBUM].
+     */
+    public suspend fun getStreamOverride(scope: StreamOverrideScope, id: String): StreamRung?
+
+    /** The same value, observed, for a screen that draws what pressing play would fetch. */
+    public fun observeStreamOverride(scope: StreamOverrideScope, id: String): Flow<StreamRung?>
+
+    /**
+     * Pins a rung to one track or album, replacing any rung already pinned to it.
+     *
+     * An override is **absolute** - one value for every connection - and it is **kept** when the item
+     * is downloaded rather than cleared: a local copy always wins while it exists, so the override is
+     * simply dormant, and freeing disk space should not silently revoke a preference the user never
+     * withdrew. See [app.needler.core.domain.model.StreamOverride].
+     */
+    public suspend fun setStreamOverride(scope: StreamOverrideScope, id: String, rung: StreamRung)
+
+    /** Removes the override, returning the item to its album's, or to the mode default. */
+    public suspend fun clearStreamOverride(scope: StreamOverrideScope, id: String)
 
     public suspend fun setScrobblingEnabled(enabled: Boolean)
 

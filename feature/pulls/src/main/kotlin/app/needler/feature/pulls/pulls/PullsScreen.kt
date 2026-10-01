@@ -112,6 +112,24 @@ import kotlin.time.Instant
  * `NeedlerAlbumRow` — something like `secondary`, drawn under the subtitle —
  * would let this row use the component; that is a handover note, because
  * `:core:design` is not this module's to change.
+ *
+ * ## No row draws a blank where a name goes
+ *
+ * Nothing on this screen reads [Pull.albumTitle] directly. Every title slot goes
+ * through [PullsFormat.albumTitle] and every action label through
+ * [PullsFormat.albumPhrase], because the title is blank whenever the `album`
+ * mirror has no name for the release group — on a real device that was 34 of 35
+ * rows, and the queue was unusable: rows with no name, and a **Cancel** whose
+ * content description read "Cancel the pull of " and stopped. REQUIREMENTS.md
+ * "Accessibility" requires every control to carry a content description, and one
+ * that names no target is not one.
+ *
+ * The missing data is fixed where it goes missing —
+ * `DefaultPullRepository.refreshPulls` now takes the title from whichever lane
+ * supplied it — so the fallbacks should be rare. They are not therefore
+ * optional: the mirror can legitimately have nothing for a release group the
+ * server itself cannot name, and a screen that renders a hole in that case is
+ * broken for the one user it happens to.
  */
 @Composable
 fun PullsScreen(
@@ -500,7 +518,7 @@ private fun ActivePullRow(
     val fraction: Float? = pull.progress.fraction
     val percent: Int? = PullsFormat.percent(fraction)
     val spoken: String = PullsFormat.spokenRow(pull, now)
-    val cancelLabel: String = "Cancel the pull of " + pull.albumTitle
+    val cancelLabel: String = "Cancel the pull of " + PullsFormat.albumPhrase(pull)
     val cancellable: Boolean = pull.canCancel
 
     Row(
@@ -532,7 +550,7 @@ private fun ActivePullRow(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                text = pull.albumTitle,
+                text = PullsFormat.albumTitle(pull),
                 style = typography.rowTitle,
                 color = colors.textPrimary,
                 maxLines = 2,
@@ -608,7 +626,7 @@ private fun FinishedPullRow(
 ) {
     val ready: Boolean = pull.state == PullState.COMPLETED
     NeedlerAlbumRow(
-        title = pull.albumTitle,
+        title = PullsFormat.albumTitle(pull),
         subtitle = PullsFormat.subtitle(pull, now),
         onClick = { onOpenAlbum(pull.releaseGroupMbid) },
         contentDescription = PullsFormat.spokenRow(pull, now),
@@ -620,7 +638,7 @@ private fun FinishedPullRow(
             ) {
                 if (ready) {
                     NeedlerStateBadge(badge = NeedlerAlbumBadge.Ready)
-                    RowAction(label = "Play " + pull.albumTitle) {
+                    RowAction(label = "Play " + PullsFormat.albumPhrase(pull)) {
                         NeedlerPrimaryButton(
                             text = "Play",
                             onClick = { onPlayAlbum(pull.releaseGroupMbid) },
@@ -629,7 +647,7 @@ private fun FinishedPullRow(
                         )
                     }
                 } else if (pull.canRetry) {
-                    RowAction(label = "Retry the pull of " + pull.albumTitle) {
+                    RowAction(label = "Retry the pull of " + PullsFormat.albumPhrase(pull)) {
                         NeedlerPillButton(
                             text = "Retry",
                             onClick = { onRetry(pull) },

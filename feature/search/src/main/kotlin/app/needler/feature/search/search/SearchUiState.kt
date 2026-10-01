@@ -1,10 +1,12 @@
 package app.needler.feature.search.search
 
 import app.needler.core.domain.model.Album
+import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.CatalogueLaneState
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.RequestStatus
+import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.SearchSuggestion
 import app.needler.core.domain.model.ServiceStatus
 import app.needler.core.domain.model.Track
@@ -21,16 +23,28 @@ import app.needler.feature.search.common.problemMessage
  * unreachable, catalogue degraded — can be screenshotted and asserted on
  * without a repository, a database or a server.
  *
- * ## One list, not two
+ * ## One merged list, split by state and never by lane
  *
  * [results] is a [UnifiedSearchResults], which is already merged. REQUIREMENTS.md
  * "Search behaviour", rule 3: "Merge on release-group MBID. An album present
  * locally takes the local record and is badged as owned; the catalogue copy is
  * discarded." That merge happens in `UnifiedSearchUseCase`, below this screen
- * and below the ViewModel, so there is deliberately **no** `localAlbums` /
- * `catalogueAlbums` pair here and no branch on the screen that asks which lane a
- * row came from. A row knows its [app.needler.core.domain.model.AlbumState] and
- * that is the whole of it.
+ * and below the ViewModel, so nothing here asks which lane a row arrived from.
+ *
+ * What the screen does ask is what a row's
+ * [app.needler.core.domain.model.AlbumState] is, and [libraryAlbums] /
+ * [catalogueAlbums] split the one merged list on exactly that. This is not the
+ * lane pair rule 3 forbids: a `NotOwned` row is one the mirror holds only as a
+ * cached catalogue record, and an `Acquiring` or `PendingApproval` row that came
+ * back from MusicBrainz half a second ago still belongs with the user's own
+ * music, because they asked for it. The split is "what you have" against "what
+ * you could pull", which is the question the two blocks answer.
+ *
+ * The reason it is split at all is that the un-split list shipped and was
+ * unusable: a search returned two owned albums, then twenty catalogue albums,
+ * and the Songs block landed sixteen swipes below the fold. Owned results lead
+ * now — artists, then albums in the library, then songs, then everything that
+ * would have to be pulled.
  *
  * ## Results may lag the field by one keystroke
  *
@@ -82,6 +96,33 @@ data class SearchUiState(
     /** A pull is in flight, so the Pull buttons are disabled rather than tappable twice. */
     val busy: Boolean = false,
 
+    /**
+     * The album whose request sheet is open, or null when none is.
+     *
+     * REQUIREMENTS.md "Placing a request" requires the `monitor_artist` flag to be
+     * "a secondary toggle on the request sheet", so a **Pull** on a result opens
+     * `:core:design`'s [app.needler.core.design.component.NeedlerRequestSheet]
+     * rather than firing the request where it is tapped. It is still one tap to
+     * reach — the requirement's "requesting is one tap on any un-owned album" — and
+     * the confirm is one thumb-movement away.
+     */
+    val pullSheetAlbum: Album? = null,
+
+    /**
+     * The `monitor_artist` toggle on that sheet.
+     *
+     * Held here rather than inside the sheet because the sheet component hoists it
+     * deliberately: the flag has to reach `RequestAlbumUseCase`, and a value that
+     * lived in the sheet would be lost to a rotation halfway through a decision.
+     */
+    val monitorArtist: Boolean = false,
+
+    /**
+     * What the per-bucket "show all" path has done so far, one entry per bucket
+     * REQUIREMENTS.md rule 5 can page.
+     */
+    val paging: SearchPaging = SearchPaging(),
+
     /** The result of the last action, or an explanation the screen owes the user. */
     val notice: SearchNotice? = null,
 ) {
@@ -90,6 +131,46 @@ data class SearchUiState(
 
     /** Owned and un-owned in one list, already merged on release-group MBID. */
     val albums: List<Album> get() = results.albums
+
+    /**
+     * The albums this server already has, in any state the user put them in:
+     * owned, pinned, being pulled, waiting for approval, or failed.
+     *
+     * Computed once per state instance rather than on every read: the screen
+     * reaches for it from inside a `LazyListScope` key lambda, which runs per
+     * row, and a getter that filtered the whole list there would be quadratic on
+     * a long result.
+     */
+    val libraryAlbums: List<Album> by lazy {
+        results.albums.filter { album -> album.state != AlbumState.NotOwned }
+    }
+
+    /** The albums that would have to be pulled. Same reasoning as [libraryAlbums] for the `lazy`. */
+    val catalogueAlbums: List<Album> by lazy {
+        results.albums.filter { album -> album.state == AlbumState.NotOwned }
+    }
+
+    /**
+     * The artists to draw, capped until the user asks for all of them.
+     *
+     * The cap is the affordance rule 5 needed and never had: a block that shows
+     * everything it holds has nowhere to put a "show all", and without one the
+     * bucket endpoint's `limit` and `offset` are unreachable from the UI.
+     */
+    val visibleArtists: List<Artist>
+        get() = if (paging.isExpanded(SearchBucket.ARTISTS)) {
+            artists
+        } else {
+            artists.take(ARTIST_PREVIEW)
+        }
+
+    /** The un-owned albums to draw, capped the same way and for the same reason. */
+    val visibleCatalogueAlbums: List<Album>
+        get() = if (paging.isExpanded(SearchBucket.ALBUMS)) {
+            catalogueAlbums
+        } else {
+            catalogueAlbums.take(CATALOGUE_ALBUM_PREVIEW)
+        }
 
     /**
      * Songs, which are library-only.
@@ -146,9 +227,81 @@ data class SearchUiState(
      * session, still in flight — the list holds library rows only, and claiming
      * MusicBrainz for them would be a small, constant lie on the one screen
      * whose whole job is to be honest about which lane a result came from.
+     *
+     * It captions the *to pull* block. The library block is captioned
+     * [FROM_LIBRARY] unconditionally, because that is what being in the library
+     * means.
      */
     val albumsSourceNote: String
         get() = if (catalogue is CatalogueLaneState.Ready) FROM_CATALOGUE else FROM_LIBRARY
+
+    /**
+     * Whether the catalogue can be asked for another page at all.
+     *
+     * REQUIREMENTS.md rule 4: offline, or with a stale session, "show library
+     * results only and state plainly that catalogue search needs a connection".
+     * A "more from MusicBrainz" row in that state would offer a call that cannot
+     * be made, so the affordance is absent rather than tappable-and-failing, and
+     * [catalogueNote] is what says why.
+     */
+    val canPageCatalogue: Boolean
+        get() = !offline && catalogue is CatalogueLaneState.Ready
+
+    /**
+     * The one row under a capped block: what it says and whether it does
+     * anything, or null when the block needs no such row.
+     *
+     * Four states in one place, because they are mutually exclusive and the row
+     * has to pick one: a page in flight, a note left by the last page, rows held
+     * back by the preview cap, and "there may be more upstream". The order
+     * matters — a note from a failed page must not be replaced by a cheerful
+     * "show all" the next recomposition.
+     *
+     * "More from MusicBrainz" is offered only once the block has been expanded,
+     * which is the same as saying only once the block was long enough to be
+     * capped. A search that found one artist is a search that found the artist;
+     * putting a "more from MusicBrainz" under it would decorate every result on
+     * the screen with an invitation to go looking for a worse match.
+     */
+    fun moreRow(bucket: SearchBucket): SearchMoreRow? {
+        val bucketPaging: BucketPaging = paging.of(bucket)
+        val held: Int = when (bucket) {
+            SearchBucket.ARTISTS -> artists.size - visibleArtists.size
+            SearchBucket.ALBUMS -> catalogueAlbums.size - visibleCatalogueAlbums.size
+        }
+        val total: Int = when (bucket) {
+            SearchBucket.ARTISTS -> artists.size
+            SearchBucket.ALBUMS -> catalogueAlbums.size
+        }
+        val note: String? = bucketPaging.note
+        return when {
+            bucketPaging.loading -> SearchMoreRow(label = LOOKING_FOR_MORE, enabled = false)
+
+            // A failure is tappable — tapping retries the same page. The end of
+            // the list is not: there is nothing left to ask for.
+            note != null -> SearchMoreRow(
+                label = note,
+                enabled = bucketPaging.noteIsProblem,
+                isProblem = bucketPaging.noteIsProblem,
+            )
+
+            held > 0 -> SearchMoreRow(
+                label = showAllLabel(bucket, total),
+                action = SearchMoreAction.SHOW_ALL,
+            )
+
+            bucketPaging.expanded && bucketPaging.hasMore && canPageCatalogue ->
+                SearchMoreRow(label = MORE_FROM_CATALOGUE)
+
+            else -> null
+        }
+    }
+
+    /** `Show all 14 albums` — the count is the whole block, not the hidden remainder. */
+    private fun showAllLabel(bucket: SearchBucket, total: Int): String = when (bucket) {
+        SearchBucket.ARTISTS -> "Show all $total artists"
+        SearchBucket.ALBUMS -> "Show all $total albums to pull"
+    }
 
     /**
      * The one-line note under the field about the state of the catalogue lane,
@@ -237,6 +390,80 @@ data class SearchNotice(
         }
     }
 }
+
+/**
+ * The row under a capped results block.
+ *
+ * One type for four different things — show all, load more, loading, and a quiet
+ * failure — because the block draws exactly one row there and the screen should
+ * not be the thing that decides which. See [SearchUiState.moreRow].
+ */
+data class SearchMoreRow(
+    val label: String,
+    /** What a tap means. The state decides this, not the screen. */
+    val action: SearchMoreAction = SearchMoreAction.LOAD_MORE,
+    /** False while a page is in flight, and for a note that is not a retry. */
+    val enabled: Boolean = true,
+    /** True when the label is bad news, which the screen tints differently. */
+    val isProblem: Boolean = false,
+)
+
+/**
+ * The two things the row under a block can do.
+ *
+ * They are genuinely different operations and not one with a flag: [SHOW_ALL]
+ * reveals rows that are already in hand and works offline, while [LOAD_MORE] is a
+ * call to the server through the bucket endpoint of REQUIREMENTS.md rule 5. A
+ * single "more" intent would have made the first one wait on a network it does
+ * not need.
+ */
+enum class SearchMoreAction {
+    SHOW_ALL,
+    LOAD_MORE,
+}
+
+/**
+ * How many artists a collapsed block shows.
+ *
+ * Four, because the artist block sits above the albums and the songs and its job
+ * is to answer "is this the artist I meant", not to be browsed. A search for
+ * "wonder" has one owned artist and two or three catalogue namesakes, and four
+ * rows holds that whole answer without pushing the library albums off the
+ * screen.
+ */
+internal const val ARTIST_PREVIEW: Int = 4
+
+/**
+ * How many un-owned albums a collapsed block shows.
+ *
+ * Eight. This block is last precisely because it is the longest and the least
+ * urgent, and the cap keeps a twenty-row MusicBrainz tail from being the end of
+ * every search.
+ */
+internal const val CATALOGUE_ALBUM_PREVIEW: Int = 8
+
+/** The label on the owned-albums block. Vocabulary: "In library — owned by the server". */
+internal const val LIBRARY_ALBUMS_HEADER: String = "Albums"
+
+/** The label on the un-owned block. Vocabulary: "Pull — ask the server to acquire an album". */
+internal const val CATALOGUE_ALBUMS_HEADER: String = "Albums to pull"
+
+internal const val MORE_FROM_CATALOGUE: String = "More from MusicBrainz"
+
+internal const val LOOKING_FOR_MORE: String = "Looking for more in MusicBrainz…"
+
+/**
+ * What the row says once a page comes back short.
+ *
+ * Said rather than left silent: the affordance the user just tapped has to
+ * disappear, and a control that vanishes with no word looks like a bug. The
+ * query is quoted because "everything" is only true of this search.
+ */
+internal fun catalogueExhaustedNote(query: String): String =
+    "That is everything MusicBrainz has for \"" + query.trim() + "\"."
+
+/** A failed page is a retry, not a dead end, so the line says what to do about it. */
+internal fun pageFailedNote(problem: String): String = "$problem Tap to try again."
 
 /** The pack's caption on the ALBUMS header once MusicBrainz has answered. */
 internal const val FROM_CATALOGUE: String = "from MusicBrainz"

@@ -14,6 +14,7 @@ import app.needler.core.data.background.SubsonicTrackByteSource
 import app.needler.core.data.background.SyncTriggerResolver
 import app.needler.core.data.background.TrackByteSource
 import app.needler.core.data.background.WorkManagerScheduler
+import app.needler.core.data.diagnostics.SessionDiagnosticsSink
 import app.needler.core.data.local.NeedlerDatabase
 import app.needler.core.data.local.cache.AudioCacheStoreWriter
 import app.needler.core.data.local.cache.AudioDownloadStore
@@ -27,6 +28,7 @@ import app.needler.core.data.local.dao.FavouriteDao
 import app.needler.core.data.local.dao.PinDao
 import app.needler.core.data.local.dao.PlaylistDao
 import app.needler.core.data.local.dao.PullDao
+import app.needler.core.data.local.dao.StreamOverrideDao
 import app.needler.core.data.local.dao.SyncStateDao
 import app.needler.core.data.local.dao.TrackDao
 import app.needler.core.data.local.dao.WriteQueueDao
@@ -140,6 +142,10 @@ public object DataModule {
     @Provides
     public fun provideSyncStateDao(database: NeedlerDatabase): SyncStateDao = database.syncStateDao()
 
+    @Provides
+    public fun provideStreamOverrideDao(database: NeedlerDatabase): StreamOverrideDao =
+        database.streamOverrideDao()
+
     /**
      * The scope DataStore's readers live in.
      *
@@ -219,6 +225,11 @@ public object DataModule {
         audioCacheDao = audioCacheDao,
         cacheIndex = cacheIndex,
         audioDirectory = directory,
+        // Not a graph binding. `SessionDiagnosticsSink` wraps the process-wide buffer that
+        // `NeedlerApplication.onCreate` installs before anything has asked Hilt for anything, and
+        // binding `DiagnosticsSink` as a type would need a qualifier per source for no gain - see
+        // `SessionDiagnosticsSink` and `DiagnosticsViewModel`, which reads the same buffer directly.
+        diagnostics = SessionDiagnosticsSink.forPlayback(),
     )
 
     @Provides
@@ -504,6 +515,7 @@ public object DataModule {
         settingsStore: NeedlerSettingsStore,
         appStateStore: AppStateStore,
         trackDao: TrackDao,
+        streamOverrideDao: StreamOverrideDao,
         writeQueue: WriteQueue,
         networkMonitor: NetworkMonitor,
         subsonic: SubsonicApi,
@@ -512,6 +524,7 @@ public object DataModule {
         settingsStore = settingsStore,
         appStateStore = appStateStore,
         trackDao = trackDao,
+        streamOverrideDao = streamOverrideDao,
         writeQueue = writeQueue,
         networkMonitor = networkMonitor,
         subsonic = subsonic,
@@ -538,6 +551,9 @@ public object DataModule {
         writeQueueFlusher = writeQueueFlusher,
         playlistRepository = playlistRepository,
         favouriteRepository = favouriteRepository,
+        // One line per pass: the "sync summaries" REQUIREMENTS.md "Observability" asks for, which
+        // nothing was writing.
+        diagnostics = SessionDiagnosticsSink.forSync(),
     )
 
     // -------------------------------------------------------------- background

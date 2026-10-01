@@ -88,6 +88,17 @@ enum class PlayerDevice(
 
     /** A mini player on its own, at phone width: enough height for the bar and nothing else. */
     Bar(widthDp = 390, heightDp = 80, fileSuffix = "phone"),
+
+    /**
+     * The sidebar at the height a phone in landscape gives it: 400 by 390.
+     *
+     * Not an artboard in the pack, and the most important render in this file. REQUIREMENTS.md makes the
+     * sidebar a `WindowSizeClass` decision, and a phone turned to landscape is 844 dp wide - `Expanded` -
+     * so it composes the tablet's panel into 390 dp of height. At that height the pack's own measurements
+     * left every transport control laid out at zero, which a render at 800 dp cannot show and a device
+     * audit found immediately. This is the regression test for that.
+     */
+    SidebarShort(widthDp = 401, heightDp = 390, fileSuffix = "landscape"),
 }
 
 /**

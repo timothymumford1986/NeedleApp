@@ -588,6 +588,14 @@ public class FakePinDao : PinDao {
     override fun observeDownloadedAlbums(): Flow<List<DownloadedAlbumRow>> =
         notUsed("observeDownloadedAlbums")
 
+    override fun observeDownloadedAlbumsPaged(limit: Int, offset: Int): Flow<List<DownloadedAlbumRow>> =
+        notUsed("observeDownloadedAlbumsPaged")
+
+    override fun observeDownloadedAlbumsByTitlePaged(
+        limit: Int,
+        offset: Int,
+    ): Flow<List<DownloadedAlbumRow>> = notUsed("observeDownloadedAlbumsByTitlePaged")
+
     override suspend fun getDownloadedAlbums(): List<DownloadedAlbumRow> =
         notUsed("getDownloadedAlbums")
 
@@ -802,6 +810,22 @@ public class FakeArtistDao : ArtistDao {
         limit: Int,
     ): List<ArtistIndexRow> = rows.values
         .filter { it.sortNameNormalised.startsWith(normalisedPrefix) }
+        .sortedBy { it.sortNameNormalised }
+        .take(limit)
+        .map(::projection)
+
+    /**
+     * Substring over the same haystack the SQL builds: normalised sort name, a space, display name.
+     *
+     * Modelled rather than stubbed out, because the bug this query fixes is one a fake can actually
+     * demonstrate - "wonder" finding "Oh Wonder" - and a fake that only matched prefixes would agree
+     * with the query it replaced rather than the one it stands in for.
+     */
+    override suspend fun searchArtistsByName(
+        normalisedQuery: String,
+        limit: Int,
+    ): List<ArtistIndexRow> = rows.values
+        .filter { (it.sortNameNormalised + " " + it.name).contains(normalisedQuery, ignoreCase = true) }
         .sortedBy { it.sortNameNormalised }
         .take(limit)
         .map(::projection)

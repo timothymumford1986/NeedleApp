@@ -102,6 +102,19 @@ public class AudioCacheWriteTest {
         )
     }
 
+    /**
+     * [AudioCacheStoreWriter.openWrite] with the argument the interface defaults.
+     *
+     * Kotlin forbids a default value on an override, so the concrete class has to be handed the
+     * declared length explicitly. Defaulting it to null here keeps every test that is not *about* that
+     * length reading as it did - null is "the response said nothing", which is the case that falls back
+     * to the mirror's recorded size - and makes the tests that are about it say so at the call site.
+     */
+    private suspend fun AudioCacheStoreWriter.openStreamWrite(
+        source: PlayableSource.Stream = stream(),
+        declaredLengthBytes: Long? = null,
+    ): AudioCacheWriteHandle? = openWrite(source, declaredLengthBytes)
+
     private fun cachedRow(fileId: String, complete: Boolean = true): AudioCacheEntity = AudioCacheEntity(
         releaseGroupMbid = key.releaseGroupMbid.value,
         discNo = key.discNumber,
@@ -129,7 +142,7 @@ public class AudioCacheWriteTest {
         // permanent offline copy of a track the user owns as FLAC, and nothing would ever say so.
         coEvery { dao.get(any(), any(), any()) } returns null
 
-        val handle: AudioCacheWriteHandle? = writer().openWrite(
+        val handle: AudioCacheWriteHandle? = writer().openStreamWrite(
             stream(cacheWhileStreaming = false, format = StreamFormat.Transcoded.Mp3_320),
         )
 
@@ -138,15 +151,85 @@ public class AudioCacheWriteTest {
 
     @Test
     public fun `a stream of unknown length is not retained`(): Unit = runTest {
-        // Without a size there is no way to ask whether the bytes fit above the floor *before*
-        // writing them, and a floor discovered after the write is not a floor.
+        // Neither the response nor the mirror said how long the file is. Without a length there is
+        // no way to ask whether the bytes fit above the floor *before* writing them, and a floor
+        // discovered after the write is not a floor.
         coEvery { dao.get(any(), any(), any()) } returns null
 
-        val handle: AudioCacheWriteHandle? = writer().openWrite(
+        val handle: AudioCacheWriteHandle? = writer().openStreamWrite(
             stream(handle = fetchHandle.copy(sizeBytes = null)),
+            declaredLengthBytes = null,
         )
 
         assertNull(handle)
+    }
+
+    @Test
+    public fun `the response's length is retained when the mirror has no size`(): Unit = runTest {
+        // A server that reports no `size` in its metadata still sends a `Content-Length` on the
+        // stream, and that is a real measurement of the bytes about to arrive. Refusing the write
+        // for want of a number the caller is holding would make such a library permanently
+        // un-cacheable, one silent refusal per play.
+        coEvery { dao.get(any(), any(), any()) } returns null
+
+        val handle: AudioCacheWriteHandle = requireNotNull(
+            writer().openStreamWrite(
+                stream(handle = fetchHandle.copy(sizeBytes = null)),
+                declaredLengthBytes = 8L,
+            ),
+        )
+
+        assertEquals(8L, requireNotNull(handle.expectedSizeBytes))
+    }
+
+    @Test
+    public fun `the response's length is what a commit is checked against, not the mirror's`(): Unit =
+        runTest {
+            // The regression that cost the device everything it streamed. DroppedNeedle replaces
+            // files in place on a quality upgrade, so between the upgrade and the next sync the
+            // mirror describes the old file while the stream delivers the new one. Holding the
+            // finished write to the mirror's number made a complete body look truncated, which
+            // discarded it - and the file name is derived from the track key, so the same
+            // disagreement recurred on every play of that track, for ever, with nothing reporting a
+            // fault. The download path already refuses to trust the mirror here.
+            coEvery { dao.get(any(), any(), any()) } returns null
+            val row = slot<AudioCacheEntity>()
+            coEvery { dao.upsert(capture(row)) } returns Unit
+
+            // The mirror says 8 bytes; the server is now serving 12.
+            val upgraded = ByteArray(12) { index -> index.toByte() }
+            val handle: AudioCacheWriteHandle =
+                writer().openStreamWrite(stream(), declaredLengthBytes = 12L)!!
+            handle.write(upgraded)
+            val outcome: Outcome<CachedAudio> = handle.commit()
+
+            val cached: CachedAudio = (outcome as Outcome.Success).value
+            assertEquals(12L, cached.sizeOnDiskBytes)
+            assertEquals(12L, File(cached.filePath).length())
+            assertTrue(cached.isComplete)
+            // The fingerprint still records the handle the bytes were fetched with, because the
+            // other side of that comparison is the mirror's own `track` row.
+            assertEquals(8L, row.captured.sourceSizeBytes)
+            assertEquals("9001", row.captured.sourceFileId)
+        }
+
+    @Test
+    public fun `a body short of the response's length is still refused`(): Unit = runTest {
+        // The mirror's number is not a second opinion the store may fall back on when the response's
+        // is inconvenient. A body that stopped early is a truncated fetch, and publishing it is the
+        // silent failure this whole class exists to prevent - here the eight bytes written are
+        // exactly what the mirror expected, and that is not evidence of anything.
+        coEvery { dao.get(any(), any(), any()) } returns null
+
+        val handle: AudioCacheWriteHandle =
+            writer().openStreamWrite(stream(), declaredLengthBytes = 12L)!!
+        handle.write(bytes)
+        val outcome: Outcome<CachedAudio> = handle.commit()
+
+        assertTrue((outcome as Outcome.Failure).error is NeedlerError.ProtocolViolation)
+        assertFalse(partFile().exists())
+        assertFalse(publishedFile().exists())
+        coVerify(exactly = 0) { dao.upsert(any()) }
     }
 
     @Test
@@ -158,7 +241,7 @@ public class AudioCacheWriteTest {
             coEvery { dao.get(any(), any(), any()) } returns null
 
             val handle: AudioCacheWriteHandle? =
-                writer(freeBytes = 500L, floorBytes = 1_000L).openWrite(stream())
+                writer(freeBytes = 500L, floorBytes = 1_000L).openStreamWrite(stream())
 
             assertNull(handle)
         }
@@ -167,7 +250,7 @@ public class AudioCacheWriteTest {
     public fun `bytes already on the device from the same file are not fetched again`(): Unit = runTest {
         coEvery { dao.get(any(), any(), any()) } returns cachedRow(fileId = "9001")
 
-        assertNull(writer().openWrite(stream()))
+        assertNull(writer().openStreamWrite(stream()))
     }
 
     @Test
@@ -176,7 +259,7 @@ public class AudioCacheWriteTest {
         // write is the replacement rather than a duplicate.
         coEvery { dao.get(any(), any(), any()) } returns cachedRow(fileId = "8000")
 
-        assertNotNull(writer().openWrite(stream()))
+        assertNotNull(writer().openStreamWrite(stream()))
     }
 
     // ---------------------------------------------------------------- commit
@@ -187,7 +270,7 @@ public class AudioCacheWriteTest {
         val row = slot<AudioCacheEntity>()
         coEvery { dao.upsert(capture(row)) } returns Unit
 
-        val handle: AudioCacheWriteHandle = writer().openWrite(stream())!!
+        val handle: AudioCacheWriteHandle = writer().openStreamWrite(stream())!!
         handle.write(bytes)
         val outcome: Outcome<CachedAudio> = handle.commit()
 
@@ -220,7 +303,7 @@ public class AudioCacheWriteTest {
         val row = slot<AudioCacheEntity>()
         coEvery { dao.upsert(capture(row)) } returns Unit
 
-        val handle: AudioCacheWriteHandle = writer().openWrite(stream())!!
+        val handle: AudioCacheWriteHandle = writer().openStreamWrite(stream())!!
         handle.write(bytes)
         handle.commit()
 
@@ -235,7 +318,7 @@ public class AudioCacheWriteTest {
     public fun `an abandoned write leaves no file and no row`(): Unit = runTest {
         coEvery { dao.get(any(), any(), any()) } returns null
 
-        val handle: AudioCacheWriteHandle = writer().openWrite(stream())!!
+        val handle: AudioCacheWriteHandle = writer().openStreamWrite(stream())!!
         handle.write(bytes, offset = 0, length = 3)
         handle.abandon()
 
@@ -250,7 +333,7 @@ public class AudioCacheWriteTest {
         // failure that must never be published: it produces silent early-stopping playback later.
         coEvery { dao.get(any(), any(), any()) } returns null
 
-        val handle: AudioCacheWriteHandle = writer().openWrite(stream())!!
+        val handle: AudioCacheWriteHandle = writer().openStreamWrite(stream())!!
         handle.write(bytes, offset = 0, length = 5)
         val outcome: Outcome<CachedAudio> = handle.commit()
 
@@ -264,7 +347,7 @@ public class AudioCacheWriteTest {
     public fun `a commit with no bytes at all is refused`(): Unit = runTest {
         coEvery { dao.get(any(), any(), any()) } returns null
 
-        val handle: AudioCacheWriteHandle = writer().openWrite(stream())!!
+        val handle: AudioCacheWriteHandle = writer().openStreamWrite(stream())!!
         val outcome: Outcome<CachedAudio> = handle.commit()
 
         assertTrue(outcome is Outcome.Failure)
@@ -276,7 +359,7 @@ public class AudioCacheWriteTest {
     public fun `a commit after an abandon cannot resurrect the file`(): Unit = runTest {
         coEvery { dao.get(any(), any(), any()) } returns null
 
-        val handle: AudioCacheWriteHandle = writer().openWrite(stream())!!
+        val handle: AudioCacheWriteHandle = writer().openStreamWrite(stream())!!
         handle.write(bytes)
         handle.abandon()
         val outcome: Outcome<CachedAudio> = handle.commit()
@@ -292,7 +375,7 @@ public class AudioCacheWriteTest {
         // byte from a loading thread is dropped in silence rather than throwing into the player.
         coEvery { dao.get(any(), any(), any()) } returns null
 
-        val handle: AudioCacheWriteHandle = writer().openWrite(stream())!!
+        val handle: AudioCacheWriteHandle = writer().openStreamWrite(stream())!!
         handle.abandon()
         handle.write(bytes)
 
@@ -306,7 +389,7 @@ public class AudioCacheWriteTest {
         // committed. Deleting the file there would undo the write it had just finished.
         coEvery { dao.get(any(), any(), any()) } returns null
 
-        val handle: AudioCacheWriteHandle = writer().openWrite(stream())!!
+        val handle: AudioCacheWriteHandle = writer().openStreamWrite(stream())!!
         handle.write(bytes)
         handle.commit()
         handle.abandon()

@@ -9,6 +9,8 @@ import app.needler.core.data.local.dao.SyncStateDao
 import app.needler.core.data.local.dao.TrackDao
 import app.needler.core.data.local.entity.AlbumEntity
 import app.needler.core.data.local.entity.ArtistEntity
+import app.needler.core.data.local.entity.FavouriteEntity
+import app.needler.core.data.local.entity.FavouriteTypeDb
 import app.needler.core.data.local.entity.PinEntity
 import app.needler.core.data.local.entity.PullEntity
 import app.needler.core.data.local.entity.SyncStateEntity
@@ -31,6 +33,7 @@ import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.StatsSource
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
+import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.TrackListKind
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.network.v1.V1Api
@@ -67,8 +70,18 @@ public class DefaultLibraryRepository(
 
     // -------------------------------------------------------------------- artists
 
-    override fun observeArtists(): Flow<List<Artist>> =
-        artistDao.observeArtists().map { rows -> rows.map(EntityMappers::artist) }
+    /**
+     * Artists, alphabetical, one window at a time.
+     *
+     * [ArtistDao.observeArtistsPaged] rather than [ArtistDao.observeArtists] plus a Kotlin slice, even
+     * when the window is the whole table: one statement answers both, the offset is an index seek off
+     * `index_artist_sort_name_normalised`, and there is no second code path to keep in step. The
+     * paged statement existed before anything could reach it, so every caller - Android Auto and the
+     * Artists screen alike - read the whole table and sliced, which is the shape REQUIREMENTS.md
+     * "Performance budgets" ("Cold start to library content - Under 1.2 s") is written against.
+     */
+    override fun observeArtists(limit: Int, offset: Int): Flow<List<Artist>> =
+        artistDao.observeArtistsPaged(limit, offset).map { rows -> rows.map(EntityMappers::artist) }
 
     override fun observeArtist(mbid: ArtistMbid): Flow<Artist?> = combine(
         artistDao.observeArtist(mbid.value),
@@ -105,11 +118,44 @@ public class DefaultLibraryRepository(
         album?.let { EntityMappers.album(it, pin = pin, pull = pull, isFavourite = starred) }
     }
 
+    /**
+     * Tracks of one album, each carrying whether it is starred.
+     *
+     * The star was missing here, and its absence was invisible in the worst way: `Track.isFavourite`
+     * defaults to false, so every track on album detail read as un-starred no matter what the mirror
+     * held, and a star the user had tapped came back off the next time the screen was opened.
+     * REQUIREMENTS.md "Playlists": "Binary favourites via `star`/`unstar` do persist and are the
+     * supported mechanism" - a screen cannot offer that mechanism honestly while its read path drops
+     * the answer.
+     *
+     * The join is `observeFavourites` filtered in Kotlin rather than a query of its own, because
+     * [FavouriteDao] has no "starred tracks of one album" query and adding one is not this change's
+     * to make. `observeStarredTracks` would have done it in SQL, but it joins the whole `track`
+     * table to return rows this function already has; the favourite table alone is the smaller read,
+     * and it carries the resolved disc and track columns precisely so that a caller can match on them
+     * without building a composite string.
+     */
     override fun observeAlbumTracks(mbid: ReleaseGroupMbid): Flow<List<Track>> = combine(
         trackDao.observeAlbumTracks(mbid.value),
         albumDao.observeAlbum(mbid.value),
-    ) { rows: List<TrackEntity>, album: AlbumEntity? ->
-        rows.map { EntityMappers.track(it, albumTitle = album?.title) }
+        favouriteDao.observeFavourites(),
+    ) { rows: List<TrackEntity>, album: AlbumEntity?, favourites: List<FavouriteEntity> ->
+        val starred: Set<Long> = favourites
+            .asSequence()
+            .filter { it.entityType == FavouriteTypeDb.TRACK && it.releaseGroupMbid == mbid.value }
+            .mapNotNull { row ->
+                val disc: Int = row.discNo ?: return@mapNotNull null
+                val track: Int = row.trackNo ?: return@mapNotNull null
+                positionKey(disc, track)
+            }
+            .toSet()
+        rows.map { row ->
+            EntityMappers.track(
+                row = row,
+                isFavourite = positionKey(row.discNo, row.trackNo) in starred,
+                albumTitle = album?.title,
+            )
+        }
     }
 
     /**
@@ -140,8 +186,11 @@ public class DefaultLibraryRepository(
                     rows.map { EntityMappers.album(it) }
                 }
 
-            AlbumListKind.STARRED -> favouriteDao.observeStarredAlbums().map { rows ->
-                rows.drop(offset).take(limit).map { EntityMappers.album(it, isFavourite = true) }
+            // The window goes into SQL like the other five kinds. It used to read every starred album
+            // and slice in Kotlin, which made `STARRED` the one kind of the advertised-as-paged list
+            // that was not paged.
+            AlbumListKind.STARRED -> favouriteDao.observeStarredAlbumsPaged(limit, offset).map { rows ->
+                rows.map { EntityMappers.album(it, isFavourite = true) }
             }
         }
 
@@ -209,8 +258,16 @@ public class DefaultLibraryRepository(
      * Genres are a display denormalisation rather than a table, so the counting happens in Kotlin
      * over one narrow column. That keeps the schema honest about where the truth lives - the tracks -
      * and still answers instantly for a library of any plausible size.
+     *
+     * [limit] and [offset] are applied **after** the aggregation, and that is not an oversight this
+     * comment is apologising for: a bucket count over a pipe-encoded column cannot be windowed in
+     * SQL, because nothing can know which genre is twenty-first alphabetically until every album's
+     * column has been read. The window bounds what is allocated and returned - which is what stops a
+     * browser being handed four hundred `Genre` objects to draw twenty of - and `drop` then `take`
+     * rather than an index range, so no `offset + limit` can overflow when the caller's window is
+     * unbounded.
      */
-    override fun observeGenres(): Flow<List<Genre>> =
+    override fun observeGenres(limit: Int, offset: Int): Flow<List<Genre>> =
         albumDao.observeGenreColumns().map { encoded ->
             val counts: MutableMap<String, Int> = LinkedHashMap()
             for (column in encoded) {
@@ -220,6 +277,11 @@ public class DefaultLibraryRepository(
             }
             counts.entries
                 .sortedBy { it.key.lowercase() }
+                // Coerced because these are Kotlin list operations and both throw on a negative
+                // count, where SQLite would have treated the same values as "from the start" and
+                // "no limit". A browser that computed a page badly must not crash a head unit.
+                .drop(offset.coerceAtLeast(0))
+                .take(limit.coerceAtLeast(0))
                 .map { Genre(name = it.key, albumCount = it.value) }
         }
 
@@ -298,8 +360,26 @@ public class DefaultLibraryRepository(
      * The catalogue lane needs the companion bearer, so this fails with `SessionExpired` on a
      * degraded session and `Offline` with no network. Neither is fatal: the owned half of artist
      * detail still renders, which is the whole point of the mirror being the read path.
+     *
+     * ## A name-derived artist id never reaches the network
+     *
+     * DroppedNeedle mints a version 5 UUID for an artist it could not match to MusicBrainz, and this
+     * route answers `400 Use the local library artist route for a DroppedNeedle artist ID` for every
+     * one of them. Making the call anyway cost a round trip and produced a logged warning beside a
+     * silently short list on screen, with nothing anywhere saying the discography was never
+     * obtainable - which is how it went unnoticed. [ArtistMbid.isCatalogueIdentifier] is checked
+     * first, and the refusal is returned as [NeedlerError.CapabilityUnavailable] so that the caller
+     * can say so plainly.
+     *
+     * That case is reported as a failure rather than [Outcome.Ok] deliberately. "Nothing fetched, and
+     * nothing ever will be" is not the same answer as "nothing to fetch", and artist detail draws a
+     * different sentence for each. It is not retryable, so a write-queue entry carrying it is dropped
+     * rather than replayed forever.
      */
     override suspend fun refreshArtistDiscography(mbid: ArtistMbid): Outcome<Unit> {
+        if (!mbid.isCatalogueIdentifier) {
+            return Outcome.Failure(NeedlerError.CapabilityUnavailable(NAME_DERIVED_ARTIST))
+        }
         val call: Outcome<ArtistReleasesDto> = networkCall { v1.artistReleases(mbid.value) }
         val releases: ArtistReleasesDto = when (call) {
             is Outcome.Failure -> return call
@@ -339,4 +419,30 @@ public class DefaultLibraryRepository(
             is Outcome.Failure -> result
             is Outcome.Success -> Outcome.Ok
         }
+
+    private companion object {
+
+        /**
+         * The capability name reported when an artist's id cannot reach the catalogue.
+         *
+         * A string rather than a new [NeedlerError] case: the error hierarchy is one-to-one with the
+         * requirements' failure-handling table and this is not a new row in it, only a capability the
+         * server does not offer for this particular artist. It reaches the diagnostics log verbatim,
+         * so it reads as a sentence.
+         */
+        const val NAME_DERIVED_ARTIST: String =
+            "catalogue discography: this artist's id was derived from their name, not matched to " +
+                "MusicBrainz"
+
+        /**
+         * Disc and track folded into one comparable value, for matching a starred favourite row
+         * against a track row.
+         *
+         * Not the canonical `<mbid>/<disc>/<track>` string: both sides of this comparison are already
+         * known to belong to the same release group, so including the MBID would allocate a string
+         * per track on every emission to compare a part that cannot differ.
+         */
+        fun positionKey(discNo: Int, trackNo: Int): Long =
+            discNo.toLong() shl Int.SIZE_BITS or (trackNo.toLong() and 0xFFFFFFFFL)
+    }
 }
