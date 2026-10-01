@@ -259,6 +259,11 @@ object LicenceCatalogue {
             coordinates = listOf(
                 "androidx.core:core-ktx",
                 "androidx.core:core-splashscreen",
+                // A version constraint on :wear rather than a dependency, but it is in the
+                // catalogue, so it is listed: the test that pairs this file with
+                // libs.versions.toml does not know the difference, and neither does a user
+                // reading what their copy of the app was built from.
+                "androidx.fragment:fragment",
                 "androidx.activity:activity-compose",
                 "androidx.lifecycle:lifecycle-runtime-compose",
                 "androidx.lifecycle:lifecycle-viewmodel-compose",
