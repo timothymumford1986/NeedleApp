@@ -4,6 +4,7 @@ import androidx.annotation.OptIn
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.common.util.UnstableApi
+import app.needler.core.data.diagnostics.SessionDiagnosticsSink
 import app.needler.core.domain.cache.AudioCacheWriter
 import app.needler.core.domain.model.StreamFormat
 import app.needler.core.domain.model.TrackFetchHandle
@@ -106,6 +107,10 @@ public object PlayerServiceModule {
         pinRepository = pinRepository,
         audioUrls = audioUrls,
         httpDataSourceFactory = httpDataSourceFactory,
+        // Not a graph binding, for the same reason `DataModule` gives where it hands the same sink
+        // to the store: the buffer is a process-wide object installed before Hilt exists, and making
+        // it a graph type would need a qualifier per source for no gain.
+        diagnostics = SessionDiagnosticsSink.forPlayback(),
     )
 }
 

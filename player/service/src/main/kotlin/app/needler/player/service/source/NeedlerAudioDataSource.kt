@@ -12,6 +12,9 @@ import androidx.media3.common.util.UnstableApi
 import app.needler.core.domain.cache.AudioCacheWriteHandle
 import app.needler.core.domain.cache.AudioCacheWriter
 import app.needler.core.domain.model.CacheEvictionReason
+import app.needler.core.domain.cache.AudioRetentionEvent
+import app.needler.core.domain.diagnostics.DiagnosticsLevel
+import app.needler.core.domain.diagnostics.DiagnosticsSink
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.PlayableSource
 import app.needler.core.domain.model.StreamFormat
@@ -58,6 +61,16 @@ public class NeedlerAudioDataSource(
     private val pinRepository: PinRepository,
     private val audioUrls: AudioUrls,
     private val httpDataSourceFactory: HttpDataSource.Factory,
+    /**
+     * Where a decision not to retain a stream is written down.
+     *
+     * `AudioCacheStoreWriter` already reports every refusal it makes, and that was thought to be the
+     * whole of the path. It is not: the two guards below return before `openWrite` is ever called, so
+     * a stream the store never hears about produced no line anywhere - not a refusal, not a success.
+     * A device played two tracks to completion, `format=raw`, full `Content-Length`, and the log held
+     * nothing from this path at all, which is the same silence the store's logging was added to end.
+     */
+    private val diagnostics: DiagnosticsSink = DiagnosticsSink.None,
     private val retryPolicy: StreamRetryPolicy = StreamRetryPolicy(),
     /** Injected so a test does not sleep for real, and so the wait is visible. */
     private val sleep: (Long) -> Unit = { millis -> Thread.sleep(millis) },
@@ -312,8 +325,25 @@ public class NeedlerAudioDataSource(
         // not about the track. The resolver sets cacheWhileStreaming from the format and nothing else
         // (ResolvePlayableSourceUseCase), so there is no other reason for a "no" to override here.
         val retainable: Boolean = plan.writeThrough || format == StreamFormat.Original
-        if (!retainable) return null
+        if (!retainable) {
+            diagnostics.record(
+                DiagnosticsLevel.Debug,
+                "not cached " + plan.key.canonicalString + " - streaming " +
+                    AudioRetentionEvent.describe(format) +
+                    ", only original bytes are retained",
+            )
+            return null
+        }
         if (!SourcePlanner.mayWriteThrough(plan.copy(format = format, writeThrough = true), request.position)) {
+            // Almost always a read that does not start at byte zero. Keeping the tail of a track as
+            // though it were the track is the same silent failure as keeping a truncated one, so the
+            // refusal is right - but it has to be visible, because it is indistinguishable from a
+            // write that succeeded when neither says anything.
+            diagnostics.record(
+                DiagnosticsLevel.Debug,
+                "not cached " + plan.key.canonicalString + " - read starts at byte " +
+                    request.position + ", only a read from zero can produce a whole file",
+            )
             return null
         }
         val source = PlayableSource.Stream(
@@ -326,7 +356,13 @@ public class NeedlerAudioDataSource(
             runBlocking { cacheWriter.openWrite(source, declaredLengthBytes) } ?: return null
         } catch (error: Throwable) {
             if (error is InterruptedException) Thread.currentThread().interrupt()
-            // A store that will not open a write is not a reason to stop the music.
+            // A store that will not open a write is not a reason to stop the music. It is a reason to
+            // say so: the store logs its own refusals, but it cannot log the ones it never heard.
+            diagnostics.record(
+                DiagnosticsLevel.Warn,
+                "not cached " + plan.key.canonicalString + " - the audio store threw opening a write: " +
+                    (error.message ?: error::class.simpleName.orEmpty()),
+            )
             return null
         }
         return WriteThroughSink(handle)
@@ -378,6 +414,7 @@ public class NeedlerAudioDataSource(
         private val pinRepository: PinRepository,
         private val audioUrls: AudioUrls,
         private val httpDataSourceFactory: HttpDataSource.Factory,
+        private val diagnostics: DiagnosticsSink = DiagnosticsSink.None,
     ) : DataSource.Factory {
 
         override fun createDataSource(): DataSource = NeedlerAudioDataSource(
@@ -386,6 +423,7 @@ public class NeedlerAudioDataSource(
             pinRepository = pinRepository,
             audioUrls = audioUrls,
             httpDataSourceFactory = httpDataSourceFactory,
+            diagnostics = diagnostics,
         )
     }
 }
