@@ -10,8 +10,9 @@ import app.needler.core.domain.model.TrackKey
  *
  * ## The defect this type exists to prevent
  *
- * A device played three tracks to completion and the Storage section read `Downloaded 0 B / Cached
- * while listening 0 B`. Diagnosing it took a full source trace, because every way
+ * A device played three tracks to completion and the Storage section read `Downloaded 125 MB /
+ * Cached while listening 0 B`. The split is the whole diagnosis: one store serves both tiers, the
+ * download half had kept 125 MB, and the streaming half had kept nothing. Diagnosing it took a full source trace, because every way
  * [AudioCacheWriter.openWrite] declines to keep a stream returns `null` and says nothing - and a
  * correct refusal is then indistinguishable from a wrong one, and both are indistinguishable from
  * the write having worked. REQUIREMENTS.md "Observability" already required the log this fills;

@@ -1,8 +1,10 @@
 # Needler — Requirements & Architecture
 
-Android music player for DroppedNeedle · drafted 2026-09-17 · revised 2026-09-18
+Android music player for DroppedNeedle · drafted 2026-09-17 · revised 2026-09-18 · revised 2026-10-02
 
 > **As of 2026-09-18 this file is the canonical copy of Needler's requirements, and it is maintained alongside the code.** The first draft was written before any code existed. Five foundation modules have since been built against the DroppedNeedle source, and a good deal of what follows was found to be wrong, or too vague to implement. Those passages are corrected in place, and the correction is spelled out wherever the reasoning matters more than the conclusion. A change here is a change to the contract for the work that remains, so it belongs in the same commit as the code that makes it true.
+
+> **The 2026-10-02 revision is a catch-up, and the rule above is what it broke.** Roughly 45,000 lines landed in the week to 2026-10-01 — the remaining feature surfaces, a device audit's worth of fixes — and this file was left untouched throughout, so for a week the canonical copy of the requirements was the one document in the repository known to be wrong. Every claim below is now checked against the tree rather than against the last revision. The lesson is the rule, not an exception to it: a surface that ships without its paragraph here leaves the next reader trusting a sentence the code stopped honouring.
 
 ## Scope
 
@@ -14,26 +16,28 @@ The `design/` folder is the UI source of truth: 21 screens as HTML and PNG, plus
 
 ### Where the build has reached
 
-Every module carries code: `:core:domain`, `:core:data`, `:core:network`, `:core:design`, `:feature:library`, `:feature:player`, `:player:service` and `:app`. Together they are roughly 45,500 lines of production Kotlin with 18,000 lines of tests behind them; 781 tests pass, and 81 screenshots are committed as regression baselines. `app-debug.apk` and `wear-debug.apk` both assemble.
+All twelve modules carry code: `:core:domain`, `:core:data`, `:core:network`, `:core:design`, `:feature:library`, `:feature:search`, `:feature:pulls`, `:feature:player`, `:player:service`, `:widget`, `:wear` and `:app`. Together they are roughly 85,800 lines of production Kotlin across 395 files, with 38,000 lines of tests behind them; 1,714 tests pass across all twelve modules, and 180 screenshots are committed as regression baselines. `app-debug.apk` and `wear-debug.apk` both assemble.
 
-**The app plays music.** Connect it to a server and you get the library in three tabs, album and artist detail, a mini-player, a full now-playing screen with its crate, the tablet and landscape sidebar, lock-screen and notification transport, and playback that survives backgrounding, rotation and relaunch. The library reads from the local mirror, so it renders in full with no network.
+There is exactly one instrumented test, `SecureCredentialStoreKeystoreTest` in `:core:data`. It is on a device because the thing it exercises — which Keystore failure means the credentials are unrecoverable — has no honest JVM stand-in. Everything else runs on the JVM, screenshots included: Roborazzi renders Compose through Robolectric, so a baseline is a unit test and CI needs no emulator for it.
 
-What remains is Android Auto, the phone half of the Wear link, and the two widgets beyond
-now-playing.
+**The app plays music, and every feature module now has screens in the graph.** Connect it to a server and you get the library in three tabs, album and artist detail, genres, playlists, favourites, unified search, the pulls screen, settings with its equaliser and crossfade sub-screens, a licences screen, a diagnostics log, a mini-player, a full now-playing screen with its crate, the tablet and landscape sidebar, lock-screen and notification transport, three home-screen widgets, an Android Auto browse tree, and a Wear companion that mirrors the session and plays audio synced from the phone. The library reads from the local mirror, so it renders in full with no network.
 
-| Remaining | Module |
+Two surfaces exist in the code and are specified nowhere in this document. Both are listed here rather than written up as requirements, because neither has had its contract decided: an in-app update check against GitHub releases, which an APK-distributed app needs because it has no store to deliver one, and an optional edge-proxy disclosure on the Connect screen that sends fixed headers with every request under three presets — Cloudflare, basic auth, and a raw editor.
+
+What remains is small, and most of it is one control.
+
+| Remaining | Where |
 | --- | --- |
-| Unified search | `:feature:search` |
-| Request and queue screens | `:feature:pulls` |
-| Settings screen | `:app` |
-| Glance widgets | `:widget` |
-| Wear companion | `:wear` |
+| Bluetooth sinks in the output picker | `:player:service` must supply the `AudioManager` device list |
+| Cast receivers, and the reachability probe in front of them | `:player:service`; `OutputTarget.Cast` and `CastAvailability` are modelled and unpopulated |
+| The output chip on the tablet sidebar | `:app`; the sheet that Now Playing's chip opens has no equivalent host there yet |
+| A device run of the audio-retention fix | See "Offline and caching" |
 
-Three screens in `:feature:player` are built but registered nowhere, because each needs a host decision first: the output picker (21), the equaliser and crossfade. `OutputPickerRoute` takes no dismiss callback and the pack draws it as a sheet over the dimmed player rather than a destination, so registering it as one would strand the listener on it. Until that is settled the output chip on both Now Playing and the sidebar does nothing.
+**The three player sub-screens are registered now, and the correction is in how.** The first draft of this section said the equaliser, the crossfade screen and the output picker were "built but registered nowhere, because each needs a host decision first", and it treated them as one problem. They were two. The equaliser and crossfade are ordinary destinations and are reached from Settings. The output picker is not a destination at all: `OutputPickerRoute` draws its own dimmed backdrop and takes no dismiss callback, so the pack's screen 21 is a sheet, and the host supplies the sheet — `ModalBottomSheet` brings the scrim, the drag handle and the back gesture that a destination would have had to invent. The output chip on Now Playing opens it and works. The chip on the tablet sidebar is still inert, because that panel composes inside the scaffold and has no sheet host of its own.
 
-One behaviour is known to be incomplete rather than absent: the offline store downloads but does not appear to keep what it downloads — see the Offline section.
+What the picker shows is the real remaining gap. `observeOutputTargets()` emits one target, "This device", and nothing else: Bluetooth sinks come from `AudioManager` and Cast receivers from a `MediaRouter` discovery session, and a repository over Room and HTTP has no business holding a route-discovery callback open. The picker is therefore honest and nearly empty, and the requirements in "Output" are written against the full list it does not yet have.
 
-The Songs tab was the other, and is no longer. It used to flatten the tracks of the first few albums under the current *album* sort, so it showed a sample of the library rather than the library and its Title sort ordered by album title. `LibraryRepository.observeTracks(kind, limit, offset)` now serves it from a real all-library track query, with an ordering vocabulary of its own (`TrackListKind`) so that a song sort can never again be an album sort wearing a different name. One concession remains and is documented there: "Played" cannot be honoured, because play counts are computed server-side and the mirror holds no column reproducing them, so it falls back to recently-added exactly as the album list does.
+The Songs tab was once listed here as incomplete, and is no longer. It used to flatten the tracks of the first few albums under the current *album* sort, so it showed a sample of the library rather than the library and its Title sort ordered by album title. `LibraryRepository.observeTracks(kind, limit, offset)` now serves it from a real all-library track query, with an ordering vocabulary of its own (`TrackListKind`) so that a song sort can never again be an album sort wearing a different name. One concession remains and is documented there: "Played" cannot be honoured, because play counts are computed server-side and the mirror holds no column reproducing them, so it falls back to recently-added exactly as the album list does.
 
 ### Decisions already fixed
 
@@ -48,6 +52,8 @@ The Songs tab was the other, and is no longer. It used to flatten the tracks of 
 | Extra surfaces | Android Auto, Google Cast, Wear OS companion | Each carries a distribution constraint (see Surface integrations) |
 | Distribution | Signed APK on GitHub releases | No store policy limits, but Auto and Wear need manual enablement |
 | Player features | Gapless, crossfade, 10-band EQ, sleep timer, speed control | Crossfade and EQ need a custom Media3 audio pipeline |
+| Stream quality | One rung per network — Original, Opus 192/128/96, MP3 320/256/192/128 — plus per-track and per-album overrides | A rung is a ceiling, so a transcode that would send no fewer bytes resolves to Original (see Streaming) |
+| Credential destruction | Provable, or consented | An unreadable credential file is kept, not rebuilt (see Authentication) |
 | Audio cache | App-private internal storage, with **no user-set budget** | Downloads are unlimited and never auto-evicted; the listening cache is bounded by device free space |
 
 ### Target devices
@@ -120,7 +126,7 @@ The compatibility layer is unusually complete. It implements `search3`, `getAlbu
 
 Three further extensions are implemented but not advertised, pending client certification: `songLyrics:1`, `playbackReport:1` and `indexBasedQueue:1`. Needler must probe `getOpenSubsonicExtensions` and treat anything absent from the response as unavailable.
 
-The first draft put `transcoding:1` in the unadvertised group. It is not: the shim advertises it at runtime, which is what makes "Stream on mobile data: MP3 320" a feature Needler can gate honestly rather than one it would have had to hide permanently. The gate stays two-part — the extension must be advertised **and** `transcoding_enabled` must be true in the Connect Apps settings — because ffmpeg may simply be absent from the server.
+The first draft put `transcoding:1` in the unadvertised group. It is not: the shim advertises it at runtime, which is what makes the stream-quality ladder a feature Needler can gate honestly rather than one it would have had to hide permanently. The gate stays two-part — the extension must be advertised **and** `transcoding_enabled` must be true in the Connect Apps settings — because ffmpeg may simply be absent from the server.
 
 ### Capability negotiation on connect
 
@@ -210,6 +216,28 @@ Re-onboarding is therefore required in exactly one case: **both** credentials ar
 | Expired | Valid | Player-only. Prompt to sign in; playback is unaffected |
 | Valid | Revoked | Mint a replacement silently. No user-visible change |
 | Expired | Revoked | Re-onboard |
+
+### Destruction is provable or consented
+
+The credential store never deletes what it cannot prove is unrecoverable. This is a design principle rather than an implementation note, and it is the same principle as the table above read one layer down: a dead credential *degrades* Needler, it does not erase it, and a credential the app merely cannot **read** is not even a dead one and must not be treated as worse than one.
+
+So there are exactly two grounds for destroying a stored secret.
+
+| Ground | What it means | Example |
+| --- | --- | --- |
+| Provable | The ciphertext on disk can never be decrypted by anything | The Keystore master key was permanently invalidated — a device migration, a restore onto different hardware, a lock-screen change |
+| Consented | The user is replacing the secret right now | The heal-before-write path during sign-in |
+
+Everything else is kept. A failure to open the store is logged, retried once, and if it still will not open the store reports itself **locked**: the app behaves as though the user were signed out and says so in those words, and the encrypted bytes stay on disk for the next launch to try again. Until the user signs in again there is nothing to gain by destroying the only copy.
+
+**The first draft of this document did not state the rule, and the code therefore did not follow it.** The store caught two exception types that each have a transient and a permanent cause, deleted the credential file *and* its backup on either, logged nothing, and reopened. An ordinary low-memory process kill — which is a thing Android does unprompted — cost the user their server, their username and their secrets, and dropped them on a blank first-run form; reproduced twice on a device on 2026-10-01, once by `force-stop` and once by `am kill`. Two details are worth keeping because each was a separate wrong assumption:
+
+- **A read failure is not proof of corruption,** and a security exception is not proof of key loss. A keyset that cannot be unwrapped on this launch may unwrap on the next, and if it never does, the user will have signed in again by then and the consented ground will apply. Only the permanent-invalidation signal, looked for along the whole exception cause chain because the layers above wrap it, counts as proof.
+- **Deleting the backup took the copy the next launch would have restored.** The platform promotes a `.bak` over the primary itself, before this layer sees a byte, so by the time an open has failed the backup has already been used if it existed. A rebuild, where the key is provably gone, is the opposite case and must take the backup too — left behind, it would be promoted over the freshly built store and sign the user out on every launch.
+
+One consequence is a second file: **the server address is mirrored unencrypted beside the encrypted store, because it is not a secret.** Keeping it only inside the encrypted file is what made a Keystore failure indistinguishable from a fresh install. The mirror survives a key the secrets cannot, so Connect can say "this is your server, sign in again" rather than showing an empty form. A second Keystore-encrypted file for a non-secret was rejected: the threat model for a plain server address in app-private storage under `android:allowBackup="false"` is the same as for the Room mirror next to it, which already holds every album title the user owns, and it would fail for the same reason the first file did.
+
+Deleting the file revokes nothing server-side. The companion session and the app-password stay listed on the server until they expire or the user revokes them, which is why onboarding replaces the app-password named `Needler` rather than adding a second one.
 
 ### Roles and permissions
 
@@ -407,14 +435,27 @@ Playback runs through a single Media3 `MediaLibraryService`, so the lock screen,
 
 By default Needler fetches original bytes with `stream?id=<track>&format=raw` and decodes on device. Media3 handles FLAC, MP3, AAC, Vorbis and Opus natively, which covers everything DroppedNeedle serves in practice.
 
-This is a deliberate choice against server transcoding. The server allows one transcode per user and two in total, so a household with two listeners can exhaust it, and a Cast session plus a phone can collide with itself. Requirements:
+This is a deliberate choice against server transcoding. The server allows one transcode per user and two in total, so a household with two listeners can exhaust it, and a Cast session plus a phone can collide with itself. A transcode is a scarce shared resource, and that is the fact every rule below is built on.
 
-1. Default stream quality is Original, matching screen 12.
-2. "Stream on mobile data: MP3 320" requests a transcode with `format=mp3&maxBitRate=320` only while on a metered connection.
-3. Hide that setting entirely unless `transcoding:1` appears in `getOpenSubsonicExtensions` and the server reports transcoding enabled. Neither is guaranteed; ffmpeg may be absent.
-4. On `429` from a transcode, fall back to the original stream for that track and show a one-line notice rather than failing.
-5. All audio requests must be `Range`-capable. The server honours ranges, returns `416` correctly, and disables gzip on audio so seeking works.
-6. **Transcoded bytes are never retained.** A track streamed as MP3 320 on mobile data plays and is then thrown away; only original-format bytes are ever written to the audio store. See "Why transcoded bytes are never cached".
+**The single mobile-data toggle is gone, and the first draft's version of this rule was wrong in a way worth stating.** It said: *"'Stream on mobile data: MP3 320' requests a transcode with `format=mp3&maxBitRate=320` only while on a metered connection"* — one switch, one bitrate, and nothing anywhere asking what the source file already was. On a library that is already MP3 320, which is what the reference library turned out to be, that switch asks the server to re-encode a 320 kbps MP3 into a 320 kbps MP3 on every metered play. It is not a small saving; it is no saving at all, paid for three times over: a generation of lossy-to-lossy quality loss, a track that can never be retained because rule 9 forbids keeping transcoded bytes, and a scarce slot spent to achieve nothing. The condition the rule was missing is the source's own quality, and it is now rule 6.
+
+What replaces the toggle is a **rung ladder**: Original, Opus 192, Opus 128, Opus 96, MP3 320, MP3 256, MP3 192, MP3 128, declared best-first. Requirements:
+
+1. Default stream quality is Original, matching screen 12. The Wi-Fi rung defaults to Original and is normally left there: an unmetered connection has nothing to save and a scarce slot to spend.
+2. **A rung is chosen per network, not per app.** Two settings, one for Wi-Fi and one for mobile data; the metered state of the connection picks between them. Mobile data defaults to MP3 320, which is what the retired toggle already stored, so an existing install widens rather than migrates.
+3. **A rung may also be pinned to one track or one album**, and a per-item rung is absolute — it applies on Wi-Fi and on mobile data alike. The mode defaults answer "what do I usually want"; an override answers "this record is different", and a record worth hearing lossless is worth it on the train too. Resolution order is track, then album, then the mode default. Per-network overrides were rejected: four numbers per album, three of which nothing on screen shows.
+4. Hide the rung pickers entirely unless `transcoding:1` appears in `getOpenSubsonicExtensions` and the server reports transcoding enabled. Neither is guaranteed; ffmpeg may be absent. What is left is one row reading "Original", which is the truth on such a server — every rung resolves to original bytes there. A disabled row would invite the user to go looking for a switch that does not exist.
+5. **A rung is a ceiling, never a target.** It says the most the user is willing to have sent. You cannot transcode upward — asking for FLAC from an MP3 source yields the MP3 — so "better than the source" is not a state the ladder can express and it does not try to.
+6. **A transcode that would not save bytes resolves to Original.** Three conditions must all hold before any re-encode is requested: the rung is a transcode rung, the server reports transcoding available, and the source is genuinely larger than the transcode would be. Lossless always is. A lossy source only is when its bitrate is strictly higher than the rung's. The comparison is on bitrate alone, across codecs included, so Opus 128 from an MP3 320 source transcodes and MP3 320 from an Opus 128 source does not — this answers "would this send less", not "would this sound better", and modelling perceptual equivalence would put an argument about codecs inside a cache rule with no way to test the answer. **Unknown is not evidence:** a source with no format or no bitrate resolves to Original, on the same principle "Invalidating upgraded files" applies to staleness. The asymmetry is deliberate — transcoding on a guess costs a scarce slot and forfeits the cached copy permanently, while declining on a guess costs one track's worth of mobile data once and keeps the bytes.
+7. On `429` from a transcode, fall back to the original stream for that track and show a one-line notice rather than failing. Retention follows the format actually fetched, so a fall-back to Original is retained.
+8. All audio requests must be `Range`-capable. The server honours ranges, returns `416` correctly, and disables gzip on audio so seeking works.
+9. **Transcoded bytes are never retained.** A track streamed below its source quality plays and is then thrown away; only original-format bytes are ever written to the audio store. See "Why transcoded bytes are never cached".
+
+Rule 9 has a consequence the UI has to say out loud: **a rung below the library's source quality never builds an offline library.** The bytes play and are discarded, every time. That is correct and must not be weakened, so the Settings screen states it in words beside the picker rather than leaving the user to infer it from a storage figure that never moves.
+
+There is deliberately **no rung for downloads.** A download is the copy that stays, and rule 9 is explicit about what a transcoded download would be: a lossy rendering installed as that track's permanent offline version. "Pulled" is always original bytes, and the third mode exists in the product's vocabulary and not as a setting.
+
+**A per-item override survives the album being downloaded, dormant.** This was an open question and is now decided. A local copy always wins, so while the album is on the device the override changes nothing at all; it is nevertheless kept rather than cleared, because deleting a download to free space must not silently revoke a preference the user never withdrew. The override stays visible while it is dormant rather than becoming hidden state. Clearing it when a download lands was the alternative and was rejected for that reason; the decision is one line in either direction if it proves wrong.
 
 ### Why Media3's cache is not used
 
@@ -426,7 +467,7 @@ Four reasons, each of which alone would be enough:
 | --- | --- |
 | It reintroduces the budget | Its evictor takes a fixed byte cap and deletes oldest-first — exactly the storage limit this product deliberately removed. |
 | It cannot protect downloads | It has no notion of an album the user asked to keep. Downloads and incidental cache would compete on equal terms. |
-| It would cache transcodes | It retains whatever passes through it, so a FLAC streamed as MP3 320 on mobile data becomes that track's permanent offline copy — the precise bug rule 6 exists to prevent. |
+| It would cache transcodes | It retains whatever passes through it, so a FLAC streamed as MP3 320 on mobile data becomes that track's permanent offline copy — the precise bug rule 9 exists to prevent. |
 | It holds no fingerprint | The staleness check compares `file_id`, size, duration and format per track. `SimpleCache` stores opaque byte ranges with nowhere to put that. |
 
 Running both stores was considered — Media3's for streaming, ours for downloads — and rejected. Settings has to answer "what is taking up the room" with one honest number split by tier, and two stores with two eviction policies cannot be reconciled into that. It would also leave the transcode rule enforced in one store and not the other.
@@ -460,7 +501,13 @@ EQ and crossfade both need a custom Media3 audio processor chain, which rules ou
 
 Screen 21 is a single "Play on" picker listing Cast devices, connected and nearby Bluetooth targets, and this device. It replaces the system output dialog because Cast targets must appear beside Bluetooth ones in one list.
 
+**It is a sheet, not a destination.** The pack draws it over the dimmed player, and the screen draws its own backdrop and takes no dismiss callback, so the host supplies the sheet and owns the dismissal. Making it a destination would strand the listener on a screen with no way off it, and would also mean reimplementing the scrim, the drag handle and the back gesture that a modal sheet already brings.
+
+A Cast target that cannot work says why **in the picker**, before it is picked, rather than failing after the user has chosen a speaker — see "Cast, and where it breaks" for the three supported setups that defeat a receiver, and for why reachability is probed rather than assumed.
+
 The current output is always named in the player — "Living room speaker", "This tablet" — so a user never wonders where sound is going.
+
+Only "This device" is enumerated so far, and the omission is placed deliberately rather than deferred by accident. Bluetooth sinks come from `AudioManager`'s device list and Cast receivers from a `MediaRouter` discovery session; both belong to the layer that owns the Media3 session, because a repository over Room and HTTP that opened a route-discovery callback would be keeping the radio awake from the wrong place entirely. The picker is wired when `:player:service` supplies the routes.
 
 ### Scrobbling
 
@@ -472,7 +519,16 @@ So the settings toggle governs whether Needler reports plays at all; the destina
 
 The whole UI works with no network. Metadata is fully mirrored, so browsing, search and queueing never wait on the server; only streaming un-cached audio and pulling new music need a connection.
 
-**Downloads were not retained, and now are.** The streaming write path and the download write path shared one partial file and disagreed about it: a stream deletes it on open because a stream starts at byte zero, and a download keeps it because those bytes are the `Range` resume point. Nothing recorded that a download held it, and `NeedlerAudioDataSource.openWriteThrough` abandons its handle -- deleting that file -- on every track change and every seek. So playing an album while it pulled destroyed the download in flight, and the short commit that followed deleted what was left. Streams have their own `.streaming` partial now, a short commit no longer discards its own bytes, and a row claiming a file is checked against the file existing. Fixed in code and verified by CI; not yet exercised on a device.
+**Downloads were not retained, and now are.** The streaming write path and the download write path shared one partial file and disagreed about it: a stream deletes it on open because a stream starts at byte zero, and a download keeps it because those bytes are the `Range` resume point. Nothing recorded that a download held it, and `NeedlerAudioDataSource.openWriteThrough` abandons its handle — deleting that file — on every track change and every seek. So playing an album while it pulled destroyed the download in flight, and the short commit that followed deleted what was left. Streams have their own `.streaming` partial now, a short commit no longer discards its own bytes, and a row claiming a file is checked against the file existing.
+
+**That fix was described here as "verified by CI; not yet exercised on a device", and the device then disagreed.** The download tier worked — `Downloaded 125 MB` — and the listening tier read `Cached while listening 0 B` after tracks had played to completion. Two further defects, both on the streaming write path and both independent of the first:
+
+- **The write was held to the mirror's remembered size rather than the response's `Content-Length`.** The mirror's figure is a description of the file at the last sync; the response's is a measurement of the bytes arriving now. DroppedNeedle replaces files in place on a quality upgrade, so between the upgrade and the next sync the two legitimately disagree — in the observed case by eleven bytes. The completeness check then read a whole body as truncated and discarded it, and because the file name derives from the track key, the same disagreement recurred on every single play. The transfer's own view of the length now wins, with the mirror as the fallback for a server that declares none; the download path had already reached that conclusion and this is the streaming half being held to the same rule.
+- **`WriteThroughSink.finish` required end-of-input *on top of* a matching byte count.** Media3 closes a `DataSource` when its load ends, and a load can take every byte without the reader asking once more and being told there are none left — a track's final block landing exactly on the end of the body, or a load cancelled a moment after the last read. Demanding both discarded those writes. A matching byte count is a measurement and settles the question on its own; end-of-input is the weaker evidence and is used only when nothing declared a length. A short body is still refused, which is the rule the sink exists for. The download path never had the extra requirement.
+
+Both are fixed in code and covered by tests. **Neither has been exercised on a device**, and this paragraph no longer claims otherwise — the previous draft's "verified by CI" was true and was not evidence, which is the whole reason this section has been rewritten twice.
+
+The reason it took a five-hour source trace to find an eleven-byte disagreement is that every refusal on this path returned a bare `null` and said nothing, so a correct refusal, a wrong one and a successful write were indistinguishable. They are no longer; see "Observability".
 
 ### Three tiers
 
@@ -563,9 +619,11 @@ On every album sync, compare each track's `file_id`, size, duration and format �
 
 ### Why transcoded bytes are never cached
 
-Only original-format bytes are ever retained. A track streamed as MP3 320 because the phone was on mobile data plays, and is then discarded.
+Only original-format bytes are ever retained. A track streamed at a rung below its source quality because the phone was on mobile data plays, and is then discarded.
 
-This is the same class of bug as the `file_id` rule and is worth naming as such. Retaining the transcode would make a lossy 320 kbps copy that track's **permanent** offline version: the next play finds bytes in the cache, plays them, and the user — who owns a FLAC, and downloaded the album precisely so they could hear it — never learns that one commute quietly downgraded their library. The saving is a single re-fetch. The cost is silent, permanent and invisible. The resolver sets the retention flag from the format it resolved, and nothing downstream may override it.
+This is the same class of bug as the `file_id` rule and is worth naming as such. Retaining the transcode would make a lossy copy that track's **permanent** offline version: the next play finds bytes in the cache, plays them, and the user — who owns a FLAC, and downloaded the album precisely so they could hear it — never learns that one commute quietly downgraded their library. The saving is a single re-fetch. The cost is silent, permanent and invisible.
+
+The retention flag is set from the format the resolver resolved, which is what ties the rule to one decision rather than to a flag every caller has to remember. **There is one place it may be widened and only one:** a `429` on a transcode falls back to the original stream, and original bytes are exactly the bytes the store is allowed to keep, so retention follows the format actually fetched rather than the format planned. Nothing else may override it, and nothing may narrow it — a "no" from the resolver about the *track* stays a no.
 
 ## Background work and notifications
 
@@ -764,7 +822,7 @@ Nothing in the first draft owned the boundary between the player UI and the Medi
 
 | Module | Contains |
 | --- | --- |
-| `:app` | Navigation, DI wiring, Connect and Settings |
+| `:app` | Navigation, DI wiring, Connect, Settings, Licences, the diagnostics view, the Wear bridge and the update check |
 | `:core:design` | Palette, type, shape, motion, shared components |
 | `:core:domain` | Entities, repository interfaces, use cases |
 | `:core:data` | Room, sync, write queue, repository implementations |
@@ -826,6 +884,7 @@ One Room database holds the mirror, the pins, the cache index and the write queu
 | `pull` | Release-group MBID | task ID, status, percent, files done, files total, downloaded bytes, total bytes, `search_job_id`, `candidate_index`, source, error, created-at, updated-at |
 | `write_queue` | Sequence | operation type, payload, attempts, last error |
 | `sync_state` | Singleton | library revision, last full sync, last delta sync, last scan time |
+| `stream_override` | Scope (track or album) + item ID | the rung pinned to that item |
 
 ### Notes on the schema
 
@@ -845,6 +904,8 @@ The `album.format` and `album.bitrate` columns exist because screen 13 badges ev
 
 **Never write `album` or `track` with `@Insert(onConflict = REPLACE)`.** `INSERT OR REPLACE` is a delete followed by an insert, and with `album → track ON DELETE CASCADE` that means every sync silently empties every album it touches — churning the external-content FTS rows on the way through. Use `@Upsert`. This is a rule rather than a review note because the failure is invisible: the sync reports success, the album still renders, and the tracks are simply gone.
 
+**`stream_override` is a table rather than a column on `album`, for the same reason the staleness fingerprint is not on `track`.** `album` is the mirror, the mirror is the server's copy, and sync overwrites it — so a user preference stored in a synced row is a preference waiting to be overwritten. An override must also be settable for an album the mirror has not fetched yet, which a column on a row that does not exist cannot be. Like `pin` and `audio_cache` it carries no foreign key: a re-import that rewrites or briefly drops an album row must not throw away the user's choice about how to stream that record, and an override for an album this server does not hold is inert and costs one row.
+
 **Clearing the database returns file paths rather than deleting files.** File deletion cannot happen inside a Room transaction, so the clear operations — server changed, remove everything, clear the listening cache — collect the paths of the rows they are about to drop, *before* dropping them, since afterwards there is no record of what was on disk, and return them for the caller to unlink. A caller that ignores the return value leaves orphaned gigabytes behind.
 
 **The metadata mirror is pruned.** Catalogue search results land in `album` as un-owned rows, and a long session of browsing MusicBrainz would grow the mirror without bound. A prune drops un-owned rows that nothing references and that have not been touched recently; owned, pinned, pulled and starred rows are spared, so nothing the user has expressed any interest in is ever collected.
@@ -854,6 +915,8 @@ The `album.format` and `album.bitrate` columns exist because screen 13 badges ev
 The companion bearer and the app-password live in `EncryptedSharedPreferences` under a Keystore master key, outside Room, and are excluded from any backup or crash report.
 
 Migrations are written by hand from the first release, since a destructive fallback would throw away a multi-gigabyte cache and force a full re-sync. Changing server identity drops the mirror and the cache deliberately, because MBIDs are global but `file_id` values and playlist IDs are not.
+
+**What a server change does not drop is anything keyed on the person or the device.** Stream quality, EQ, crossfade and the notification switches are properties of the listener and the handset, not of the server, so they survive. A per-item quality override survives with them: it is keyed on a release-group MBID, which is global exactly where a `file_id` is not, so the same record on the new server is the same record. The line is drawn on what the key means rather than on which store the value sits in.
 
 ## Non-functional requirements
 
@@ -898,6 +961,7 @@ Motion honours the reduced-motion setting. TalkBack must reach the crate's reord
 3. `android:allowBackup="false"`, so secrets and pins never leave the device.
 4. No third-party analytics or crash reporting that transmits server URLs or library contents.
 5. Release builds obfuscated, with `minifyEnabled` and no debug logging.
+6. **A stored secret is destroyed only when its destruction is provable or consented.** Failing to read the credential store is not grounds to empty it; see "Destruction is provable or consented". The rule belongs here as well as there because it reads as a security measure — delete what you cannot verify — and is the opposite of one: the data at risk is the user's, the attacker is a process kill, and the loss is silent.
 
 ### Legal and attribution
 
@@ -907,20 +971,35 @@ The attribution line credits Dropped Needle, slskd, MusicBrainz, ListenBrainz an
 
 DroppedNeedle is AGPL-3.0, but Needler talks to it only over HTTP and links none of its code, so no copyleft obligation attaches to Needler itself. **Needler is licensed Apache-2.0** — MIT's permissions plus an explicit patent grant, which protects the project and its contributors, and the licence the Android and Kotlin toolchain it builds on already uses. The Licences screen must therefore show Apache-2.0 for Needler alongside each bundled dependency.
 
+The screen exists and is reached from Settings. The catalogue it renders is data rather than a build-time scrape of the resolved graph, and the risk that creates is that a hand-maintained list goes stale on the day somebody adds a dependency — a list that looks like an answer and is not. So the freshness check is a **test against `gradle/libs.versions.toml`**, the project's single statement of what it depends on, and it is exact in both directions: a dependency with no licence recorded fails, and a recorded licence for a dependency the project no longer has fails too. A subset check would catch the first and miss the second, leaving the screen naming a library that is not shipped. It runs in the task CI runs, so it fails on the commit that adds the dependency rather than at the next release. A version constraint counts as a dependency here — `androidx.fragment` reached the catalogue that way, and is recorded for that reason.
+
 ### Observability
 
 A local, user-viewable diagnostics log covering the last session: request URLs with secrets redacted, status codes, sync summaries and playback errors. It must be shareable as a file for bug reports, and it must never leave the device automatically.
 
+It exists, and it is reached from Settings. The decisions that gave it its shape:
+
+1. **"The last session" rules out a file.** The log is a 500-line ring buffer in memory. A file that accumulated would keep every server address, every album ever streamed and every failure across months of use, in app-private storage that nothing prunes; a ring buffer *is* the last session, costs one allocation per line and no I/O, and is erased by the one event that ends a session. That also makes "never leaves the device automatically" true by construction rather than by policy — there is nothing on disk to leak until the user taps share. A rotating file in `filesDir` was the first design and was rejected: it buys crash survival, which the requirement does not ask for, and this app's failures are overwhelmingly "it will not connect" rather than "it vanished".
+2. **Redaction happens on ingest, not on render.** Rendering happens twice, once for the list and once for the export, and a rule applied at two call sites is a rule with two chances of being forgotten when a third view is added. Nothing can enter the buffer un-redacted, so nothing can leave it un-redacted.
+3. **Every line is tagged with its source** — `NET`, `SYNC`, `PLAY`, `APP` — in a column of fixed width, because the requirement names four kinds of content by hand and a reader hunting one of them in four hundred lines must be able to tell them apart at a glance. The first three are written to. `APP` is declared and unwritten, so the next thing worth a line has somewhere already correct about redaction to write it.
+4. **The share is one file at one fixed name**, in the single directory the `FileProvider` exposes, granted read-only to one app until the receiving task finishes. A timestamped name would leave one full copy of a session's request log per share in a directory nothing prunes, which is the on-disk record point 1 exists to avoid.
+
+**Every refusal on the audio-retention path now logs its reason, and that is what the log was for.** The path has seven outcomes — kept, transcoded, already on device, no length declared, no room above the free-space floor, store unwritable, and a finished write that did not match its declared length. Six of them were a bare `null` or a silent discard, and the seventh, the write succeeding, looked the same from outside: no line, no row the user would notice, nothing. So a correct refusal was indistinguishable from a broken one, and both from the thing having worked, which is how an eleven-byte size disagreement passed for "downloads are not retained" for a release and cost a five-hour source trace to find. It is now a one-line read.
+
+Two rules fall out of that and are requirements rather than taste. The **positive** case gets a line too: a report showing three `cached` lines against a Storage section still reading `0 B` points at the accounting query, while the same report with no lines at all points at the write path, and without the positive line the absence of evidence has two explanations. And a refusal that is simply the app behaving as specified — a transcoded stream, a track already on the device — is filed at debug rather than as a warning, because a `WARN` badge on correct behaviour is how a reader learns to ignore the badge.
+
+A diagnostics write may never fail the thing it describes. The audio store's contract is that a cache write cannot disturb the playback it rides along with, so a sink that could throw would put that back in question; the default sink everywhere drops everything, which means a forgotten wiring loses lines instead of crashing.
+
 ## Constraints and risks
 
-Ten things in the server, and seven in the design pack, constrain what Needler can ship. All were found by reading the DroppedNeedle source rather than its documentation, and the list grew as the foundation layers were built against it.
+Ten things in the server, and eight in the design pack, constrain what Needler can ship. All were found by reading the DroppedNeedle source rather than its documentation, and the list grew as the foundation layers were built against it.
 
 ### Server constraints
 
 | Constraint | Effect | Mitigation |
 | --- | --- | --- |
 | `subsonic_enabled` defaults off, admin-only | A non-admin cannot finish onboarding | Detect it and name the exact setting an admin must turn on |
-| Transcoding capped at 1 per user, 2 global | "MP3 320 on mobile data" collides with a second device or a Cast session | Default to original bytes; fall back on `429` |
+| Transcoding capped at 1 per user, 2 global | A transcode rung on mobile data collides with a second device or a Cast session | Default to original bytes; cap every rung against the source; fall back on `429` |
 | Direct streams capped at 8 per user, 32 global | Downloads competing with playback can hit the ceiling | Serialise downloads; keep one slot free for playback |
 | Library download is admin-gated | Pull local may be unavailable entirely | Check `download/access` and hide the affordance |
 | Track `file_id` changes on quality upgrade | Cached audio silently goes stale | MBID-based cache keys plus a staleness check on sync |
@@ -936,7 +1015,8 @@ Ten things in the server, and seven in the design pack, constrain what Needler c
 | --- | --- | --- |
 | 01, 16 | `APP PASSWORD` cannot reach the request API | Relabel to `PASSWORD`; mint the app-password internally |
 | 12 | "Pull on Wi-Fi only" implies pulls cost phone data | Move to Storage as "Download to device on Wi-Fi only" |
-| 12 | "Prefer FLAC" is not settable per request | Show the server's quality policy read-only, or admin-only |
+| 12 | "Prefer FLAC" is not settable per request | **Settled.** Not a setting at all; the policy the server applied is shown read-only on the album it was requested for |
+| 12 | "Stream on mobile data: MP3 320" is one toggle at one bitrate | Replaced by a rung picker per network, with per-track and per-album overrides — see "Streaming" |
 | 12 | "Scrobble to ListenBrainz" hard-codes a destination | Label from the server's configured scrobble targets |
 | 05 | "Dropped Needle picks the best Soulseek source" | Source-aware copy; the server also supports Usenet |
 | 12 | "Device storage limit" with GB presets | **Dropped.** There is no user-facing limit — see "Storage, and why there is no budget" |
@@ -944,7 +1024,9 @@ Ten things in the server, and seven in the design pack, constrain what Needler c
 
 "Prefer FLAC" is the one worth explaining. The request body carries no quality field: `POST /api/v1/requests/new` accepts only the MBIDs, title hints and the two artist-monitoring flags. Quality is a server-side policy under `/api/v1/download-clients/policy`, which is admin-only to change.
 
-The response does return `quality_snapshot_summary`, the policy applied to that request. So Needler can honestly show what quality will be sought, and can let an admin edit the policy, but a regular user cannot override it per album. Presenting it as a user toggle would be a lie.
+The response does return `quality_snapshot_summary`, the policy applied to that request. So Needler can honestly show what quality will be sought, but a regular user cannot override it per album, and presenting it as a user toggle would be a lie.
+
+**Settled since: the summary is shown on the album and on its pull, and Settings carries nothing.** It is a fact about one request's outcome rather than a preference, so it rides on the `album` row and on the `pull`, and it is shown where the request is made — the album screen, the request sheet, and the pull's own detail. Settings has no quality control of any kind for the simple reason that the figure lives somewhere Settings cannot reach: it is on the album, not in any preference store. That leaves the design pack's whole **Pulling** section with nothing in it, so the section is not drawn. Letting an admin edit the policy from the app was the other half of the original question and is not in v1; it belongs with the rest of the admin surfaces under "Out of scope".
 
 ### Build and toolchain hazards
 
@@ -956,9 +1038,17 @@ Proven by building, not assumed.
 | SDK packages are named `android-37.0`, `37.1`, `37.2` | There is no plain `android-37` to install |
 | AGP 9.4.0, Kotlin 2.4.20, Gradle 9.6.1, JDK 21 | AGP 9 enables built-in Kotlin, so `org.jetbrains.kotlin.android` must not be applied |
 | Kotlin block comments **nest** | A KDoc mentioning a path like `/api/v1/*` swallows the rest of the file |
+| A literal `*/` inside a KDoc **closes it early** | The rest of the comment parses as code. `**Play**/**Shuffle**` is enough to do it |
+| `:wear` needs a version-constraint floor on `androidx.fragment` | `play-services-wearable` settles it at 1.1.0, and `registerForActivityResult` is a *fatal* lint error below 1.3.0 |
 | Build output is redirectable with `needler.buildDir` | Needed when the checkout lives in a synced folder |
 
 **Kotlin block comments nest, and this will happen again.** Unlike C, Java and most of their descendants, Kotlin's `/* */` nests: a `/*` appearing anywhere inside a doc comment opens a second comment that the closing `*/` only half closes, and the remainder of the file is silently consumed as comment text. A path written as `/api/v1/` followed by an asterisk inside a KDoc does exactly this. Six occurrences produced 784 compile errors, not one of which pointed anywhere near the cause, because by then the compiler was reading the rest of each file as prose. Write such paths with an ellipsis instead, or break the character sequence, and treat an implausible error count in a file where "only comments changed" as this bug until proven otherwise.
+
+**The trap runs both ways, which the row above did not say.** The inverse is a literal `*/` *inside* a doc comment, which closes it early and leaves the remainder of the comment to be parsed as code. It needs no path to trigger it: Markdown emphasis is enough, and `**Play**/**Shuffle**` in a KDoc produces exactly the sequence. One occurrence of each was found in this codebase, which is the reason both are listed rather than the one that was more interesting. The two symptoms are mirror images and both mislead — the nested `/*` reports errors far below the cause, the early `*/` reports them inside prose — so the diagnostic is the same in either direction: when a file "only had comments changed" and the compiler disagrees in volume, read the comment delimiters before reading anything else.
+
+**`:wear` carries a version constraint on a library it does not use.** `play-services-wearable` pulls in `play-services-base`, which asks for `androidx.fragment` 1.0.0, and Gradle settles the graph at 1.1.0. `NeedlerWearActivity` calls `registerForActivityResult` to ask for `POST_NOTIFICATIONS`, and `androidx.activity`'s `InvalidFragmentVersionForActivityResult` is a **fatal** lint check below fragment 1.3.0 — a pre-1.3 `FragmentActivity` does not call `super.onRequestPermissionsResult`, so the result never arrives. Fatal means it fails `:wear:lintVitalRelease`, so it fails the release build rather than warning about it, and it does so in a Wear Compose module that contains no fragment code at all.
+
+The fix is a `constraints { }` floor rather than an `implementation` dependency, and the distinction is the point: the module wants no fragment of its own, only a version floor on the copy Play services drags in. Adding it as a dependency would compile a library into `:wear` to satisfy a lint check about a transitive version.
 
 **Build output can be redirected off the checkout.** Setting `needler.buildDir` in `~/.gradle/gradle.properties` moves every module's `build/` directory to a path outside the repository. This is not a preference: a sync client holds handles on Gradle's intermediates while it uploads them, and Gradle then fails with "Unable to delete directory" at unpredictable points — which matters here, because this checkout lives in OneDrive. It is unset by default, so a normal clone and CI keep the standard `./build` layout.
 
@@ -1021,16 +1111,19 @@ Recorded so the reasoning is not re-litigated. Each is now specified in the sect
 | What is the storage budget, and its default? | There is none. Downloads are unlimited; the listening cache is bounded by device free space | Storage, and why there is no budget |
 | Should the muted grey be lightened? | No. `#6f7a68` is kept as drawn, with the alternative documented | Accessibility |
 | Does the palette need a destructive colour? | Yes. `#e8908a` was added | Accessibility |
+| Is "Prefer FLAC" a read-only display or an admin-only control? | Read-only, and not in Settings at all. The policy applied to a request is shown on the album it was requested for, from `quality_snapshot_summary` | Design pack discrepancies |
+| Does a per-item quality override survive the album being downloaded? | Yes, dormant. A local copy always wins, so the override changes nothing while the download exists, and it is kept rather than cleared | Streaming |
 
 ### Open questions
 
+Two more were answered in the 2026-10-02 revision and have moved to the table above: "Prefer FLAC", and whether a per-item quality override survives a download. These are the ones that remain genuinely open.
+
 1. **Does your server's Subsonic protocol get enabled, or should v1 also implement the `/api/v1` native playback lane as a fallback?** The hybrid choice assumes yes. A fallback is roughly 1.5x the data-layer work.
-2. **Is "Prefer FLAC" acceptable as a read-only display of the server's policy**, or should it be an admin-only editable control?
-3. **What is done about non-text contrast (WCAG 1.4.11)?** The hairline measures 1.20:1 and control boundaries are effectively invisible. Raising it changes the look of every surface in the pack, so it wants a decision rather than a patch.
-4. **Should Cast ship in v1** given it cannot work on a VPN-only or self-signed server, which is the likely setup?
-5. **Should Wear wait** for a Play Store listing, or ship as a sideloaded developer surface?
-6. **Is the crossfade preview on screen 20 live audio** or an illustration? Live cross-track preview needs the full dual-player pipeline running inside a settings screen.
-7. **Should a failed pull retry automatically?** Screen 06 shows a manual Retry only.
+2. **What is done about non-text contrast (WCAG 1.4.11)?** The hairline measures 1.20:1 and control boundaries are effectively invisible. Raising it changes the look of every surface in the pack, so it wants a decision rather than a patch.
+3. **Should Cast ship in v1** given it cannot work on a VPN-only or self-signed server, which is the likely setup? `OutputTarget.Cast` and its reachability states are modelled and nothing populates them, so this question is still the one that decides whether they ever are.
+4. **Should Wear wait** for a Play Store listing, or ship as a sideloaded developer surface? Both halves of the link are built, so the only thing still undecided is distribution.
+5. **Is the crossfade preview on screen 20 live audio** or an illustration? Live cross-track preview needs the full dual-player pipeline running inside a settings screen.
+6. **Should a failed pull retry automatically?** Screen 06 shows a manual Retry only, and that is all the app does; nothing has decided whether it should be more.
 
 ### Sources
 
@@ -1052,4 +1145,6 @@ All server behaviour in this document was read from source at `main`, September 
 
 UI requirements come from the 21 screens in `design/`, cited by number throughout.
 
-Since 2026-09-18 there is a second source: the foundation modules themselves. Where this document and the code disagree, one of the two is a bug. The corrections folded in on that date came from building against the server rather than reading about it, which is why several of them contradict the first draft outright rather than merely refining it.
+Since 2026-09-18 there is a second source: the code itself. Where this document and the code disagree, one of the two is a bug. The corrections folded in on that date came from building against the server rather than reading about it, which is why several of them contradict the first draft outright rather than merely refining it.
+
+Since 2026-10-01 there is a third, and it outranks both: **the app running on a device.** Two of the corrections in this revision could not have come from anywhere else. The audio store streamed perfectly and retained nothing, which no test and no reading of the source had caught, because the number it disagreed with was a real server's real `Content-Length`. And the credential store destroyed a working session on an ordinary low-memory process kill, which is a thing only a device does. CI proved the code did what it was written to do; the device proved what it was written to do was wrong. The 2026-09-18 note that a disagreement means one of the two is a bug holds, with the addition that a passing suite is not the tie-breaker.

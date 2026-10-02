@@ -34,11 +34,12 @@ import app.needler.core.data.settings.StreamQuality
  * never withdrew, and the dimmed `Server:` tag on the album screen keeps it visible so it is not
  * hidden state.
  *
- * It also survives `clearForServerChange`, unlike the mirror and the pins. REQUIREMENTS.md draws that
- * line already - "quality, EQ, crossfade and notification preferences are properties of the device
- * and the person, not of the server" - and this is a quality preference keyed on a release-group
- * MBID, which is global where a `file_id` is not. The same record on the new server is the same
- * record.
+ * It also survives `clearForServerChange`, unlike the mirror and the pins, and the reason is in what
+ * the key is made of. REQUIREMENTS.md "Secrets and migrations" drops the mirror on a server change
+ * because "MBIDs are global but `file_id` values and playlist IDs are not" - so the things keyed on
+ * a server's own identifiers cannot survive it. An override is keyed on a release-group MBID, which
+ * is one of the global ones. The same record on the new server is the same record, and the choice
+ * the user made about it was never a fact about the old server.
  */
 @Entity(
     tableName = "stream_override",
