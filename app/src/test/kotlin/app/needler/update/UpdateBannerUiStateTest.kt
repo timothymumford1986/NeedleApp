@@ -83,6 +83,30 @@ class UpdateBannerUiStateTest {
     }
 
     /**
+     * These two bars have no exit of their own, and that is why the escape has to be elsewhere.
+     *
+     * A device was left on "Installing 0.0.11" for ever: no action to press, no dismissal, and a
+     * state that only a process restart could clear — which only the install that could not start
+     * would have caused. Pinning the absence here is deliberate, because it is the fact that makes
+     * [UpdateRepository.observe]'s bounded wait load-bearing rather than belt-and-braces. If anyone
+     * ever gives these phases a button, that wait is no longer the only way out and this test
+     * should be the thing that says so.
+     *
+     * Making them dismissible instead was the obvious fix and the wrong one: it would have hidden a
+     * feature that was still broken, and this bar's one job is that an available release is seen.
+     */
+    @Test
+    fun `the two bars the platform owns offer the listener nothing, which is why the wait exists`() {
+        for (state in listOf(UpdateState.Installing(update), UpdateState.AwaitingConfirmation(update))) {
+            val banner = state.toBannerState()
+            assertTrue(banner.visible)
+            assertNull(banner.actionLabel)
+            assertFalse(banner.dismissible)
+            assertFalse(banner.showProgress)
+        }
+    }
+
+    /**
      * The failure message and its action are the single most sensitive strings in this package.
      * "Retry" is the only thing offered, and nothing anywhere suggests uninstalling: an uninstall
      * destroys the Keystore master key behind `SecureCredentialStore`, and with it the companion

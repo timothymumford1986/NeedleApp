@@ -91,6 +91,19 @@ data class AlbumUiState(
 
     /** The album's own override, or null when it follows the mode default for the connection. */
     val qualityOverride: StreamRung? = null,
+
+    /**
+     * How many rows the crate holds right now, from `PlaybackController.observeQueue`.
+     *
+     * Here rather than computed when an add happens, because the session is the authority on
+     * the crate and the only honest figure is the one it has actually applied - see
+     * [crateLine]. Zero means nothing is loaded, which is also what the screen renders with
+     * no player bound at all.
+     */
+    val crateTrackCount: Int = 0,
+
+    /** The crate's total running time in milliseconds, from the same flow. */
+    val crateDurationMs: Long = 0L,
 ) {
 
     /** The mirror answered and had nothing. A pulled album that was later removed, usually. */
@@ -119,6 +132,17 @@ data class AlbumUiState(
 
     /** True when there is at least one track that can actually be played. */
     val hasPlayableTracks: Boolean get() = tracks.any { it.available }
+
+    /**
+     * `19 in the crate · 1 hr 14 min`, or null when the crate is empty.
+     *
+     * Drawn under the "added" notice rather than kept on screen permanently. Adding to a queue
+     * with no visible change is indistinguishable from a tap that did not register, and the two
+     * figures REQUIREMENTS.md "Queue" asks the crate screen for - "a count and total duration" -
+     * are the proof the session took it. Read live from [crateTrackCount], so the line corrects
+     * itself the moment the session confirms, instead of reporting what this screen predicted.
+     */
+    val crateLine: String? get() = LibraryFormat.crateLine(crateTrackCount, crateDurationMs)
 
     // ---- the quality tag pair -----------------------------------------------
     // Two tags rather than one format badge, because the header answers two different questions and
@@ -434,6 +458,38 @@ sealed interface AlbumNotice {
     /** The server already has it. */
     data object AlreadyInLibrary : AlbumNotice {
         override val message: String get() = "This album is already in your library."
+    }
+
+    /**
+     * Tracks went into the crate.
+     *
+     * Three outcomes from two controls, and they are modelled rather than collapsed into one
+     * sentence because the user cannot see which happened. REQUIREMENTS.md "Queue" has the crate
+     * persist and keep playing, so appending to a crate that is playing changes nothing visible on
+     * this screen; saying what was added, and where, is the whole feedback.
+     *
+     * [started] is the case `PlaybackController.enqueue` cannot cover: it "adds tracks to the crate
+     * without disturbing what is playing", and with nothing playing that leaves silence and a
+     * loaded crate, which reads as a dead button. The ViewModels send `playTracks` instead and say
+     * so here. It outranks [playNext]: there is nothing to play next of.
+     *
+     * The wording is chosen to agree for one track as well as for twenty, so there is one sentence
+     * per outcome rather than a singular and a plural of each.
+     */
+    data class AddedToCrate(
+        val trackCount: Int,
+        val playNext: Boolean = false,
+        val started: Boolean = false,
+    ) : AlbumNotice {
+        override val message: String
+            get() {
+                val tracks: String = LibraryFormat.plural(trackCount.toLong(), "track")
+                return when {
+                    started -> "The crate was empty, so " + tracks + " started playing."
+                    playNext -> "Added " + tracks + " to the crate, to play next."
+                    else -> "Added " + tracks + " to the crate."
+                }
+            }
     }
 
     /** Downloading to the device started. */

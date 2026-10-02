@@ -363,6 +363,31 @@ public data class BatchRequestReceipt(
     val requested: List<RequestReceipt>,
     val skipped: List<ReleaseGroupMbid>,
     /**
+     * Albums the caller asked for that were never offered to the server.
+     *
+     * REQUIREMENTS.md "Placing a request" caps the batch endpoint at 500 items and says "callers
+     * must chunk to 500 themselves". It says nothing about what a chunk failing halfway through
+     * means, and the honest answer is that it means neither success nor failure: the chunks already
+     * answered have real `pull` rows and the server is really acquiring them, while the rest were
+     * never asked for at all. A bare [Outcome.Failure] for the whole call claims the first 200
+     * albums are not being fetched when they are, and the Pulls screen would then disagree with the
+     * message the user just read.
+     *
+     * So the two outcomes are reported separately rather than collapsed. [requested] is what the
+     * server accepted, including anything journalled for a reconnect; this is what it was not given
+     * the chance to accept, and [failure] says why. Empty on a batch that completed, which is the
+     * only case a caller may treat as a plain success.
+     */
+    val notSubmitted: List<ReleaseGroupMbid> = emptyList(),
+    /**
+     * Why [notSubmitted] stopped where it did, or null when nothing stopped.
+     *
+     * Carried rather than thrown because the call as a whole succeeded in part, and an error that
+     * ends the call cannot also describe a partial result. A caller renders this beside the counts;
+     * it must not treat its presence as "the batch failed".
+     */
+    val failure: NeedlerError? = null,
+    /**
      * Always `0`. Not a count of anything, and nothing may be built on it.
      *
      * REQUIREMENTS.md "Placing a request", item 2: the response carries an `overflow` field, "the
@@ -378,7 +403,18 @@ public data class BatchRequestReceipt(
      * a one-line change per file once those have caught up.
      */
     val overflow: Int = 0,
-)
+) {
+    /**
+     * True when some of the batch reached the server and some of it did not.
+     *
+     * The one question a screen has to ask before choosing its wording: "500 albums requested" and
+     * "that did not work" are both lies about this state, and the third sentence - 200 requested,
+     * 300 not sent, and the reason - is the only true one. [notSubmitted] alone is not enough to
+     * decide, because a batch that failed on its *first* chunk has nothing accepted and reads as a
+     * plain failure.
+     */
+    public val isPartial: Boolean get() = requested.isNotEmpty() && notSubmitted.isNotEmpty()
+}
 
 /**
  * `GET /api/v1/downloads/activity-summary`.
@@ -409,15 +445,26 @@ public data class PullActivitySummary(
  * the domain only so a row can say "the track *Nightswimming*" rather than naming an album the user
  * never asked for.
  */
-public enum class RequestTarget {
-    ALBUM,
-    TRACK,
+public enum class RequestTarget(
+    /**
+     * The `request_kind` the server reads and writes.
+     *
+     * Carried on the enum rather than spelled out at each call site because it now travels in three
+     * directions - onto the wire as a query parameter, into `pull.request_kind`, and into a
+     * `write_queue` payload that an older or newer build has to be able to decode - and three
+     * hand-written copies of the string "track" is three chances for one of them to be wrong in a
+     * way nothing fails to compile over.
+     */
+    public val token: String,
+) {
+    ALBUM("album"),
+    TRACK("track"),
     ;
 
     public companion object {
         /** Maps `request_kind`, which is `album` or `track`. Anything else is an album. */
         public fun fromServerToken(token: String?): RequestTarget =
-            if (token?.trim()?.equals("track", ignoreCase = true) == true) TRACK else ALBUM
+            if (token?.trim()?.equals(TRACK.token, ignoreCase = true) == true) TRACK else ALBUM
     }
 }
 

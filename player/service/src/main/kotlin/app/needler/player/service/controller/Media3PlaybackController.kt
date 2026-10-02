@@ -211,12 +211,36 @@ public class Media3PlaybackController @Inject constructor(
         }
     }
 
+    /**
+     * Add to the end, or straight after the Playing row.
+     *
+     * Row ids come from [QueueBuilder] with its default [QueueItemSource.USER], which is the honest
+     * source for this command and the one difference from [playAlbum]: a record queued deliberately
+     * is a user add, a record the user pressed Play on is a collection. The ids count **up** from 1
+     * and `SessionRowIds` counts down from -1 for anything arriving from Auto or the browse tree, so
+     * an add from here can never collide with one from there - see that class for the whole scheme.
+     *
+     * Nothing is written to the persisted crate here. `PlaybackCoordinator` persists on the
+     * session's `onTimelineChanged`, which `addMediaItems` raises, so these rows survive a restart by
+     * the same route as every other edit and there is exactly one writer of the persisted copy -
+     * the rule `PlaybackSettingsRepository` states.
+     *
+     * ## The empty crate
+     *
+     * `addMediaItems` on a session with nothing in it leaves the player `IDLE`: the rows are in the
+     * crate, every surface can see them, and nothing can play them until something calls `prepare`.
+     * That is a crate the user is looking at and cannot start, so an add that filled an empty
+     * session prepares it. It deliberately does **not** call `play`: this command never starts
+     * sound, per [PlaybackController.enqueue], and a caller that wants the add to be heard uses
+     * `playTracks`.
+     */
     override suspend fun enqueue(tracks: List<Track>, playNext: Boolean) {
         if (tracks.isEmpty()) return
         val rows: List<QueueItem> = queueBuilder.rowsFor(tracks)
         catalogue.remember(tracks)
         command { session ->
             val items: List<MediaItem> = rows.map { catalogue.mediaItemFor(it.track, it.id) }
+            val wasEmpty: Boolean = session.mediaItemCount == 0
             if (playNext) {
                 val insertAt: Int = (session.currentMediaItemIndex + 1)
                     .coerceIn(0, session.mediaItemCount)
@@ -224,6 +248,7 @@ public class Media3PlaybackController @Inject constructor(
             } else {
                 session.addMediaItems(items)
             }
+            if (wasEmpty) session.prepare()
         }
     }
 

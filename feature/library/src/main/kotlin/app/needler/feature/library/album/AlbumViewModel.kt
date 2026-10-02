@@ -35,6 +35,7 @@ import app.needler.core.domain.usecase.PinAlbumForOfflineUseCase
 import app.needler.core.domain.usecase.RequestAlbumUseCase
 import app.needler.core.domain.usecase.ResolvePlayableSourceUseCase
 import app.needler.feature.library.common.RequestSheetState
+import app.needler.feature.library.common.addTracksToCrate
 import app.needler.feature.library.common.hasPlayableFile
 import app.needler.feature.library.common.problemMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -125,6 +126,8 @@ class AlbumViewModel @Inject constructor(
                 PlaybackLens(
                     nowPlayingTrackKey = playbackState.currentItem?.track?.key,
                     transport = transportFor(playbackState, queue),
+                    crateTrackCount = queue.items.size,
+                    crateDurationMs = queue.totalDurationMs,
                 )
             }
         } ?: flowOf(PlaybackLens())
@@ -139,6 +142,8 @@ class AlbumViewModel @Inject constructor(
             tracks = tracks.toRows(owned = album?.isOwned == true),
             nowPlayingTrackKey = lens.nowPlayingTrackKey,
             transport = lens.transport,
+            crateTrackCount = lens.crateTrackCount,
+            crateDurationMs = lens.crateDurationMs,
         )
     }
 
@@ -191,6 +196,8 @@ class AlbumViewModel @Inject constructor(
             requestSheet = sheet,
             serverFormat = resolveServerFormat(current.album, env),
             qualityOverride = env.qualityOverride,
+            crateTrackCount = current.crateTrackCount,
+            crateDurationMs = current.crateDurationMs,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -276,6 +283,39 @@ class AlbumViewModel @Inject constructor(
         val controller: PlaybackController = playback.orElse(null) ?: return
         val index: Int = state.value.tracks.indexOfFirst { it.key == row.key }.coerceAtLeast(0)
         viewModelScope.launch { controller.playAlbum(releaseGroupMbid, startIndex = index) }
+    }
+
+    /**
+     * Put this whole record in the crate, at the end or next, without disturbing what is playing.
+     *
+     * This is the capability the album screen did not have: its three controls all replaced the
+     * crate, so a user listening to one record could not line up a second one without waiting for
+     * the first to end. `PlaybackController.enqueue` has always offered it.
+     *
+     * Unplayable rows are dropped rather than queued. REQUIREMENTS.md "Partial content is a normal
+     * state": a part-delivered pull leaves tracks that exist nowhere, so a crate holding them would
+     * stall on gaps the user cannot see the reason for - the same filter `onPlay` applies by
+     * starting at [AlbumUiState.firstPlayableIndex].
+     */
+    fun onAddToCrate(playNext: Boolean) {
+        val controller: PlaybackController = playback.orElse(null) ?: return
+        val tracks: List<Track> = state.value.tracks.filter { it.available }.map { it.track }
+        if (tracks.isEmpty()) return
+        runExclusively { controller.addTracksToCrate(tracks, playNext) }
+    }
+
+    /**
+     * Add one track to the crate.
+     *
+     * One row rather than the record, because that is what the long press was on. The row's own
+     * `available` is re-checked here for the reason every other playback intent re-checks it: a
+     * ViewModel that trusts its screen to have filtered correctly is one refactor from queueing a
+     * track with no file behind it.
+     */
+    fun onAddTrackToCrate(row: AlbumTrack, playNext: Boolean) {
+        if (!row.available) return
+        val controller: PlaybackController = playback.orElse(null) ?: return
+        runExclusively { controller.addTracksToCrate(listOf(row.track), playNext) }
     }
 
     // ---- pulls --------------------------------------------------------------
@@ -631,12 +671,16 @@ class AlbumViewModel @Inject constructor(
         val tracks: List<AlbumTrack>,
         val nowPlayingTrackKey: TrackKey?,
         val transport: AlbumTransport,
+        val crateTrackCount: Int,
+        val crateDurationMs: Long,
     )
 
-    /** The two playback flows folded into the two facts this screen reads off them. */
+    /** The two playback flows folded into the facts this screen reads off them. */
     private data class PlaybackLens(
         val nowPlayingTrackKey: TrackKey? = null,
         val transport: AlbumTransport = AlbumTransport.START,
+        val crateTrackCount: Int = 0,
+        val crateDurationMs: Long = 0L,
     )
 
     private data class Environment(

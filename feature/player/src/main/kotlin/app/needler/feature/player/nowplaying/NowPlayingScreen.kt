@@ -110,6 +110,7 @@ fun NowPlayingScreen(
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 ArtworkOnRecord(
                     artwork = state.item?.track?.artwork,
+                    identity = state.item?.track?.releaseGroupMbid?.value,
                     albumTitle = state.item?.track?.albumTitle,
                     artistName = state.item?.track?.artistName,
                     playing = state.isPlaying,

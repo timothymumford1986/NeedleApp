@@ -370,6 +370,21 @@ public object EntityMappers {
      * notifications, and each of those says "no title" in its own voice - see
      * `NotificationComposer.text` and `PullsFormat.albumTitle`. A placeholder chosen in the mapper
      * would be a user-visible string in the data layer that no screen could override.
+     *
+     * ## Two fields this used to leave null for every row on the screen
+     *
+     * `updatedAt` and `qualityPolicySummary` are set here, and were not. `PullRow` carried neither
+     * column, so every pull the Pulls screen drew - which is every pull, since the list queries all
+     * return this projection - lost both: `PullsFormat.detailParts` falls back to `createdAt`, so a
+     * landed pull's line dated from the moment it was *asked for* rather than the moment it arrived,
+     * and the pack's `FLAC` / `MP3 320` badge appeared only where a test constructed a [Pull] by
+     * hand. The overload below, which reads the stored entity, always set `updatedAt` - which is why
+     * the album screen was right and the queue was wrong about the same pull.
+     *
+     * The quality summary comes from the joined `album` row. REQUIREMENTS.md "Design pack
+     * discrepancies" settles `quality_snapshot_summary` as the honest thing to show, "a fact about
+     * one request's outcome rather than a preference", and the mirror is where that fact already
+     * lives; see [app.needler.core.data.local.projection.PullRow].
      */
     public fun pull(
         row: PullRow,
@@ -393,7 +408,9 @@ public object EntityMappers {
         error = row.error,
         failureReason = failureReasonFor(row.status, row.error),
         createdAt = WireTime.fromEpochMillis(row.createdAt),
+        updatedAt = WireTime.fromEpochMillis(row.updatedAt),
         awaitingApproval = row.status == PullStatusDb.PENDING_APPROVAL,
+        qualityPolicySummary = row.albumQualityPolicySummary?.trim()?.takeIf { it.isNotEmpty() },
         isPendingSubmission = isPendingSubmission,
     )
 
@@ -405,8 +422,18 @@ public object EntityMappers {
      * `DefaultPullRepository.observePull` does for a single album. [title] and [artist] default to
      * empty because a caller genuinely may not know them, and they are trimmed for the same reason the
      * joined ones are: a blank title is an absent title, and every render site guards on `isBlank`.
+     *
+     * [qualityPolicySummary] is a parameter for the same reason: it lives on the `album` row, which
+     * this overload does not have, so the caller that holds both passes it. Defaulting it to null
+     * rather than dropping it keeps the two overloads answering the same question - the queue row
+     * and the album screen must not disagree about what quality the server went looking for.
      */
-    public fun pull(row: PullEntity, title: String = "", artist: String = ""): Pull = Pull(
+    public fun pull(
+        row: PullEntity,
+        title: String = "",
+        artist: String = "",
+        qualityPolicySummary: String? = null,
+    ): Pull = Pull(
         releaseGroupMbid = ReleaseGroupMbid(row.releaseGroupMbid),
         albumTitle = title.trim(),
         artistName = artist.trim(),
@@ -421,6 +448,7 @@ public object EntityMappers {
         createdAt = WireTime.fromEpochMillis(row.createdAt),
         updatedAt = WireTime.fromEpochMillis(row.updatedAt),
         awaitingApproval = row.status == PullStatusDb.PENDING_APPROVAL,
+        qualityPolicySummary = qualityPolicySummary?.trim()?.takeIf { it.isNotEmpty() },
         isPendingSubmission = row.taskId == null && row.status == PullStatusDb.QUEUED,
     )
 

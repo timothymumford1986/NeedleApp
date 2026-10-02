@@ -277,6 +277,81 @@ class AlbumScreenshotTest {
         assertRendered(file, NeedlerDevice.Tablet)
     }
 
+    // ---- the crate ----------------------------------------------------------
+
+    /**
+     * The action row with its fourth control: Play, Shuffle, the crate menu, Pull local.
+     *
+     * The placement decision in one image. The pack draws three controls here and no way to
+     * queue anything; the fourth is an icon button rather than two more labelled buttons,
+     * because five across would stop Play being visibly the primary action. Rendering it is
+     * how that claim is checked rather than asserted.
+     */
+    @Test
+    fun `the action row carries the crate menu`() {
+        capture("album-crate-control", NeedlerDevice.Phone, owned())
+    }
+
+    /** The same four controls at 200% text, where the row wraps twice. */
+    @Test
+    fun `the action row with the crate menu at 200 percent text size`() {
+        capture("album-crate-control-large-text", NeedlerDevice.Phone, owned(), fontScale = 2f)
+    }
+
+    /**
+     * What a user sees after adding: the sentence, and the crate's own count and duration.
+     *
+     * Adding to a queue with no visible change is indistinguishable from a tap that did not
+     * register, so this line is the whole feedback for the action and has a baseline of its
+     * own.
+     */
+    @Test
+    fun `the added-to-the-crate line, with the count and the duration`() {
+        capture(
+            "album-crate-added",
+            NeedlerDevice.Phone,
+            owned().copy(
+                notice = AlbumNotice.AddedToCrate(trackCount = 8),
+                crateTrackCount = 10,
+                crateDurationMs = 2_120_000L,
+            ),
+        )
+    }
+
+    /** Play next, which says where the tracks went rather than only that they went. */
+    @Test
+    fun `the play-next line`() {
+        capture(
+            "album-crate-play-next",
+            NeedlerDevice.Phone,
+            owned().copy(
+                notice = AlbumNotice.AddedToCrate(trackCount = 8, playNext = true),
+                crateTrackCount = 10,
+                crateDurationMs = 2_120_000L,
+            ),
+        )
+    }
+
+    /**
+     * Adding with nothing loaded, which starts playback and says so.
+     *
+     * `PlaybackController.enqueue` never starts sound, so without this branch the add would
+     * leave a loaded crate and silence - the exact "did my tap register" the notice exists to
+     * answer.
+     */
+    @Test
+    fun `the line for an add that had to start the crate`() {
+        capture(
+            "album-crate-started",
+            NeedlerDevice.Phone,
+            owned().copy(
+                notice = AlbumNotice.AddedToCrate(trackCount = 8, started = true),
+                crateTrackCount = 8,
+                crateDurationMs = 1_681_000L,
+            ),
+        )
+    }
+
     // ---- nothing the server sent is guaranteed to be there ------------------
 
     /**
@@ -326,6 +401,8 @@ class AlbumScreenshotTest {
             onPlayPause = {},
             onShuffle = {},
             onPlayTrack = {},
+            onAddToCrate = {},
+            onAddTrackToCrate = { _, _ -> },
             onPull = {},
             onCancelPull = {},
             onRetryPull = {},

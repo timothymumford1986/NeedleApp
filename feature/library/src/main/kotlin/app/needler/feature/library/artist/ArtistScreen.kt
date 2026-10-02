@@ -24,6 +24,10 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,6 +42,7 @@ import app.needler.core.design.component.NeedlerAlbumRow
 import app.needler.core.design.component.NeedlerArtwork
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerButtonTone
+import app.needler.core.design.component.NeedlerCrateControl
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerPullButton
@@ -52,6 +57,7 @@ import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.common.AlbumArtwork
 import app.needler.feature.library.common.AlbumFormatLabel
 import app.needler.feature.library.common.FavouriteButton
@@ -115,6 +121,8 @@ fun ArtistScreen(
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     onPlayAlbum: (ReleaseGroupMbid) -> Unit,
+    onAddToCrate: (Boolean) -> Unit,
+    onAddAlbumToCrate: (ReleaseGroupMbid, Boolean) -> Unit,
     onToggleFavourite: () -> Unit,
     onMonitorArtistChange: (Boolean) -> Unit,
     onConfirmRequest: () -> Unit,
@@ -192,14 +200,27 @@ fun ArtistScreen(
                                 state = state,
                                 onPlay = onPlay,
                                 onShuffle = onShuffle,
+                                onAddToCrate = onAddToCrate,
                                 onPullArtist = onPullArtist,
                                 onRetryDiscography = onRetryDiscography,
                             )
                         }
                     }
 
-                    if (state.notice != null) {
-                        item(key = "notice") { NoticeLine(message = state.notice.message) }
+                    val notice: AlbumNotice? = state.notice
+                    if (notice != null) {
+                        item(key = "notice") {
+                            NoticeLine(
+                                message = notice.message,
+                                // The crate's count and total duration under the sentence
+                                // that says something went into it.
+                                detail = if (notice is AlbumNotice.AddedToCrate) {
+                                    state.crateLine
+                                } else {
+                                    null
+                                },
+                            )
+                        }
                     }
 
                     if (state.ownedAlbums.isNotEmpty()) {
@@ -214,8 +235,10 @@ fun ArtistScreen(
                         }
                         ownedRows(
                             albums = state.ownedAlbums,
+                            busy = state.busy,
                             onAlbumClick = onAlbumClick,
                             onPlayAlbum = onPlayAlbum,
+                            onAddAlbumToCrate = onAddAlbumToCrate,
                         )
                     }
 
@@ -294,11 +317,13 @@ private fun ArtistActions(
     state: ArtistUiState,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
+    onAddToCrate: (Boolean) -> Unit,
     onPullArtist: () -> Unit,
     onRetryDiscography: () -> Unit,
 ) {
     val spacing = NeedlerTheme.spacing
     val name: String = state.spokenName
+    var crateMenuOpen: Boolean by remember { mutableStateOf(false) }
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(spacing.step4),
@@ -321,6 +346,19 @@ private fun ArtistActions(
                 size = NeedlerButtonSize.Medium,
                 enabled = !state.busy,
                 contentDescription = "Shuffle everything by " + name + " in your library",
+            )
+            // Beside the two controls that replace the crate, because this is the one that
+            // does not. An artist with records in the library is the commonest place to want
+            // "after what I am listening to", and until now the screen could only interrupt.
+            NeedlerCrateControl(
+                subject = "everything by " + name,
+                expanded = crateMenuOpen,
+                onExpandedChange = { crateMenuOpen = it },
+                onAddToCrate = { onAddToCrate(false) },
+                onPlayNext = { onAddToCrate(true) },
+                enabled = !state.busy,
+                emphasised = true,
+                visualSize = 44.dp,
             )
         }
         // The pack's one filled green button is the pull, and it is green because acquiring
@@ -446,8 +484,10 @@ private fun ArtistHeader(state: ArtistUiState) {
  */
 private fun LazyListScope.ownedRows(
     albums: List<Album>,
+    busy: Boolean,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onPlayAlbum: (ReleaseGroupMbid) -> Unit,
+    onAddAlbumToCrate: (ReleaseGroupMbid, Boolean) -> Unit,
 ) {
     items(
         count = albums.size,
@@ -456,6 +496,9 @@ private fun LazyListScope.ownedRows(
         val album: Album = albums[index]
         val onDevice: Boolean = album.showsOnDeviceCheck
         val title: String = LibraryFormat.albumTitle(album.title)
+        var crateMenuOpen: Boolean by remember(album.releaseGroupMbid.value) {
+            mutableStateOf(false)
+        }
         NeedlerAlbumRow(
             title = title,
             subtitle = LibraryFormat.albumRowSubtitle(album),
@@ -485,6 +528,20 @@ private fun LazyListScope.ownedRows(
                         filled = true,
                     )
                 }
+                // The row's tap opens the album and its Play replaces the crate; this is the
+                // third thing a user wants from a record they can see, and the only one that
+                // leaves what they are listening to alone. In the trailing slot rather than
+                // behind a long press, because `NeedlerAlbumRow` keeps interactive trailing
+                // content reachable as its own target and the tap here is not destructive -
+                // there is nothing for a long press to defend against.
+                NeedlerCrateControl(
+                    subject = title,
+                    expanded = crateMenuOpen,
+                    onExpandedChange = { crateMenuOpen = it },
+                    onAddToCrate = { onAddAlbumToCrate(album.releaseGroupMbid, false) },
+                    onPlayNext = { onAddAlbumToCrate(album.releaseGroupMbid, true) },
+                    enabled = !busy,
+                )
             },
         )
     }
@@ -558,11 +615,25 @@ private fun SectionSpacer() {
     Spacer(modifier = Modifier.height(NeedlerTheme.spacing.step14))
 }
 
+/**
+ * A sentence the screen owes the user, in a bordered card.
+ *
+ * @param detail a second line for a figure the message refers to rather than states - the
+ *   crate's count and total duration after an add. It is part of the spoken reading too:
+ *   REQUIREMENTS.md "Accessibility" makes the description what a TalkBack user acts on, so an
+ *   "added to the crate" that did not say how big the crate now is would leave them with the
+ *   same unconfirmable tap a silent screen leaves everyone else.
+ */
 @Composable
-private fun NoticeLine(message: String) {
+private fun NoticeLine(message: String, detail: String? = null) {
     val colors = NeedlerTheme.colors
     val shape = NeedlerTheme.shapes.medium
-    Row(
+    val spoken: String = if (detail == null) {
+        message
+    } else {
+        message + " " + detail.replace(" · ", ", ")
+    }
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
@@ -570,15 +641,23 @@ private fun NoticeLine(message: String) {
             .border(NeedlerTheme.sizes.hairlineThickness, colors.hairline, shape)
             .padding(horizontal = 14.dp, vertical = 10.dp)
             .semantics(mergeDescendants = true) {
-                contentDescription = message
+                contentDescription = spoken
                 liveRegion = LiveRegionMode.Polite
             },
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Text(
             text = message,
             style = NeedlerTheme.typography.caption,
             color = colors.textSecondary,
         )
+        if (detail != null) {
+            Text(
+                text = detail,
+                style = NeedlerTheme.typography.caption,
+                color = colors.textMuted,
+            )
+        }
     }
 }
 

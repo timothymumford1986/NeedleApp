@@ -3,6 +3,8 @@ package app.needler.feature.library.library
 import app.cash.turbine.test
 import app.needler.core.domain.model.AlbumListKind
 import app.needler.core.domain.model.ConnectivityState
+import app.needler.core.domain.model.PlayQueue
+import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.TrackListKind
 import app.needler.feature.library.FakeLibraryRepository
 import app.needler.feature.library.FakePlaybackController
@@ -10,12 +12,15 @@ import app.needler.feature.library.FakeSessions
 import app.needler.feature.library.FakeSyncRepository
 import app.needler.feature.library.MainDispatcherRule
 import app.needler.feature.library.SampleLibrary
+import app.needler.feature.library.album.AlbumNotice
 import java.util.Optional
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -274,6 +279,122 @@ class LibraryViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
         assertTrue(playback.playTracksCalls.isEmpty())
+    }
+
+    // ---- the crate ----------------------------------------------------------
+    // The library's rows could only replace the crate: the grid's and the row's Play call
+    // `playAlbum`, a song row's tap `playTracks`, and a long press on a song row did the same
+    // thing the tap did. These assert the add appends and that neither replacing command was
+    // used.
+
+    @Test
+    fun `adding a song appends to the crate rather than replacing it`() = runTest {
+        val playing = SampleLibrary.submarineTracks.first()
+        playback.playbackState.value = playback.playbackState.value.copy(
+            currentItem = QueueItem(id = "q-0", track = playing),
+            isPlaying = true,
+        )
+        playback.queue.value = PlayQueue(
+            items = listOf(QueueItem(id = "q-0", track = playing)),
+            currentIndex = 0,
+        )
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onSongAddToCrate(SampleLibrary.submarineTracks[2], playNext = false)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(AlbumNotice.AddedToCrate(trackCount = 1), after.notice)
+            // 239s already in it plus Hamptons' 242s: eight minutes, from the session.
+            assertEquals(2, after.crateTrackCount)
+            assertEquals("2 in the crate · 8 min", after.crateLine)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals("Hamptons", playback.enqueueCalls.single().tracks.single().title)
+        assertFalse(playback.enqueueCalls.single().playNext)
+        assertTrue("the crate must not be replaced", playback.playTracksCalls.isEmpty())
+    }
+
+    @Test
+    fun `adding a song while nothing is loaded starts playback`() = runTest {
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onSongAddToCrate(SampleLibrary.submarineTracks.first(), playNext = false)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(
+                AlbumNotice.AddedToCrate(trackCount = 1, started = true),
+                after.notice,
+            )
+            assertEquals(1, after.crateTrackCount)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(1, playback.playTracksCalls.size)
+        assertTrue(playback.enqueueCalls.isEmpty())
+    }
+
+    @Test
+    fun `adding an album row reads its tracks from the mirror and appends them`() = runTest {
+        val playing = SampleLibrary.submarineTracks.first()
+        playback.playbackState.value = playback.playbackState.value.copy(
+            currentItem = QueueItem(id = "q-0", track = playing),
+            isPlaying = true,
+        )
+        library.tracksByMbid.value = mapOf(
+            SampleLibrary.submarine.releaseGroupMbid.value to SampleLibrary.submarineTracks,
+        )
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onAlbumAddToCrate(SampleLibrary.submarine.releaseGroupMbid, playNext = true)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(
+                AlbumNotice.AddedToCrate(trackCount = 8, playNext = true),
+                after.notice,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(playback.enqueueCalls.single().playNext)
+        assertEquals(8, playback.enqueueCalls.single().tracks.size)
+        assertTrue("the crate must not be replaced", playback.playAlbumCalls.isEmpty())
+    }
+
+    @Test
+    fun `an unplayable song is never added`() = runTest {
+        val missing = SampleLibrary.submarinePartialTracks.first { it.key.trackNumber == 4 }
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onSongAddToCrate(missing, playNext = false)
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(playback.enqueueCalls.isEmpty())
+        assertTrue(playback.playTracksCalls.isEmpty())
+    }
+
+    @Test
+    fun `the added line can be dismissed`() = runTest {
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onSongAddToCrate(SampleLibrary.submarineTracks.first(), playNext = false)
+            advanceUntilIdle()
+            assertNotNull(expectMostRecentItem().notice)
+            model.onDismissNotice()
+            advanceUntilIdle()
+            assertNull(expectMostRecentItem().notice)
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test

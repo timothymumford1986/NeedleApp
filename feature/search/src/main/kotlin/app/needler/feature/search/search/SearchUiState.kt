@@ -12,6 +12,7 @@ import app.needler.core.domain.model.ServiceStatus
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.model.UnifiedSearchResults
+import app.needler.feature.search.common.SearchFormat
 import app.needler.feature.search.common.problemMessage
 
 /**
@@ -125,6 +126,18 @@ data class SearchUiState(
 
     /** The result of the last action, or an explanation the screen owes the user. */
     val notice: SearchNotice? = null,
+
+    /**
+     * How many rows the crate holds, from `PlaybackController.observeQueue`.
+     *
+     * The session's own figure rather than one this screen works out: the controller
+     * owns the crate, and a predicted count could disagree with the crate screen about
+     * what the user is holding.
+     */
+    val crateTrackCount: Int = 0,
+
+    /** The crate's total running time in milliseconds, from the same flow. */
+    val crateDurationMs: Long = 0L,
 ) {
 
     val artists: List<Artist> get() = results.artists
@@ -343,6 +356,17 @@ data class SearchUiState(
 
     /** True when the catalogue note is bad news rather than progress, which the screen tints. */
     val catalogueNoteIsProblem: Boolean get() = catalogue is CatalogueLaneState.Unavailable
+
+    /**
+     * `19 in the crate · 1 hr 14 min`, or null when the crate is empty.
+     *
+     * Drawn under a notice that says something went into the crate, and nowhere else:
+     * adding to a queue with no visible change is indistinguishable from a tap that did
+     * not register, and these are the two figures REQUIREMENTS.md "Queue" asks the crate
+     * screen itself to carry. Live from [crateTrackCount], so it corrects itself when the
+     * session confirms rather than reporting what this screen expected.
+     */
+    val crateLine: String? get() = SearchFormat.crateLine(crateTrackCount, crateDurationMs)
 }
 
 /**
@@ -358,8 +382,41 @@ data class SearchNotice(
     val message: String,
     /** True for the ones that are bad news, which the screen tints differently. */
     val isProblem: Boolean = false,
+    /**
+     * True when this notice is about the crate, so the screen draws
+     * [SearchUiState.crateLine] under it.
+     *
+     * A flag rather than the line itself, because the figures have to be read at render
+     * time: the session applies the add asynchronously, and a count baked into the notice
+     * would be this screen's guess at a number the controller owns.
+     */
+    val showsCrate: Boolean = false,
 ) {
     companion object {
+        /**
+         * Tracks went into the crate, and which of the three ways it happened.
+         *
+         * The same three outcomes, in the same words, as `AlbumNotice.AddedToCrate` in
+         * `:feature:library` - the wording is chosen to agree for one track as well as
+         * twenty, so there is one sentence per outcome rather than a singular and a plural
+         * of each. [started] is the case `PlaybackController.enqueue` cannot cover: it never
+         * starts sound, so an add to an empty crate would otherwise leave silence and a
+         * screen that looked like it had ignored the tap.
+         */
+        fun addedToCrate(
+            trackCount: Int,
+            playNext: Boolean,
+            started: Boolean,
+        ): SearchNotice {
+            val tracks: String = SearchFormat.plural(trackCount.toLong(), "track")
+            val message: String = when {
+                started -> "The crate was empty, so " + tracks + " started playing."
+                playNext -> "Added " + tracks + " to the crate, to play next."
+                else -> "Added " + tracks + " to the crate."
+            }
+            return SearchNotice(message = message, showsCrate = true)
+        }
+
         /**
          * What to say about a request the server has accepted, refused or
          * parked.

@@ -206,6 +206,49 @@ class SearchScreenshotTest {
         capture("search-large-text", NeedlerDevice.Phone, RESULTS, fontScale = 2f)
     }
 
+    // ---- the crate ----------------------------------------------------------
+
+    /**
+     * The crate control on the song rows and on the albums this server already has.
+     *
+     * Two placements and one deliberate absence, all in one image: the song rows carry it
+     * beside their duration and claim the long press as well, an owned album row carries it
+     * beside its badge, and an un-owned row does not - a catalogue result's tracks exist in
+     * MusicBrainz and nowhere else, so its action is Pull and queueing it would add nothing.
+     */
+    @Test
+    fun `song rows and owned album rows offer the crate`() {
+        capture("search-crate-control", NeedlerDevice.Phone, RESULTS)
+    }
+
+    @Test
+    fun `the crate controls at 200 percent text size`() {
+        capture("search-crate-control-large-text", NeedlerDevice.Phone, RESULTS, fontScale = 2f)
+    }
+
+    /**
+     * The line after an add, with the crate's count and total duration under it.
+     *
+     * Adding to a queue with no visible change is indistinguishable from a tap that did not
+     * register, so this line is the whole feedback for the action.
+     */
+    @Test
+    fun `the added-to-the-crate line, with the count and the duration`() {
+        capture(
+            "search-crate-added",
+            NeedlerDevice.Phone,
+            RESULTS.copy(
+                notice = SearchNotice.addedToCrate(
+                    trackCount = 1,
+                    playNext = false,
+                    started = false,
+                ),
+                crateTrackCount = 12,
+                crateDurationMs = 2_480_000L,
+            ),
+        )
+    }
+
     // ---- tablet -------------------------------------------------------------
 
     @Test
@@ -291,6 +334,8 @@ class SearchScreenshotTest {
             onAlbumClick = {},
             onPull = {},
             onPlayTrack = {},
+            onAddTrackToCrate = { _, _ -> },
+            onAddAlbumToCrate = { _, _ -> },
             onShowAll = {},
             onLoadMore = {},
             onMonitorArtistChange = {},

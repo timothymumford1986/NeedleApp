@@ -40,6 +40,9 @@ fun LibraryRoute(
         onAlbumPlay = viewModel::onAlbumPlay,
         onArtistClick = onOpenArtist,
         onSongPlay = viewModel::onSongPlay,
+        onAlbumAddToCrate = viewModel::onAlbumAddToCrate,
+        onSongAddToCrate = viewModel::onSongAddToCrate,
+        onDismissNotice = viewModel::onDismissNotice,
         onSyncNow = viewModel::onSyncNow,
         modifier = modifier,
     )

@@ -31,12 +31,15 @@ import app.needler.core.domain.model.ArtworkRef
  * both are [NeedlerSpinningRecord]'s own behaviour, not something re-decided here.
  *
  * With nothing playing the sleeve is the pack's placeholder tint carrying [emptyLabel], so the
- * commonest state of this screen is a composed picture rather than a hole. With a track loaded but no
- * cover yet it is the tint alone, which is what the pack shows while an image is on its way.
+ * commonest state of this screen is a composed picture rather than a hole. With a track loaded and no
+ * cover it is the album's initial over the tint its release group derives - [PlayerArtwork] says why
+ * the flat square that used to be drawn there was the wrong answer - and the two cases are told apart
+ * by [identity] rather than by [artwork], because a cover that has not arrived is not an empty player.
  */
 @Composable
 fun ArtworkOnRecord(
     artwork: ArtworkRef?,
+    identity: String?,
     albumTitle: String?,
     artistName: String?,
     playing: Boolean,
@@ -73,12 +76,13 @@ fun ArtworkOnRecord(
         ) {
             PlayerArtwork(
                 artwork = artwork,
+                identity = identity,
                 albumTitle = albumTitle,
                 artistName = artistName,
                 modifier = Modifier.size(metrics.artSize),
                 shape = metrics.artShape,
             )
-            if (artwork == null && emptyLabel != null) {
+            if (identity == null && emptyLabel != null) {
                 Text(
                     text = emptyLabel,
                     style = NeedlerTheme.typography.body,

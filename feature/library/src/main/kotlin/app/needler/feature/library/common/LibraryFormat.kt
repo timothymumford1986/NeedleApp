@@ -323,6 +323,28 @@ internal object LibraryFormat {
     fun plural(count: Long, noun: String): String =
         if (count == 1L) "$count $noun" else "$count ${noun}s"
 
+    /**
+     * `19 in the crate · 1 hr 14 min`, or null when the crate is empty.
+     *
+     * The two figures REQUIREMENTS.md "Queue" puts on the crate screen - "an Up next
+     * list with a count and total duration" - said on the screen the user added from,
+     * because that is where the question "did that work" is asked. "In the crate" is
+     * the product's own phrase for it and the only one allowed here; "queue" never
+     * appears in anything a user reads.
+     *
+     * [runningTime] is dropped rather than guessed at when every track in the crate has
+     * an unknown length, which is the one case it returns null for: a count with no
+     * total is still useful, a total of `0 min` is a lie.
+     */
+    fun crateLine(trackCount: Int, durationMs: Long): String? {
+        if (trackCount <= 0) return null
+        val parts: List<String> = buildList {
+            add(trackCount.toString() + " in the crate")
+            runningTime(durationMs)?.let { add(it) }
+        }
+        return parts.joinToString(separator = " · ")
+    }
+
     private fun pad(value: Long): String = if (value < 10L) "0$value" else value.toString()
 
     /** The phrase screen 05 ends its meta line with. */

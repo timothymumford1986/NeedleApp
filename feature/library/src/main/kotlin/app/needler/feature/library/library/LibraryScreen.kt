@@ -57,9 +57,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.needler.core.design.component.CRATE_LONG_PRESS_LABEL
 import app.needler.core.design.component.NeedlerAlbumGridCell
 import app.needler.core.design.component.NeedlerAlbumRow
 import app.needler.core.design.component.NeedlerChevronDownIcon
+import app.needler.core.design.component.NeedlerCrateControl
+import app.needler.core.design.component.NeedlerHairline
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerOnDeviceIcon
 import app.needler.core.design.component.NeedlerPrimaryButton
@@ -67,7 +70,9 @@ import app.needler.core.design.component.NeedlerSearchFieldButton
 import app.needler.core.design.component.NeedlerSegmentedTabs
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.NeedlerTrackRow
+import app.needler.core.design.component.PathClose
 import app.needler.core.design.component.PathPlay
+import app.needler.core.design.component.needlerRowActions
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
@@ -130,6 +135,9 @@ fun LibraryScreen(
     onAlbumPlay: (ReleaseGroupMbid) -> Unit,
     onArtistClick: (ArtistMbid) -> Unit,
     onSongPlay: (Track) -> Unit,
+    onAlbumAddToCrate: (ReleaseGroupMbid, Boolean) -> Unit,
+    onSongAddToCrate: (Track, Boolean) -> Unit,
+    onDismissNotice: () -> Unit,
     onSyncNow: () -> Unit,
     modifier: Modifier = Modifier,
     scrollAnchor: AlbumScrollAnchor = remember { AlbumScrollAnchor() },
@@ -165,6 +173,16 @@ fun LibraryScreen(
                 onViewModeToggle = onViewModeToggle,
             )
             if (state.offline) OfflineNote()
+            // Under the controls rather than over the list: it is the answer to a tap that
+            // happened in the list, and a card that pushed the rows down would move the row
+            // the user is still looking at.
+            state.notice?.let { notice ->
+                CrateNoticeCard(
+                    message = notice.message,
+                    detail = state.crateLine,
+                    onDismiss = onDismissNotice,
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(spacing.step9))
@@ -200,6 +218,7 @@ fun LibraryScreen(
                     scrollAnchor = scrollAnchor,
                     onAlbumClick = onAlbumClick,
                     onAlbumPlay = onAlbumPlay,
+                    onAlbumAddToCrate = onAlbumAddToCrate,
                 )
 
                 state.tab == LibraryTab.ARTISTS -> ArtistList(
@@ -213,6 +232,7 @@ fun LibraryScreen(
                     nowPlayingTrackKey = state.nowPlayingTrackKey,
                     gutter = gutter,
                     onSongPlay = onSongPlay,
+                    onSongAddToCrate = onSongAddToCrate,
                 )
             }
         }
@@ -611,6 +631,7 @@ private fun AlbumList(
     scrollAnchor: AlbumScrollAnchor,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onAlbumPlay: (ReleaseGroupMbid) -> Unit,
+    onAlbumAddToCrate: (ReleaseGroupMbid, Boolean) -> Unit,
 ) {
     val colors = NeedlerTheme.colors
     val sizes = NeedlerTheme.sizes
@@ -635,6 +656,9 @@ private fun AlbumList(
         items(items = albums, key = { it.releaseGroupMbid.value }) { album ->
             val onDevice: Boolean = album.showsOnDeviceCheck
             val title: String = LibraryFormat.albumTitle(album.title)
+            var crateMenuOpen: Boolean by remember(album.releaseGroupMbid.value) {
+                mutableStateOf(false)
+            }
             NeedlerAlbumRow(
                 title = title,
                 subtitle = LibraryFormat.artistName(album.artistName),
@@ -674,6 +698,18 @@ private fun AlbumList(
                             filled = true,
                         )
                     }
+                    // Beside the Play that replaces the crate: the same record, queued
+                    // instead of started. In the trailing slot and not behind a long press,
+                    // because `NeedlerAlbumRow` keeps interactive trailing content reachable
+                    // as its own target, and a tap here opens the album rather than playing
+                    // it - there is nothing destructive for a long press to intercept.
+                    NeedlerCrateControl(
+                        subject = title,
+                        expanded = crateMenuOpen,
+                        onExpandedChange = { crateMenuOpen = it },
+                        onAddToCrate = { onAlbumAddToCrate(album.releaseGroupMbid, false) },
+                        onPlayNext = { onAlbumAddToCrate(album.releaseGroupMbid, true) },
+                    )
                 },
             )
         }
@@ -724,6 +760,7 @@ private fun SongList(
     nowPlayingTrackKey: TrackKey?,
     gutter: Dp,
     onSongPlay: (Track) -> Unit,
+    onSongAddToCrate: (Track, Boolean) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -736,35 +773,83 @@ private fun SongList(
         items(items = songs, key = { it.key.canonicalString }) { track ->
             val playable: Boolean = track.hasPlayableFile
             val title: String = LibraryFormat.trackTitle(track.title)
-            NeedlerAlbumRow(
-                title = title,
-                subtitle = LibraryFormat.songRowSubtitle(track),
-                isPlaying = track.key == nowPlayingTrackKey,
-                onClick = if (playable) ({ onSongPlay(track) }) else null,
-                showDivider = true,
-                // No ", playing" here: `NeedlerAlbumRow` appends that to whatever
-                // description it is given, so adding it as well would have TalkBack
-                // say it twice.
-                contentDescription = buildString {
-                    append(title)
+            val isPlaying: Boolean = track.key == nowPlayingTrackKey
+            var crateMenuOpen: Boolean by remember(track.key.canonicalString) {
+                mutableStateOf(false)
+            }
+            // The whole reading, because the gesture modifier below clears the row's own.
+            // `NeedlerAlbumRow` would have appended ", playing" to the description it was
+            // given, so with the row's semantics cleared this has to append it instead -
+            // and must not when the row keeps them, or TalkBack says it twice.
+            val spoken: String = buildString {
+                append(title)
+                append(", ")
+                append(LibraryFormat.songRowSubtitle(track))
+                LibraryFormat.spokenDuration(track.durationMs)?.let {
                     append(", ")
-                    append(LibraryFormat.songRowSubtitle(track))
-                    LibraryFormat.spokenDuration(track.durationMs)?.let {
-                        append(", ")
-                        append(it)
-                    }
-                    if (!playable) append(", not in your library")
-                },
-                trailing = {
-                    LibraryFormat.duration(track.durationMs)?.let { duration ->
-                        Text(
-                            text = duration,
-                            style = NeedlerTheme.typography.duration,
-                            color = NeedlerTheme.colors.textMuted,
+                    append(it)
+                }
+                if (!playable) append(", " + LibraryFormat.NOT_IN_LIBRARY)
+                if (playable && isPlaying) append(", playing")
+            }
+            // The divider is drawn here rather than by the row, because the crate control
+            // sits beside the row and a hairline that stopped 48dp short of the edge would
+            // read as a rendering fault.
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    NeedlerAlbumRow(
+                        title = title,
+                        subtitle = LibraryFormat.songRowSubtitle(track),
+                        isPlaying = isPlaying,
+                        modifier = if (playable) {
+                            Modifier
+                                .weight(1f)
+                                // A long press here played the song and threw the crate
+                                // away, because `clickable` fires on the release however
+                                // long the hold was. It opens the crate menu now, and the
+                                // tap is consumed rather than firing behind it.
+                                .needlerRowActions(
+                                    description = spoken,
+                                    onTap = { onSongPlay(track) },
+                                    tapLabel = "Play",
+                                    onLongPress = { crateMenuOpen = true },
+                                    longPressLabel = CRATE_LONG_PRESS_LABEL,
+                                )
+                        } else {
+                            Modifier.weight(1f)
+                        },
+                        // Handed to the modifier whenever there is one: two clickables on
+                        // one row is a tap that fires twice.
+                        onClick = null,
+                        contentDescription = spoken,
+                        trailing = {
+                            LibraryFormat.duration(track.durationMs)?.let { duration ->
+                                Text(
+                                    text = duration,
+                                    style = NeedlerTheme.typography.duration,
+                                    color = NeedlerTheme.colors.textMuted,
+                                )
+                            }
+                        },
+                    )
+                    // Beside the row, not inside it: the gesture modifier clears the row's
+                    // descendants, so a control in the trailing slot would be drawn and
+                    // unreachable to TalkBack. Only where there is something to queue.
+                    if (playable) {
+                        NeedlerCrateControl(
+                            subject = title,
+                            expanded = crateMenuOpen,
+                            onExpandedChange = { crateMenuOpen = it },
+                            onAddToCrate = { onSongAddToCrate(track, false) },
+                            onPlayNext = { onSongAddToCrate(track, true) },
                         )
                     }
-                },
-            )
+                }
+                NeedlerHairline()
+            }
         }
     }
 }
@@ -921,6 +1006,69 @@ private fun LibraryEmptyState(
  * architecture guarantees — the mirror is the read path, so browsing never
  * waited on the server in the first place.
  */
+/**
+ * What the last add to the crate did, with the crate's own figures under it.
+ *
+ * A fourth card of this shape in the module, deliberately not extracted. The album screen's
+ * and the playlist screens' each carry their own tinting rules and their own notice types,
+ * and folding four into one shared component would be a refactor of three working screens to
+ * serve one new line. What is shared is the *copy*, which comes from one place:
+ * `AlbumNotice.AddedToCrate` builds the sentence and `LibraryFormat.crateLine` the figures.
+ *
+ * REQUIREMENTS.md "Accessibility" asks every control to carry a description; this is not a
+ * control but it is the only confirmation an add gets, so it is an assertive live region -
+ * TalkBack reads it when it appears rather than when focus happens to reach it.
+ */
+@Composable
+private fun CrateNoticeCard(message: String, detail: String?, onDismiss: () -> Unit) {
+    val colors = NeedlerTheme.colors
+    val shape = NeedlerTheme.shapes.medium
+    val spoken: String = if (detail == null) {
+        message
+    } else {
+        message + " " + detail.replace(" · ", ", ")
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.surface)
+            .border(NeedlerTheme.sizes.hairlineThickness, colors.positive, shape)
+            .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = spoken
+                liveRegion = LiveRegionMode.Assertive
+            },
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = message,
+                style = NeedlerTheme.typography.caption,
+                color = colors.textSecondary,
+            )
+            if (detail != null) {
+                Text(
+                    text = detail,
+                    style = NeedlerTheme.typography.caption,
+                    color = colors.textMuted,
+                )
+            }
+        }
+        NeedlerIconButton(
+            contentDescription = "Dismiss",
+            onClick = onDismiss,
+            visualSize = 36.dp,
+        ) {
+            NeedlerStrokeIcon(pathData = PathClose, tint = colors.textMuted, size = 16.dp)
+        }
+    }
+}
+
 @Composable
 private fun OfflineNote() {
     val colors = NeedlerTheme.colors
@@ -968,6 +1116,12 @@ private const val PATH_GRID_VIEW: String =
  * It lives here so that the four screens in this module agree on what a track
  * row is: the index, the title, the duration and — for a track a part-delivered
  * pull never brought — the greyed, unclickable variant REQUIREMENTS.md requires.
+ *
+ * @param onLongPress the crate menu, opened by holding the row. Supplying it moves
+ *   the gesture and the spoken reading out of `NeedlerTrackRow` and into
+ *   [needlerRowActions]; see [libraryTrackRowDescription] for what that costs and
+ *   why it is worth it. It cannot be combined with [onMoreClick]: the modifier
+ *   clears the row's descendants, which would leave that button unreachable.
  */
 @Composable
 internal fun LibraryTrackRow(
@@ -978,7 +1132,30 @@ internal fun LibraryTrackRow(
     onClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
     onMoreClick: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
 ) {
+    val tap: (() -> Unit)? = if (available) onClick else null
+    // The long press is only claimed where there is a tap to protect: an unplayable row
+    // does nothing when tapped, so there is nothing destructive to intercept and nothing
+    // to add to the crate either. Resolved to one nullable so that the two decisions
+    // below - which modifier, and whether the row keeps its own click - agree.
+    val longPress: (() -> Unit)? = if (tap == null) null else onLongPress
+    val gestures: Modifier = if (longPress != null && tap != null) {
+        Modifier.needlerRowActions(
+            description = libraryTrackRowDescription(
+                index = index,
+                track = track,
+                isPlaying = isPlaying,
+                available = available,
+            ),
+            onTap = tap,
+            tapLabel = "Play",
+            onLongPress = longPress,
+            longPressLabel = CRATE_LONG_PRESS_LABEL,
+        )
+    } else {
+        Modifier
+    }
     NeedlerTrackRow(
         index = index,
         // `CatalogueTrackDto.title` defaults to the empty string, so a catalogue
@@ -986,11 +1163,43 @@ internal fun LibraryTrackRow(
         // number reads as a rendering fault rather than as missing metadata.
         title = LibraryFormat.trackTitle(track.title),
         duration = LibraryFormat.duration(track.durationMs) ?: "--:--",
-        modifier = modifier,
+        modifier = modifier.then(gestures),
         isPlaying = isPlaying,
         available = available,
         durationSpoken = LibraryFormat.spokenDuration(track.durationMs) ?: "unknown length",
-        onClick = if (available) onClick else null,
+        // Handed over entirely when the gesture modifier is in force: two clickables on
+        // one row is a tap that fires twice.
+        onClick = if (longPress == null) tap else null,
         onMoreClick = onMoreClick,
     )
+}
+
+/**
+ * What TalkBack reads for a track row that carries the crate gesture.
+ *
+ * A deliberate restatement of `NeedlerTrackRow`'s own spoken string, which
+ * [needlerRowActions] clears along with the rest of the row's descendants. Same order,
+ * same four parts, built from the same `LibraryFormat` calls the row is handed — so the
+ * two can only disagree if one of them is changed alone, and this is the only copy in
+ * this module.
+ *
+ * The alternative to the restatement is a `contentDescription` parameter on
+ * `NeedlerTrackRow`, which `NeedlerAlbumRow` has and that row does not. Adding one would
+ * be the better shape and is a change to a component every list in the application
+ * draws; this function keeps the reading correct without it.
+ */
+private fun libraryTrackRowDescription(
+    index: Int,
+    track: Track,
+    isPlaying: Boolean,
+    available: Boolean,
+): String = buildString {
+    // The number is dropped while playing, because the row replaces it with the record
+    // glyph and reading a number that is not drawn describes a different row.
+    if (!isPlaying) append(index.toString() + ". ")
+    append(LibraryFormat.trackTitle(track.title))
+    append(", ")
+    append(LibraryFormat.spokenDuration(track.durationMs) ?: "unknown length")
+    if (isPlaying) append(", playing")
+    if (!available) append(", " + LibraryFormat.NOT_IN_LIBRARY)
 }

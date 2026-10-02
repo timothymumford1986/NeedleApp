@@ -78,6 +78,8 @@ fun SearchRoute(
         },
         onPull = viewModel::onPull,
         onPlayTrack = viewModel::onPlayTrack,
+        onAddTrackToCrate = viewModel::onAddTrackToCrate,
+        onAddAlbumToCrate = viewModel::onAddAlbumToCrate,
         onShowAll = viewModel::onShowAll,
         onLoadMore = viewModel::onLoadMoreFromCatalogue,
         onMonitorArtistChange = viewModel::onMonitorArtistChange,

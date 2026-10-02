@@ -25,11 +25,15 @@ import org.junit.rules.TemporaryFolder
  * It runs on the JVM against a temporary folder, which the `internal` constructor is what allows. Two
  * consequences worth knowing:
  *
- *  * The free-space figures are the *build machine's*, so the room checks pass on any machine with a few
- *    gigabytes spare and would fail on one that is nearly full. That is deliberate rather than
- *    overlooked - the alternative is a fake volume, which would test [WearStoreSpace] a second time
- *    instead of testing that the store consults it at all. [WearStoreTest] covers the bound itself with no
- *    filesystem.
+ *  * The directory is real but the *volume* is stated, through [WearFreeSpace]. It used to be real too,
+ *    and that was a bug in this file rather than a tolerable simplification: a `TemporaryFolder` sits on
+ *    the developer's own drive, so `usableSpace` measured that drive and thirteen assertions about the
+ *    commit order were really assertions about how full it was. They passed with 84.8 GB free and failed
+ *    with 48.4 GB on the same code, because [WearStoreSpace.VOLUME_PERCENT] of a 498 GB volume is
+ *    49.8 GB - which also means they would pass on a roomy CI box and fail on a full laptop, the wrong
+ *    way round for where the signal is wanted. Every test below therefore names the volume it wants:
+ *    [ROOMY] for the ingest cases, [NEAR_FLOOR] for the refusal, and [WearFreeSpace.Unreadable] for the
+ *    suspended policy. The bound's own arithmetic is still [WearStoreTest]'s, with no filesystem at all.
  *  * Nothing here touches Google Play services, so an `Asset` is stood in for by a plain `InputStream`,
  *    which is exactly the seam [WearAudioStore.ingestTrack] takes a lambda for.
  */
@@ -40,7 +44,8 @@ class WearAudioStoreTest {
 
     private val mbid: String = "a1b2c3d4-0000-4000-8000-00000000000a"
 
-    private fun store(): WearAudioStore = WearAudioStore(folder.root)
+    private fun store(freeSpace: WearFreeSpace = ROOMY): WearAudioStore =
+        WearAudioStore(folder.root, freeSpace)
 
     private fun key(track: Int): WearAudioKey =
         WearAudioKey(releaseGroupMbid = mbid, discNumber = 1, trackNumber = track)
@@ -172,6 +177,53 @@ class WearAudioStoreTest {
     }
 
     @Test
+    fun `a track that will not fit is refused and nothing is fetched`() = runTest {
+        // Asserted against a stated volume one byte under the floor, rather than arrived at on a full
+        // laptop. Nothing is evicted to make room: the watch's tier is entirely REQUIREMENTS.md's
+        // "Downloaded", which is "never evicted automatically", so the refusal is the whole behaviour.
+        // It also happens before the Asset is resolved - fetching thirty megabytes to discover there
+        // was nowhere to put them is the one mistake ingestTrack's lambda exists to avoid.
+        var opened = false
+        val store: WearAudioStore = store(NEAR_FLOOR)
+        val outcome: WearIngestOutcome = store.ingestTrack(record(1, 2_048)) {
+            opened = true
+            ByteArrayInputStream(ByteArray(2_048))
+        }
+        assertEquals(WearIngestOutcome.NoRoom, outcome)
+        assertFalse("the source must not be opened when there is no room", opened)
+        assertEquals(0, store.refresh().trackCount)
+        assertTrue(filesIn(audioDir()).isEmpty())
+    }
+
+    @Test
+    fun `an unreadable volume suspends the policy rather than guessing`() = runTest {
+        // REQUIREMENTS.md: a failed reading "suspends the policy rather than guessing". On the watch
+        // suspending means not accepting, because the bytes have not arrived yet - so the worst case
+        // is an album that turns up on the next pass, not a watch with no room for its own system
+        // update. Only a stated volume can assert this: the real probe reaches an unknown reading
+        // through a SecurityException or a path that names no partition, and a working filesystem
+        // under a temporary folder offers neither.
+        val store: WearAudioStore = store(WearFreeSpace.Unreadable)
+        assertTrue(store.space().isUnknown)
+        assertEquals(WearIngestOutcome.NoRoom, store.ingestTrack(record(1, 2_048), source(2_048)))
+        assertEquals(0, store.refresh().trackCount)
+        assertTrue(filesIn(audioDir()).isEmpty())
+    }
+
+    @Test
+    fun `the space the store reports is the volume it was given`() = runTest {
+        // Wires the seam shut. Without this the two tests above could pass for the wrong reason - a
+        // store that ignored its reader and measured the drive would still refuse nothing on a roomy
+        // laptop. The figure is not internal either: WearSyncCoordinator publishes usableBytes to the
+        // phone, which is how the phone knows not to send an album the watch cannot hold.
+        val store: WearAudioStore = store()
+        val space: WearStoreSpace = store.refresh().space
+        assertEquals(WATCH_USABLE_BYTES, space.usableBytes)
+        assertEquals(WATCH_VOLUME_BYTES, space.totalBytes)
+        assertFalse(space.isUnknown)
+    }
+
+    @Test
     fun `the same bytes arriving twice are reported as already held`() = runTest {
         // Not a failure and not a silent no-op: reporting it is what lets the phone delete the item it
         // published and move on to the next track, so the pipeline advances instead of stalling.
@@ -296,5 +348,36 @@ class WearAudioStoreTest {
 
         store.removeAlbum(other)
         assertEquals(listOf(mbid), store.contents.value.albums.map { album -> album.albumKey })
+    }
+
+    private companion object {
+
+        /**
+         * An 8 GB watch: the middle of the 4 GB to 32 GB range [WearStoreSpace] says watches ship in,
+         * and large enough that the proportional floor is the one in force rather than the minimum.
+         */
+        const val WATCH_VOLUME_BYTES: Long = 8_000_000_000L
+
+        /** Half of it free, which is gigabytes clear of the 800 MB floor. */
+        const val WATCH_USABLE_BYTES: Long = 4_000_000_000L
+
+        /** The volume every ingest case here runs on. They all write kilobytes; this fits them all. */
+        val ROOMY: WearFreeSpace = WearFreeSpace.ofVolume(
+            usableBytes = WATCH_USABLE_BYTES,
+            totalBytes = WATCH_VOLUME_BYTES,
+        )
+
+        /**
+         * One byte under the floor, so headroom is zero and nothing at all is accepted.
+         *
+         * Taken from [WearStoreSpace.floorFor] rather than written out as a number, so it stays one
+         * byte under the floor if [WearStoreSpace.MINIMUM_FREE_BYTES] or
+         * [WearStoreSpace.VOLUME_PERCENT] ever move. A hard-coded figure would quietly turn into a
+         * roomy volume and the refusal test would stop testing a refusal.
+         */
+        val NEAR_FLOOR: WearFreeSpace = WearFreeSpace.ofVolume(
+            usableBytes = WearStoreSpace.floorFor(WATCH_VOLUME_BYTES) - 1L,
+            totalBytes = WATCH_VOLUME_BYTES,
+        )
     }
 }

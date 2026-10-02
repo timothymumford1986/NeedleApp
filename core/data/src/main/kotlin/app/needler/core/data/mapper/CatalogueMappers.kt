@@ -180,6 +180,11 @@ public object CatalogueMappers {
      * `search_job_id` and `candidate_index` are stored because the two client-derived states -
      * Searching, and "needs attention on the server" - cannot be derived without them, and the
      * screen requires both.
+     *
+     * `request_kind` and `recording_mbid` come off `download_type` and `recording_mbid`, which this
+     * lane reports and which are the only way a later cancel can name the right thing: `DELETE
+     * /api/v1/requests/active/{mbid}` takes the recording MBID for a track request, while this row
+     * is keyed on the release group. See [PullEntity.requestKind].
      */
     public fun pullEntity(dto: DownloadTaskDto, now: Long, requestedByThisDevice: Boolean = true): PullEntity? {
         val mbid: String = dto.releaseGroupMbid.trim()
@@ -203,6 +208,8 @@ public object CatalogueMappers {
             error = dto.errorMessage ?: heldNotice(dto),
             searchJobId = dto.searchJobId,
             candidateIndex = dto.candidateIndex,
+            requestKind = requestKind(dto.downloadType),
+            recordingMbid = dto.recordingMbid?.trim()?.takeIf { it.isNotEmpty() },
             requestedByThisDevice = requestedByThisDevice,
             createdAt = WireTime.toEpochMillis(WireTime.fromEpochSeconds(dto.createdAt)) ?: now,
             updatedAt = WireTime.toEpochMillis(WireTime.fromEpochSeconds(dto.updatedAt)) ?: now,
@@ -210,15 +217,44 @@ public object CatalogueMappers {
     }
 
     /**
+     * A `request_kind` or `download_type` token as the column stores it.
+     *
+     * Only `track` is recognised; everything else, including a blank and an absent field, is an
+     * album. That is the same rule [app.needler.core.domain.model.RequestTarget.fromServerToken]
+     * applies on the way out, and it fails in the safe direction: an unknown kind read as an album
+     * cancels the release group, which is the id the row is keyed on and the one the user named.
+     */
+    private fun requestKind(token: String?): String =
+        if (token?.trim().equals(PullEntity.REQUEST_KIND_TRACK, ignoreCase = true)) {
+            PullEntity.REQUEST_KIND_TRACK
+        } else {
+            PullEntity.REQUEST_KIND_ALBUM
+        }
+
+    /**
      * A request still waiting for an admin, from `GET /api/v1/requests/active`.
      *
      * These carry no task id - there is no download yet - so they are stored with
      * [PullStatusDb.PENDING_APPROVAL] and render with the waiting-for-approval state made explicit,
      * which is the only way such a pull is distinguishable from one making no progress.
+     *
+     * ## `musicbrainz_id` means two different things on this lane
+     *
+     * On an album row it is the release group. On a **track** row it is the *recording*, and the
+     * release group arrives separately as `track_release_group_mbid` - which is why the key below
+     * prefers it. That makes this the one place both ids are in hand at once, so it is where the
+     * recording MBID is captured: `DELETE /api/v1/requests/active/{mbid}` wants it back for a
+     * `request_kind=track` cancel, and nothing downstream could reconstruct it from a row keyed on
+     * the release group. A track row with no release group at all falls back to the recording as its
+     * key, in which case the two columns hold the same value and the cancel still names the
+     * recording, which is the id that endpoint takes.
      */
     public fun pendingApprovalEntity(dto: ActiveRequestItemDto, now: Long): PullEntity? {
         val mbid: String = (dto.trackReleaseGroupMbid ?: dto.musicbrainzId).trim()
         if (mbid.isEmpty()) return null
+        val kind: String = requestKind(dto.requestKind)
+        val recording: String? = dto.musicbrainzId.trim()
+            .takeIf { it.isNotEmpty() && kind == PullEntity.REQUEST_KIND_TRACK }
         val awaiting: Boolean = dto.status.equals("awaiting_approval", ignoreCase = true) ||
             dto.status.equals("pending", ignoreCase = true)
         val status: PullStatus = PullStatus.fromServerToken(dto.downloadStatus ?: dto.status)
@@ -241,13 +277,23 @@ public object CatalogueMappers {
             error = dto.errorMessage,
             searchJobId = null,
             candidateIndex = null,
+            requestKind = kind,
+            recordingMbid = recording,
             requestedByThisDevice = true,
             createdAt = createdAt,
             updatedAt = now,
         )
     }
 
-    /** The title and artist hints an active-request row carries, for a mirror row that has none. */
+    /**
+     * The title and artist hints an active-request row carries, for a mirror row that has none.
+     *
+     * [qualityPolicySummary] is among them because `quality_snapshot_summary` is reported by the
+     * downloads lane as well as by the request receipt, and REQUIREMENTS.md "Design pack
+     * discrepancies" settles that the figure is shown on the album and on its pull. A pull for an
+     * album this device never requested has no receipt to have carried it, so the task's own copy is
+     * the only one there will ever be.
+     */
     public fun placeholderAlbumEntity(
         releaseGroupMbid: String,
         title: String,
@@ -255,6 +301,7 @@ public object CatalogueMappers {
         artistMbid: String?,
         year: Int?,
         now: Long,
+        qualityPolicySummary: String? = null,
     ): AlbumEntity = AlbumEntity(
         releaseGroupMbid = releaseGroupMbid,
         artistMbid = artistMbid,
@@ -274,7 +321,7 @@ public object CatalogueMappers {
         sizeBytes = null,
         coverArtId = null,
         genres = null,
-        qualityPolicySummary = null,
+        qualityPolicySummary = qualityPolicySummary,
         updatedAt = now,
     )
 

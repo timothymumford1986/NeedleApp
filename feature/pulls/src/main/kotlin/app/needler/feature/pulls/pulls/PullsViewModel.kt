@@ -36,23 +36,33 @@ import kotlinx.coroutines.launch
  * The only outbound calls this ViewModel makes are the four the user asks for
  * (cancel, retry, clear done) plus one refresh when the screen opens.
  *
- * ## It does not poll
+ * ## The 2 s poll, and why it is not a loop in here
  *
  * REQUIREMENTS.md, "Polling schedule", gives the foregrounded Pulls screen a
- * **2 s** cadence, and this module's own build file says where that lives: "The
- * 2 s foreground polling and the activity-summary revision check live in
- * `:core:data`; this module consumes the resulting flow." So there is no loop
- * here, deliberately. What is in `:core:data` today is `PullPoller`, which
- * implements the *background* cadences under `WorkManager`; nothing yet drives
- * the two-second foreground one. Growing a second poller in a feature module
- * would put two writers on the same table and make the battery rule in
- * `PullPoller` — "do not poll at all when there are no active pulls" —
- * unenforceable from the place that enforces it. It is a handover note, not a
- * thing to fix from here.
+ * **2 s** cadence against the full task list, and this module's own build file
+ * says where that lives: "The 2 s foreground polling and the activity-summary
+ * revision check live in `:core:data`; this module consumes the resulting
+ * flow." [PullRepository.observePullsLive] is that flow, and collecting it is
+ * the whole of this ViewModel's part in the schedule — the poll starts when the
+ * flow is collected and stops when it is not, so `WhileSubscribed` below *is*
+ * the "while the screen is foregrounded" condition and there is no start/stop
+ * pair to get wrong on a rotation.
  *
- * What this ViewModel does do is ask once, on open, so that a screen reached
- * fifteen minutes after the last background poll is not fifteen minutes stale.
- * That is the same one-shot `AlbumViewModel` performs with `refreshAlbum`.
+ * A loop in here was the alternative and is rejected for two reasons that have
+ * not changed: this module sees `:core:domain` and `:core:design` only, so it
+ * cannot reach `GET /api/v1/downloads`; and a second writer on the `pull` table
+ * would put the battery rule in `PullPoller` — "do not poll at all when there
+ * are no active pulls" — outside the one place that can enforce it.
+ *
+ * Live progress is polled rather than streamed. REQUIREMENTS.md records the
+ * decision: per-task SSE at `GET /api/v1/downloads/{id}/stream` exists and is
+ * not used in v1, because "holding open one connection per task keeps the
+ * mobile radio awake and scales badly against a queue of twenty albums".
+ *
+ * The flow polls before it first sleeps, which is also what makes a screen
+ * reached fifteen minutes after the last background poll current immediately —
+ * the explicit `refreshPulls` that used to be in [init] for that reason is
+ * gone, because it would now be the same call twice.
  *
  * ## Opening the screen clears the badge
  *
@@ -89,7 +99,8 @@ class PullsViewModel @Inject constructor(
      * user has cleared, reconciled into one newest-first sequence.
      */
     private val queue: Flow<List<Pull>> = combine(
-        pulls.observePulls(),
+        // The polling flow, not the plain one: this is where the 2 s cadence enters the screen.
+        pulls.observePullsLive(),
         pulls.observePendingApprovals(),
         cleared,
     ) { tasks, approvals, dismissed ->
@@ -134,11 +145,10 @@ class PullsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // The mirror has already drawn the screen by the time this returns;
-            // this is what makes a stale row correct rather than what makes the
-            // first row appear.
-            pulls.refreshPulls()
-
+            // No `refreshPulls` here: `observePullsLive` polls as soon as it is
+            // collected, so asking again would be one redundant page walk per
+            // ViewModel. See the class KDoc.
+            //
             // `observePulls(bucket)` rather than filtering the merged list: what
             // should stop counting towards the badge is what the *server* says
             // has completed, and folding in pending approvals cannot change that.

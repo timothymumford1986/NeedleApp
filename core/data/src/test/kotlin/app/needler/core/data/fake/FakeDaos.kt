@@ -702,6 +702,9 @@ public class FakePullDao : PullDao {
     override suspend fun getPullByTaskId(taskId: String): PullEntity? =
         rows.values.firstOrNull { it.taskId == taskId }
 
+    override suspend fun getPullsInStatus(statuses: List<String>): List<PullEntity> =
+        rows.values.filter { statuses.contains(it.status.dbValue) }
+
     override fun observePullCount(statuses: List<String>): Flow<Int> =
         changes.map { rows.values.count { statuses.contains(it.status.dbValue) } }
 
@@ -740,6 +743,14 @@ public class FakePullDao : PullDao {
         changes.value += 1
     }
 
+    override suspend fun deleteAll(mbids: List<String>) {
+        // Room expands `IN (:mbids)` to one placeholder per element, and `IN ()` is a SQLite syntax
+        // error - so the real DAO cannot be called with nothing and neither can this.
+        require(mbids.isNotEmpty()) { "deleteAll was called with an empty list" }
+        mbids.forEach { rows.remove(it) }
+        changes.value += 1
+    }
+
     override suspend fun deleteFinishedBefore(statuses: List<String>, olderThan: Long): Int {
         val victims: List<String> = rows.values
             .filter { statuses.contains(it.status.dbValue) && it.updatedAt < olderThan }
@@ -754,25 +765,41 @@ public class FakePullDao : PullDao {
         changes.value += 1
     }
 
-    private fun projection(row: PullEntity): PullRow = PullRow(
-        releaseGroupMbid = row.releaseGroupMbid,
-        taskId = row.taskId,
-        status = row.status,
-        percent = row.percent,
-        filesDone = row.filesDone,
-        filesTotal = row.filesTotal,
-        downloadedBytes = row.downloadedBytes,
-        totalSizeBytes = row.totalSizeBytes,
-        source = row.source,
-        error = row.error,
-        searchJobId = row.searchJobId,
-        candidateIndex = row.candidateIndex,
-        createdAt = row.createdAt,
-        albumTitle = null,
-        albumArtistName = null,
-        albumYear = null,
-        albumCoverArtId = null,
-    )
+    /**
+     * Stands in for the `LEFT JOIN album` every list query on `pull` performs.
+     *
+     * Defaults to a miss, which is the case the real query also has: a pull placed from a catalogue
+     * search result can reach the queue before the album row exists. A test that cares what the join
+     * supplies - the title, and the quality summary the pack badges a row with - points this at a
+     * [FakeAlbumDao]'s rows. Without it the projection would hard-code a miss, which is how a
+     * mapper that dropped two joined columns went unnoticed.
+     */
+    public var albumLookup: (String) -> AlbumEntity? = { null }
+
+    private fun projection(row: PullEntity): PullRow {
+        val album: AlbumEntity? = albumLookup(row.releaseGroupMbid)
+        return PullRow(
+            releaseGroupMbid = row.releaseGroupMbid,
+            taskId = row.taskId,
+            status = row.status,
+            percent = row.percent,
+            filesDone = row.filesDone,
+            filesTotal = row.filesTotal,
+            downloadedBytes = row.downloadedBytes,
+            totalSizeBytes = row.totalSizeBytes,
+            source = row.source,
+            error = row.error,
+            searchJobId = row.searchJobId,
+            candidateIndex = row.candidateIndex,
+            createdAt = row.createdAt,
+            updatedAt = row.updatedAt,
+            albumTitle = album?.title,
+            albumArtistName = album?.artistName,
+            albumYear = album?.year,
+            albumCoverArtId = album?.coverArtId,
+            albumQualityPolicySummary = album?.qualityPolicySummary,
+        )
+    }
 }
 
 // ------------------------------------------------------------------------- artist

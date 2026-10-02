@@ -1,6 +1,7 @@
 package app.needler.core.data.repository
 
 import app.needler.core.data.background.BackgroundWorkScheduler
+import app.needler.core.data.background.PollSchedule
 import app.needler.core.data.local.SortKeys
 import app.needler.core.data.local.dao.AlbumDao
 import app.needler.core.data.local.dao.PullDao
@@ -24,8 +25,10 @@ import app.needler.core.domain.model.PullTaskId
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RequestHistoryPage
 import app.needler.core.domain.model.RequestOutcome
+import app.needler.core.domain.model.RecordingMbid
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.RequestStatus
+import app.needler.core.domain.model.RequestTarget
 import app.needler.core.domain.model.TrackRequest
 import app.needler.core.domain.model.WantedList
 import app.needler.core.domain.model.WriteOperation
@@ -48,12 +51,16 @@ import app.needler.core.network.v1.dto.TrackRequestDto
 import app.needler.core.network.v1.dto.WantedRetryingItemDto
 import app.needler.core.network.v1.dto.WantedWatchItemDto
 import app.needler.core.network.v1.dto.WantedWatchesDto
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import kotlin.time.Duration
 
 /**
  * Requesting music and watching the server acquire it.
@@ -101,6 +108,70 @@ public class DefaultPullRepository(
             rows.map { EntityMappers.pull(it) }
         }
 
+    /**
+     * [observePulls], with the two-second poll REQUIREMENTS.md "Polling schedule" requires.
+     *
+     * ## The loop is here because nowhere else can hold it
+     *
+     * REQUIREMENTS.md gives the foregrounded Pulls screen `GET /api/v1/downloads` "every 2 seconds",
+     * and `PullsViewModel`'s KDoc has said for some time that the loop belongs in `:core:data` and
+     * that nothing drove it - which left the one screen whose whole purpose is watching something
+     * move completely static between the refresh it does on open and whatever `WorkManager` happened
+     * to do a quarter of an hour later. `:feature:pulls` depends on `:core:domain` and
+     * `:core:design` only, so it cannot reach the endpoint at all; and a loop there would be a
+     * second writer on the `pull` table, which would put `PullPoller`'s battery rule - do not poll
+     * when nothing is active - outside the only place that can enforce it.
+     *
+     * ## Why a merged flow rather than a function to start and stop
+     *
+     * The subscription is the lifecycle. `merge` runs the ticker beside the Room query, so
+     * collecting starts the poll and cancelling ends it: `stateIn(WhileSubscribed)` in the ViewModel
+     * is then the whole of the "while the screen is foregrounded" condition, and there is no
+     * `startPolling`/`stopPolling` pair for a caller to get wrong on a configuration change. The
+     * ticker is a [Flow] of [Nothing] - it never emits - so it cannot change what a collector sees;
+     * the emissions all come from the mirror, which is also what makes this correct offline.
+     *
+     * Polling, not SSE, and deliberately: `GET /api/v1/downloads/{id}/stream` exists and
+     * REQUIREMENTS.md keeps it out of v1 because one held connection per task "keeps the mobile
+     * radio awake and scales badly against a queue of twenty albums".
+     */
+    override fun observePullsLive(): Flow<List<Pull>> =
+        merge(ticker(PollSchedule.FOREGROUND_TASK_LIST_INTERVAL) { refreshPulls() }, observePulls())
+
+    /**
+     * [observeActivitySummary], with the twenty-second poll for everywhere that is not this screen.
+     *
+     * The cheap half of the pair. The endpoint returns only
+     * `{revision, active_count, held_count, failed_count, landed_release_group_mbids}`, and an
+     * unchanged `revision` means nothing downstream has to run - which is what makes a poll every
+     * twenty seconds affordable for as long as the app is open.
+     *
+     * Nothing in this module collects it, and nothing in this module can: "elsewhere in the app" is
+     * a question only the host can answer, and `:app` owns that. The mechanism lives here so that
+     * both foreground cadences are one pattern with one interval constant each.
+     */
+    override fun observeActivitySummaryLive(): Flow<PullActivitySummary?> = merge(
+        ticker(PollSchedule.FOREGROUND_SUMMARY_INTERVAL) { refreshActivitySummary() },
+        activitySummary,
+    )
+
+    /**
+     * A ticker that polls and never emits.
+     *
+     * Polls first and sleeps afterwards, so a collector gets fresh data without waiting out an
+     * interval - the Pulls screen opening is itself a reason to ask. [block]'s answer is discarded
+     * on purpose: every one of these calls returns an [Outcome] rather than throwing, and a failed
+     * poll must not end the flow and take the mirror's emissions with it. REQUIREMENTS.md "Failure
+     * handling" does not make a dropped background poll a user-visible error; the screen keeps
+     * drawing what it last knew, which is the behaviour it has offline anyway.
+     */
+    private fun ticker(interval: Duration, block: suspend () -> Unit): Flow<Nothing> = flow {
+        while (true) {
+            block()
+            delay(interval)
+        }
+    }
+
     override fun observePull(mbid: ReleaseGroupMbid): Flow<Pull?> = combine(
         pullDao.observePull(mbid.value),
         albumDao.observeAlbum(mbid.value),
@@ -110,6 +181,9 @@ public class DefaultPullRepository(
                 row = it,
                 title = album?.title.orEmpty(),
                 artist = album?.artistName.orEmpty(),
+                // REQUIREMENTS.md "Design pack discrepancies": the quality the server went looking
+                // for rides on the `album` row, and this is the one read that already holds it.
+                qualityPolicySummary = album?.qualityPolicySummary,
             )
         }
     }
@@ -223,6 +297,39 @@ public class DefaultPullRepository(
      * handler runs, so the caller chunks rather than relying on the response's `overflow` field,
      * which the server never sets to anything but `0`. The reported overflow is therefore always
      * zero here too - it is dead, and building anything on it would be building on a constant.
+     *
+     * ## A chunk failing halfway through is not a failed batch
+     *
+     * This used to return the failed [Outcome] and throw away the receipts for every chunk already
+     * accepted - whose `pull` rows had already been written. Ask for 500 albums, have 200 accepted
+     * and the third chunk time out, and the screen said the whole thing failed while the Pulls queue
+     * filled up with 200 albums the server was busy acquiring. REQUIREMENTS.md "Placing a request"
+     * is silent on partial failure, so the shape is chosen here, on one rule: **report what
+     * happened, and never claim an album is not being fetched when it is.**
+     *
+     * Concretely:
+     *
+     *  * nothing accepted at all - the first chunk failed - is reported as the plain failure it is.
+     *    There is nothing partial about it and a caller that had to inspect a success to discover
+     *    the batch never started would be a trap;
+     *  * with something accepted, the walk **stops** at the first failure and reports a success
+     *    carrying both halves: [BatchRequestReceipt.requested] for what the server took, and
+     *    [BatchRequestReceipt.notSubmitted] plus [BatchRequestReceipt.failure] for what it was never
+     *    offered. Continuing through the remaining chunks was rejected: a mid-batch failure is
+     *    almost always systemic - the connection, the session, the server - so the next nine chunks
+     *    would be nine more timeouts for the user to wait through, and the one case where it is not
+     *    systemic is a single bad MBID the user can retry;
+     *  * a **retryable** failure journals the remainder instead, so it submits on reconnect and
+     *    comes back under [RequestStatus.QUEUED_OFFLINE]. That is exactly what the wholly-offline
+     *    path above does with the same list, and what [requestAlbum] does with a single album: the
+     *    user's intent was "acquire these", and a connection that dropped partway through is not a
+     *    reason to discard half of it.
+     *
+     * The skipped list is counted **per chunk** rather than across the whole request, which it was
+     * not. The response reports counts rather than naming what it took, so the accepted items are
+     * the first `requested` of the chunk and the skipped ones are what follows them *in that chunk*;
+     * a global filter over everything not accepted would have counted albums that were never sent as
+     * "already present".
      */
     override suspend fun requestAlbums(requests: List<AlbumRequest>): Outcome<BatchRequestReceipt> {
         if (requests.isEmpty()) {
@@ -245,8 +352,9 @@ public class DefaultPullRepository(
         }
 
         val accepted: MutableList<RequestReceipt> = ArrayList(requests.size)
-        var skippedCount = 0
-        for (chunk in requests.chunked(BatchAlbumRequestDto.MAX_ITEMS)) {
+        val skipped: MutableList<ReleaseGroupMbid> = ArrayList()
+        val chunks: List<List<AlbumRequest>> = requests.chunked(BatchAlbumRequestDto.MAX_ITEMS)
+        for ((index, chunk) in chunks.withIndex()) {
             val call: Outcome<BatchRequestResponseDto> = networkCall {
                 v1.requestAlbums(
                     BatchAlbumRequestDto(
@@ -263,7 +371,44 @@ public class DefaultPullRepository(
                 )
             }
             when (call) {
-                is Outcome.Failure -> return call
+                is Outcome.Failure -> {
+                    // Nothing accepted yet: this is an ordinary failure and reporting it as one is
+                    // the only honest answer.
+                    if (accepted.isEmpty()) return call
+
+                    val remainder: List<AlbumRequest> = chunks.drop(index).flatten()
+                    if (call.error.isRetryable) {
+                        // The same treatment the offline path gives the whole list, for the same
+                        // reason: the intent survives the connection.
+                        remainder.forEach { request ->
+                            writeQueue.enqueue(WriteOperation.PlaceAlbumRequest(request))
+                            recordPendingSubmission(request)
+                            accepted.add(
+                                RequestReceipt(
+                                    request.releaseGroupMbid,
+                                    RequestStatus.QUEUED_OFFLINE,
+                                ),
+                            )
+                        }
+                        return Outcome.Success(
+                            BatchRequestReceipt(
+                                requested = accepted,
+                                skipped = skipped,
+                                overflow = 0,
+                            ),
+                        )
+                    }
+                    return Outcome.Success(
+                        BatchRequestReceipt(
+                            requested = accepted,
+                            skipped = skipped,
+                            notSubmitted = remainder.map { it.releaseGroupMbid },
+                            failure = call.error,
+                            overflow = 0,
+                        ),
+                    )
+                }
+
                 is Outcome.Success -> {
                     val status: RequestStatus = RequestStatus.fromServerToken(call.value.status)
                     // The response counts rather than naming what it accepted, so the receipts are
@@ -275,14 +420,12 @@ public class DefaultPullRepository(
                         applyReceipt(request, receipt)
                     }
                     if (call.value.requested > 0) workScheduler.schedulePollAfterPull()
-                    skippedCount += call.value.skipped
+                    skipped += chunk.drop(call.value.requested)
+                        .take(call.value.skipped.coerceAtLeast(0))
+                        .map { it.releaseGroupMbid }
                 }
             }
         }
-        val skipped: List<ReleaseGroupMbid> = requests
-            .map { it.releaseGroupMbid }
-            .filter { mbid -> accepted.none { it.releaseGroupMbid == mbid } }
-            .take(maxOf(skippedCount, 0))
         return Outcome.Success(
             BatchRequestReceipt(requested = accepted, skipped = skipped, overflow = 0),
         )
@@ -294,13 +437,36 @@ public class DefaultPullRepository(
      * A refusal on this endpoint is **HTTP 200 with `success=false`** and a reason; `403` is reserved
      * for an MBID belonging to another user's request. That is the opposite of [cancelTask], which
      * uses real statuses, so the two cannot share error handling.
+     *
+     * ## It is not always the release group that goes in the path
+     *
+     * This used to send `RequestKind.Album` and `mbid` unconditionally, which is wrong for a track
+     * request in both of its two arguments: REQUIREMENTS.md "Placing a request" says the endpoint
+     * "takes `request_kind`, either `album` or `track`", and a track request is "keyed on recording
+     * MBID, not release group". The `pull` row is keyed on the release group whichever it is - that
+     * is the join key REQUIREMENTS.md "Identity model" mandates - so the kind and the recording
+     * arrive as stored columns on the row rather than as parameters here. See [requestRef].
+     *
+     * Reachable rather than theoretical: a `requests/active` track row whose `download_status` is
+     * past approval derives a cancellable state with no task id, which routes the UI's Cancel
+     * straight through here.
      */
     override suspend fun cancelRequest(mbid: ReleaseGroupMbid): Outcome<Unit> {
+        val ref: RequestRef = when (val resolved = requestRef(mbid)) {
+            is Outcome.Failure -> return resolved
+            is Outcome.Success -> resolved.value
+        }
         if (!networkMonitor.current().isOnline) {
-            writeQueue.enqueue(WriteOperation.CancelRequest(mbid))
+            writeQueue.enqueue(
+                WriteOperation.CancelRequest(
+                    releaseGroupMbid = mbid,
+                    requestKind = ref.target,
+                    recordingMbid = ref.recordingMbid,
+                ),
+            )
             return Outcome.Ok
         }
-        val call = networkCall { v1.cancelRequest(mbid.value, RequestKind.Album) }
+        val call = networkCall { v1.cancelRequest(ref.endpointMbid, ref.kind) }
         return when (call) {
             is Outcome.Failure -> call
             is Outcome.Success -> if (call.value.success) {
@@ -312,12 +478,23 @@ public class DefaultPullRepository(
         }
     }
 
+    /** `POST /api/v1/requests/retry/{mbid}`, keyed exactly as [cancelRequest] is and for the same reason. */
     override suspend fun retryRequest(mbid: ReleaseGroupMbid): Outcome<Unit> {
+        val ref: RequestRef = when (val resolved = requestRef(mbid)) {
+            is Outcome.Failure -> return resolved
+            is Outcome.Success -> resolved.value
+        }
         if (!networkMonitor.current().isOnline) {
-            writeQueue.enqueue(WriteOperation.RetryRequest(mbid))
+            writeQueue.enqueue(
+                WriteOperation.RetryRequest(
+                    releaseGroupMbid = mbid,
+                    requestKind = ref.target,
+                    recordingMbid = ref.recordingMbid,
+                ),
+            )
             return Outcome.Ok
         }
-        val call = networkCall { v1.retryRequest(mbid.value, RequestKind.Album) }
+        val call = networkCall { v1.retryRequest(ref.endpointMbid, ref.kind) }
         return when (call) {
             is Outcome.Failure -> call
             is Outcome.Success -> if (call.value.success) {
@@ -325,6 +502,65 @@ public class DefaultPullRepository(
             } else {
                 Outcome.Failure(NeedlerError.Rejected(message = call.value.message))
             }
+        }
+    }
+
+    /**
+     * Which id and which `request_kind` the two `/requests` mutations should carry for [mbid].
+     *
+     * Read from the stored `pull` row, because that is where the answer is: the kind and the
+     * recording MBID are columns on it, written by whichever lane reported the request. A row this
+     * device has never seen - no `pull` row at all - is treated as an album request, which is both
+     * the overwhelming majority and the safe direction: the release-group id is the one the caller
+     * named.
+     *
+     * The one case that refuses is a row that says `track` and has no recording MBID, which is what
+     * a track row written before the column existed looks like. Sending the release group with
+     * `request_kind=track` would be a `404` at best; sending it with `request_kind=album` would ask
+     * the server to cancel the *album* the track belongs to, which is a request the user never made
+     * and a mistake nothing would report. So it fails, and says what it needs:
+     * [refreshPulls] fills the column in on the next poll, after which the same tap works.
+     */
+    private suspend fun requestRef(mbid: ReleaseGroupMbid): Outcome<RequestRef> {
+        val row: PullEntity = pullDao.getPull(mbid.value) ?: return Outcome.Success(RequestRef.album(mbid))
+        if (!row.isTrackRequest) return Outcome.Success(RequestRef.album(mbid))
+        val recording: String = row.recordingMbid?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return Outcome.Failure(
+                NeedlerError.Rejected(
+                    message = "This track request cannot be changed from here yet - " +
+                        "its recording id has not been synced.",
+                ),
+            )
+        return Outcome.Success(
+            RequestRef(
+                target = RequestTarget.TRACK,
+                endpointMbid = recording,
+                recordingMbid = RecordingMbid(recording),
+            ),
+        )
+    }
+
+    /**
+     * The resolved target of a `/requests` cancel or retry: which kind, and which MBID in the path.
+     *
+     * A value type rather than a pair, so the two can never be passed in the wrong order - which is
+     * the whole defect this replaces, in the other direction.
+     */
+    private data class RequestRef(
+        val target: RequestTarget,
+        val endpointMbid: String,
+        val recordingMbid: RecordingMbid? = null,
+    ) {
+        /** The network layer's spelling of [target]. */
+        val kind: RequestKind
+            get() = when (target) {
+                RequestTarget.ALBUM -> RequestKind.Album
+                RequestTarget.TRACK -> RequestKind.Track
+            }
+
+        companion object {
+            fun album(mbid: ReleaseGroupMbid): RequestRef =
+                RequestRef(target = RequestTarget.ALBUM, endpointMbid = mbid.value)
         }
     }
 
@@ -407,12 +643,52 @@ public class DefaultPullRepository(
      * request as the user placed it - so neither can be treated as the sole source. The alternative,
      * asking `GET /api/v1/albums/{mbid}` for every unknown title, was rejected: it is one request per
      * pull against a two-second poll, and the answer is already in the response we have.
+     *
+     * ## Why this also deletes, and when it refuses to
+     *
+     * It used to upsert only. A task the server drops without ever reporting a terminal state -
+     * cleared by an admin, pruned by the server's own housekeeping, lost to a re-import - therefore
+     * stayed `DOWNLOADING` in the mirror for ever, and `observePullBadgeCount` counts active rows.
+     * REQUIREMENTS.md calls that badge "the reliable channel", and a channel with a permanent `1` on
+     * it is not one. `deleteFinishedBefore` was never the fix: it prunes rows that *reached* a
+     * terminal state, and these never do.
+     *
+     * The hard part is knowing the server's silence is real. `GET /api/v1/downloads` has **no
+     * `total` and no `total_pages`** - REQUIREMENTS.md: "paging is blind: ask for a page, and a full
+     * page means there may be another" - so an absence proves nothing unless the whole list was
+     * walked. Four conditions, all necessary:
+     *
+     *  1. **The walk ended on a short page.** That is the only end-of-list signal the endpoint
+     *     offers, and it is a real one: fewer items than asked for means there is no further page.
+     *     A walk that stopped at [MAX_PAGES] with every page full proves the opposite - that rows
+     *     this poll never saw certainly exist - so nothing is deleted at all. That is the case the
+     *     requirement's warning is about, and it is the case that makes "no total" matter.
+     *  2. **`requests/active` answered.** It has no paging and returns the whole list, so a success
+     *     is complete by construction - but a *failure* is swallowed into an empty list by
+     *     [orNullItems], and pruning against that would delete every parked approval the moment that
+     *     one call timed out.
+     *  3. **Only rows the Pulls screen buckets as Active.** The defect is a badge that will not go
+     *     down. A completed or failed row the server has forgotten is still the truthful record that
+     *     the pull landed or did not, and it is what the unseen-completions half of the badge is
+     *     counted from; [deleteFinishedBefore] retires those on age, which is the right rule for
+     *     them and the wrong one for these.
+     *  4. **Not a row the server has never heard of, and not one it has only just heard of.** A
+     *     request journalled while offline is active, has no task id, and is deliberately unknown to
+     *     the server until the write queue replays it. And a request accepted seconds ago has a
+     *     `pull` row before the server has a task to report for it, so rows are left alone until
+     *     they are older than [PollSchedule.RECONCILE_GRACE] - without which the two-second poll
+     *     would delete the row the user's own tap just created.
+     *
+     * The rows are deleted rather than marked cancelled. Writing `CANCELLED` would be inventing a
+     * status the server never reported, which is the one thing REQUIREMENTS.md "Placing a request"
+     * is explicit about: "render the status the server returned rather than inferring it".
      */
     override suspend fun refreshPulls(): Outcome<Unit> {
         val now: Long = nowMillis()
         val rows: MutableList<PullEntity> = ArrayList()
         val hints: MutableMap<String, AlbumHint> = LinkedHashMap()
         var page = 1
+        var sawShortPage = false
         while (page <= MAX_PAGES) {
             val call: Outcome<DownloadListDto> = networkCall {
                 v1.downloads(page = page, pageSize = PAGE_SIZE)
@@ -423,7 +699,10 @@ public class DefaultPullRepository(
             }
             list.items.forEach { item -> hints.addHint(item.releaseGroupMbid, AlbumHint.of(item)) }
             rows.addAll(list.items.mapNotNull { CatalogueMappers.pullEntity(it, now) })
-            if (list.items.size < PAGE_SIZE) break
+            if (list.items.size < PAGE_SIZE) {
+                sawShortPage = true
+                break
+            }
             page++
         }
 
@@ -443,8 +722,48 @@ public class DefaultPullRepository(
             pullDao.upsertAll(merged)
             ensureAlbumRows(merged, hints, now)
         }
+        if (sawShortPage && approvals is Outcome.Success) {
+            retireVanishedPulls(seen = merged.mapTo(HashSet()) { it.releaseGroupMbid }, now = now)
+        }
         return Outcome.Ok
     }
+
+    /**
+     * Drops the active `pull` rows a complete walk did not mention.
+     *
+     * Only ever called when both lanes answered in full; see [refreshPulls] for the four conditions
+     * and why each is necessary. [seen] is every release group either lane reported this poll.
+     *
+     * The read is of whole entities rather than ids because three of the four tests are on columns:
+     * the status says whether the row is one of the screen's Active ones, `task_id` plus the status
+     * identify a request the server has never been told about, and `updated_at` is the last moment
+     * anything at all asserted this row exists - which is what the grace window is measured from.
+     * The active set is bounded by what one person can have in flight, so this is a small query
+     * running beside a page walk that has just made several HTTP calls.
+     */
+    private suspend fun retireVanishedPulls(seen: Set<String>, now: Long) {
+        val cutoff: Long = now - PollSchedule.RECONCILE_GRACE.inWholeMilliseconds
+        val vanished: List<String> = pullDao
+            .getPullsInStatus(PullStatusDb.ACTIVE_DB_VALUES)
+            .filter { row ->
+                !seen.contains(row.releaseGroupMbid) &&
+                    !isPendingSubmission(row) &&
+                    row.updatedAt < cutoff
+            }
+            .map { it.releaseGroupMbid }
+        if (vanished.isEmpty()) return
+        pullDao.deleteAll(vanished)
+    }
+
+    /**
+     * True while a row is a request the server has not been told about yet.
+     *
+     * The same test [EntityMappers.pull] derives `Pull.isPendingSubmission` from, and the same one
+     * [recordPendingSubmission] writes: no task id, and merely queued. An approval row also has no
+     * task id and is not this, which is what the status check is for.
+     */
+    private fun isPendingSubmission(row: PullEntity): Boolean =
+        row.taskId == null && row.status == PullStatusDb.QUEUED
 
     override suspend fun refreshActivitySummary(): Outcome<PullActivitySummary> {
         val call = networkCall { v1.downloadActivitySummary() }
@@ -551,7 +870,7 @@ public class DefaultPullRepository(
      */
     private suspend fun recordPendingSubmission(request: AlbumRequest) {
         val now: Long = nowMillis()
-        ensureAlbumRow(request, now)
+        ensureAlbumRow(request, now, qualityPolicySummary = null)
         pullDao.upsert(
             PullEntity(
                 releaseGroupMbid = request.releaseGroupMbid.value,
@@ -581,7 +900,10 @@ public class DefaultPullRepository(
      */
     private suspend fun applyReceipt(request: AlbumRequest, receipt: RequestReceipt) {
         val now: Long = nowMillis()
-        ensureAlbumRow(request, now)
+        // The receipt's `quality_snapshot_summary` is the policy the server applied to *this*
+        // request, and REQUIREMENTS.md "Design pack discrepancies" puts it on the album row. This is
+        // the one moment it is in hand.
+        ensureAlbumRow(request, now, qualityPolicySummary = receipt.qualityPolicySummary)
         val status: PullStatusDb = when (receipt.status) {
             RequestStatus.PENDING_APPROVAL -> PullStatusDb.PENDING_APPROVAL
             RequestStatus.ACCEPTED -> PullStatusDb.SEARCHING
@@ -619,19 +941,39 @@ public class DefaultPullRepository(
     /**
      * A pull needs an album row to render against: `pull` left-joins `album` for the title and
      * artist, and a pull for an album only ever seen in catalogue search has no row yet.
+     *
+     * An existing row has its *gaps* filled from the request and the receipt rather than being left
+     * alone, which is what [repairedRow] decides: a row the catalogue wrote has a title but no
+     * quality summary, because only a request's answer carries one. A row that already says
+     * something keeps saying it.
      */
-    private suspend fun ensureAlbumRow(request: AlbumRequest, now: Long) {
-        if (albumDao.getAlbum(request.releaseGroupMbid.value) != null) return
-        albumDao.upsert(
-            CatalogueMappers.placeholderAlbumEntity(
-                releaseGroupMbid = request.releaseGroupMbid.value,
-                title = request.albumTitle.orEmpty(),
-                artistName = request.artistName.orEmpty(),
-                artistMbid = null,
-                year = request.year,
-                now = now,
-            ),
+    private suspend fun ensureAlbumRow(
+        request: AlbumRequest,
+        now: Long,
+        qualityPolicySummary: String?,
+    ) {
+        val hint = AlbumHint(
+            title = request.albumTitle.tidy(),
+            artistName = request.artistName.tidy(),
+            year = request.year,
+            qualityPolicySummary = qualityPolicySummary.tidy(),
         )
+        val existing: AlbumEntity? = albumDao.getAlbum(request.releaseGroupMbid.value)
+        if (existing == null) {
+            albumDao.upsert(
+                CatalogueMappers.placeholderAlbumEntity(
+                    releaseGroupMbid = request.releaseGroupMbid.value,
+                    title = hint.title.orEmpty(),
+                    artistName = hint.artistName.orEmpty(),
+                    artistMbid = null,
+                    year = hint.year,
+                    now = now,
+                    qualityPolicySummary = hint.qualityPolicySummary,
+                ),
+            )
+            return
+        }
+        repairedRow(existing, hint, now)?.let { albumDao.upsert(it) }
     }
 
     /**
@@ -674,6 +1016,7 @@ public class DefaultPullRepository(
                     artistMbid = hint.artistMbid,
                     year = hint.year,
                     now = now,
+                    qualityPolicySummary = hint.qualityPolicySummary,
                 )
             }
 
@@ -725,10 +1068,16 @@ public class DefaultPullRepository(
         val artistName: String = row.artistName.ifBlank { hint.artistName ?: row.artistName }
         val artistMbid: String? = row.artistMbid ?: hint.artistMbid
         val year: Int? = row.year ?: hint.year
+        // The quality summary is gap-filled like the rest, and that ordering matters: the receipt
+        // for a request this device placed is the authoritative answer for that request, while a
+        // download task's copy is the only answer available for a pull placed elsewhere. First
+        // writer wins, so the receipt is never overwritten by a task summary.
+        val quality: String? = row.qualityPolicySummary ?: hint.qualityPolicySummary
         val unchanged: Boolean = title == row.title &&
             artistName == row.artistName &&
             artistMbid == row.artistMbid &&
-            year == row.year
+            year == row.year &&
+            quality == row.qualityPolicySummary
         if (unchanged) return null
         return row.copy(
             title = title,
@@ -739,6 +1088,7 @@ public class DefaultPullRepository(
             artistNormalised = SortKeys.normalise(artistName),
             artistMbid = artistMbid,
             year = year,
+            qualityPolicySummary = quality,
             updatedAt = now,
         )
     }
@@ -761,10 +1111,22 @@ public class DefaultPullRepository(
         val artistName: String? = null,
         val artistMbid: String? = null,
         val year: Int? = null,
+        /**
+         * `quality_snapshot_summary`: the server-side policy this request was answered under.
+         *
+         * Harvested here for the same reason the title is, and it fixes the same kind of defect.
+         * REQUIREMENTS.md "Design pack discrepancies" settles that the figure is "shown on the album
+         * and on its pull", and the Pulls row reads it off the joined `album` row - but nothing was
+         * putting it there for a pull this device had not placed, so the pack's FLAC / MP3 320 badge
+         * existed only in the screenshot fixtures. The downloads lane reports it on every task; this
+         * is where that copy reaches the mirror.
+         */
+        val qualityPolicySummary: String? = null,
     ) {
         /** True when this lane said nothing worth storing, so it can be skipped entirely. */
         val isEmpty: Boolean
-            get() = title == null && artistName == null && artistMbid == null && year == null
+            get() = title == null && artistName == null && artistMbid == null && year == null &&
+                qualityPolicySummary == null
 
         /** [other] fills the gaps this one has. First answer wins, so no page undoes another. */
         fun mergedWith(other: AlbumHint): AlbumHint = AlbumHint(
@@ -772,6 +1134,7 @@ public class DefaultPullRepository(
             artistName = artistName ?: other.artistName,
             artistMbid = artistMbid ?: other.artistMbid,
             year = year ?: other.year,
+            qualityPolicySummary = qualityPolicySummary ?: other.qualityPolicySummary,
         )
 
         companion object {
@@ -780,6 +1143,7 @@ public class DefaultPullRepository(
                 artistName = dto.artistName.tidy(),
                 artistMbid = dto.artistMbid.tidy(),
                 year = dto.year,
+                qualityPolicySummary = dto.qualitySnapshotSummary.tidy(),
             )
 
             fun of(dto: ActiveRequestItemDto): AlbumHint = AlbumHint(
@@ -787,6 +1151,9 @@ public class DefaultPullRepository(
                 artistName = dto.artistName.tidy(),
                 artistMbid = dto.artistMbid.tidy(),
                 year = dto.year,
+                // `quality` on this lane is the request's own summary under a shorter name; the
+                // downloads lane calls the same figure `quality_snapshot_summary`.
+                qualityPolicySummary = dto.quality.tidy(),
             )
 
             /** `GET /api/v1/requests/history`: the request as the user placed it, however long ago. */
@@ -812,8 +1179,6 @@ public class DefaultPullRepository(
                 artistMbid = dto.artistMbid.tidy(),
                 year = dto.year,
             )
-
-            private fun String?.tidy(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
         }
     }
 
@@ -857,3 +1222,13 @@ public class DefaultPullRepository(
         public const val MAX_HISTORY_PAGE_SIZE: Int = 50
     }
 }
+
+/**
+ * Blank normalised to absent, which is how every title and every summary enters this file.
+ *
+ * Top-level and file-private rather than a member of `AlbumHint.Companion`, which is where it used
+ * to live: `DefaultPullRepository.ensureAlbumRow` builds a hint out of an `AlbumRequest` and a
+ * receipt rather than out of a DTO, and two spellings of "blank is absent" is exactly the confusion
+ * that once let an empty title be stored as though the server had asserted it.
+ */
+private fun String?.tidy(): String? = this?.trim()?.takeIf { it.isNotEmpty() }

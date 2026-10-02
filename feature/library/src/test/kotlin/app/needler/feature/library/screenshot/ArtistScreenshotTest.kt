@@ -9,6 +9,7 @@ import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.PullProgress
 import app.needler.core.domain.model.PullState
 import app.needler.feature.library.SampleLibrary
+import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.artist.ArtistScreen
 import app.needler.feature.library.artist.ArtistUiState
 import app.needler.feature.library.common.RequestSheetState
@@ -74,6 +75,40 @@ class ArtistScreenshotTest {
     @Test
     fun `at 200 percent text size`() {
         capture("artist-large-text", NeedlerDevice.Phone, LOADED, fontScale = 2f)
+    }
+
+    // ---- the crate ----------------------------------------------------------
+
+    /**
+     * The action row's fourth control and the one on every owned album row.
+     *
+     * Two placements in one image, and the reason they differ: the row's tap opens the album
+     * and is harmless, so its control sits in the trailing slot beside Play; a track row's tap
+     * plays and destroys the crate, so there the long press is claimed instead. Rendering it is
+     * how "three controls still fit beside a two-line title" gets checked.
+     */
+    @Test
+    fun `the artist actions and the album rows carry the crate`() {
+        capture("artist-crate-control", NeedlerDevice.Phone, LOADED)
+    }
+
+    @Test
+    fun `the crate controls at 200 percent text size`() {
+        capture("artist-crate-control-large-text", NeedlerDevice.Phone, LOADED, fontScale = 2f)
+    }
+
+    /** The sentence after an add, with the crate's own count and total duration under it. */
+    @Test
+    fun `the added-to-the-crate line, with the count and the duration`() {
+        capture(
+            "artist-crate-added",
+            NeedlerDevice.Phone,
+            LOADED.copy(
+                notice = AlbumNotice.AddedToCrate(trackCount = 8),
+                crateTrackCount = 10,
+                crateDurationMs = 2_120_000L,
+            ),
+        )
     }
 
     @Test
@@ -201,6 +236,8 @@ class ArtistScreenshotTest {
             onPlay = {},
             onShuffle = {},
             onPlayAlbum = {},
+            onAddToCrate = {},
+            onAddAlbumToCrate = { _, _ -> },
             onToggleFavourite = {},
             onMonitorArtistChange = {},
             onConfirmRequest = {},

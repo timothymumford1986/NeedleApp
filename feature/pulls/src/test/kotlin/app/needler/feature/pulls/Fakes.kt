@@ -22,6 +22,7 @@ import app.needler.core.domain.repository.SessionRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 
 /**
  * Hand-written fakes rather than mocks.
@@ -63,7 +64,19 @@ internal class FakePullRepository(
 
     var refreshCount: Int = 0
 
+    /**
+     * How many collectors took the polling flow rather than the plain one.
+     *
+     * The one thing about REQUIREMENTS.md "Polling schedule" that is testable from this module: the
+     * 2 s loop itself lives in `:core:data` and is tested there, but *which* flow the screen
+     * subscribes to is this module's choice, and taking the unpolled one would leave the screen
+     * static with nothing failing.
+     */
+    var liveSubscriptions: Int = 0
+
     override fun observePulls(): Flow<List<Pull>> = pullsFlow
+
+    override fun observePullsLive(): Flow<List<Pull>> = pullsFlow.onStart { liveSubscriptions++ }
 
     override fun observePulls(bucket: PullBucket): Flow<List<Pull>> =
         pullsFlow.map { list -> list.filter { it.bucket == bucket } }

@@ -97,6 +97,7 @@ internal fun CrateRow(
             {
                 PlayerArtwork(
                     artwork = item.track.artwork,
+                    identity = item.track.releaseGroupMbid.value,
                     albumTitle = item.track.albumTitle,
                     artistName = item.track.artistName,
                     modifier = Modifier.size(NeedlerTheme.sizes.artworkThumb),

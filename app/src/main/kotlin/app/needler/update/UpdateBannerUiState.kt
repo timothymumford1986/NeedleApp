@@ -90,6 +90,21 @@ data class UpdateBannerUiState(
      * Everything is dismissible except an install already handed to the platform. Once the session
      * is committed the app is no longer the one in charge, and a dismiss control that could not
      * actually stop anything would be a lie.
+     *
+     * ## This stayed false, and the fix for the stuck bar was elsewhere
+     *
+     * A device did get stranded on "Installing 0.0.11" with no action and no dismissal, for ever.
+     * Making these two phases dismissible is the obvious reading of that and the wrong one, twice
+     * over. It would not have helped — the state behind the bar was in memory and unleaveable, so a
+     * dismissal would have hidden a feature that was still broken rather than mended it, and this
+     * bar's one job is that an available release is *visible*, which a control that retires it for
+     * good defeats. And the lie above would still be a lie: at the moment of a committed install
+     * there genuinely is nothing a dismiss control could stop.
+     *
+     * What changed instead is that [UpdatePhase.Installing] stopped being somewhere the app can sit
+     * for ever. [UpdateRepository.observe] bounds the wait, and when it runs out the phase becomes
+     * [UpdatePhase.Available] — which has an Update button, a dismissal, and the whole feature
+     * behind it. The listener gets out of the bar by the bar becoming a different bar.
      */
     val dismissible: Boolean
         get() = phase != UpdatePhase.Installing && phase != UpdatePhase.AwaitingConfirmation

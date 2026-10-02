@@ -15,6 +15,7 @@ import app.needler.core.network.v1.dto.ReleaseItemDto
 import app.needler.core.network.v1.dto.RequestAcceptedDto
 import app.needler.core.network.v1.dto.SearchResultDto
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -168,6 +169,118 @@ public class CatalogueMappersTest {
         )
     }
 
+    // ------------------------------------------- the kind, and the id it implies
+    //
+    // REQUIREMENTS.md "Placing a request": cancel and retry of a request take `request_kind`, and a
+    // track request is "keyed on recording MBID, not release group". The `pull` row is keyed on the
+    // release group either way - REQUIREMENTS.md "Identity model" - so both have to be stored or the
+    // cancel is sent for the wrong thing under the wrong kind.
+
+    @Test
+    public fun `a track download task stores its kind and its recording MBID`() {
+        val row: PullEntity = CatalogueMappers.pullEntity(
+            task(status = "downloading").copy(downloadType = "track", recordingMbid = RECORDING),
+            now,
+        )!!
+
+        assertTrue(row.isTrackRequest)
+        assertEquals(RECORDING, row.recordingMbid)
+        // Still keyed on the release group, which is what the screen and the album join look up.
+        assertEquals(RG, row.releaseGroupMbid)
+    }
+
+    @Test
+    public fun `an album download task stores no recording MBID at all`() {
+        val row: PullEntity = CatalogueMappers.pullEntity(task(status = "downloading"), now)!!
+
+        assertFalse(row.isTrackRequest)
+        assertNull(row.recordingMbid)
+    }
+
+    /**
+     * On `requests/active`, `musicbrainz_id` is the *recording* for a track row.
+     *
+     * The release group arrives separately as `track_release_group_mbid`, which is why the row is
+     * keyed on that; this is the one place both ids are in hand, so it is where the recording is
+     * captured for a later cancel.
+     */
+    @Test
+    public fun `a parked track request keeps the recording MBID and keys on the release group`() {
+        val row: PullEntity = CatalogueMappers.pendingApprovalEntity(
+            app.needler.core.network.v1.dto.ActiveRequestItemDto(
+                musicbrainzId = RECORDING,
+                trackReleaseGroupMbid = RG,
+                requestKind = "track",
+                status = "awaiting_approval",
+            ),
+            now,
+        )!!
+
+        assertEquals(RG, row.releaseGroupMbid)
+        assertEquals(RECORDING, row.recordingMbid)
+        assertTrue(row.isTrackRequest)
+    }
+
+    @Test
+    public fun `a parked album request records no recording MBID`() {
+        val row: PullEntity = CatalogueMappers.pendingApprovalEntity(
+            app.needler.core.network.v1.dto.ActiveRequestItemDto(
+                musicbrainzId = RG,
+                status = "awaiting_approval",
+            ),
+            now,
+        )!!
+
+        assertFalse(row.isTrackRequest)
+        assertNull(row.recordingMbid)
+    }
+
+    @Test
+    public fun `an unrecognised download type is an album, which is the safe direction`() {
+        val row: PullEntity = CatalogueMappers.pullEntity(
+            task(status = "downloading").copy(downloadType = "boxset"),
+            now,
+        )!!
+
+        assertFalse(row.isTrackRequest)
+    }
+
+    // --------------------------------------------------------- the quality badge
+
+    /**
+     * REQUIREMENTS.md "Design pack discrepancies": `quality_snapshot_summary` is the honest thing to
+     * show, because quality is a server-side policy a user cannot override - and it rides on the
+     * `album` row, which the Pulls projection joins for the title anyway.
+     */
+    @Test
+    public fun `a placeholder album row can carry the quality the server applied`() {
+        val row = CatalogueMappers.placeholderAlbumEntity(
+            releaseGroupMbid = RG,
+            title = "Spiderland",
+            artistName = "Slint",
+            artistMbid = null,
+            year = 1991,
+            now = now,
+            qualityPolicySummary = "FLAC",
+        )
+
+        assertEquals("FLAC", row.qualityPolicySummary)
+    }
+
+    @Test
+    public fun `a placeholder album row with no quality answer stores none`() {
+        val row = CatalogueMappers.placeholderAlbumEntity(
+            releaseGroupMbid = RG,
+            title = "Spiderland",
+            artistName = "Slint",
+            artistMbid = null,
+            year = 1991,
+            now = now,
+        )
+
+        assertNull(row.qualityPolicySummary)
+    }
+
     @Test
     public fun `a held task carries a read-only notice rather than an error`() {
         val row: PullEntity = CatalogueMappers.pullEntity(
@@ -263,4 +376,9 @@ public class CatalogueMappersTest {
         createdAt = 1_700_000_000.0,
         updatedAt = 1_700_000_100.0,
     )
+
+    private companion object {
+        /** A recording MBID, which is the id a `request_kind=track` cancel is keyed on. */
+        const val RECORDING: String = "9d9f2a1b-0c3d-4e5f-8a7b-6c5d4e3f2a1b"
+    }
 }

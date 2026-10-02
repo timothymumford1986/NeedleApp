@@ -124,6 +124,18 @@ data class ArtistUiState(
      * that is visibly unavailable.
      */
     val playableTracks: List<Track> = emptyList(),
+
+    /**
+     * How many rows the crate holds right now, from `PlaybackController.observeQueue`.
+     *
+     * The session's own figure rather than one this screen works out, for the reason
+     * [crateLine] gives: the crate is the session's, and a predicted count is a claim
+     * about something this screen does not own.
+     */
+    val crateTrackCount: Int = 0,
+
+    /** The crate's total running time in milliseconds, from the same flow. */
+    val crateDurationMs: Long = 0L,
 ) {
 
     val discographyUnavailable: Boolean get() = discographyError != null || artistNotInCatalogue
@@ -162,6 +174,15 @@ data class ArtistUiState(
 
     /** True when the mirror has no row for this artist and the screen is drawn from hints. */
     val fromHintsOnly: Boolean get() = artist == null && knownName != null
+
+    /**
+     * `19 in the crate · 1 hr 14 min`, or null when the crate is empty.
+     *
+     * Shown under the notice an add leaves behind, because adding to a queue with no
+     * visible change is indistinguishable from a tap that did not register - and these
+     * are the two figures REQUIREMENTS.md "Queue" asks the crate screen itself for.
+     */
+    val crateLine: String? get() = LibraryFormat.crateLine(crateTrackCount, crateDurationMs)
 
     /**
      * True when there is something for the server to be asked for.

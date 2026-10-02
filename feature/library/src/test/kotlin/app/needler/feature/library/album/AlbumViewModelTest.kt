@@ -936,6 +936,170 @@ class AlbumViewModelTest {
         }
     }
 
+    // ---- the crate ----------------------------------------------------------
+    // Nothing in the library could be added to the crate: Play, Shuffle and every track row
+    // replaced it, and long-pressing a row played that track and threw the queue away. Each test
+    // here asserts the negative as well as the positive - that `enqueue` was used and that
+    // `playAlbum` and `playTracks`, the two commands that replace the crate, were not.
+
+    @Test
+    fun `adding an album appends to the crate rather than replacing it`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.submarineTracks.take(2)), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            model.onAddToCrate(playNext = false)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(AlbumNotice.AddedToCrate(trackCount = 8), after.notice)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(1, playback.enqueueCalls.size)
+        assertEquals(8, playback.enqueueCalls.single().tracks.size)
+        assertFalse(playback.enqueueCalls.single().playNext)
+        assertTrue("the crate must not be replaced", playback.playAlbumCalls.isEmpty())
+        assertTrue("the crate must not be replaced", playback.playTracksCalls.isEmpty())
+    }
+
+    @Test
+    fun `the crate's count and duration follow the add`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.submarineTracks.take(2)), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            assertEquals(2, loaded.crateTrackCount)
+
+            model.onAddToCrate(playNext = false)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            // Two tracks already in it plus the record's eight, and the total duration of all
+            // ten - read off the session's own crate, not predicted here.
+            assertEquals(10, after.crateTrackCount)
+            assertEquals(2_120_000L, after.crateDurationMs)
+            assertEquals("10 in the crate · 35 min", after.crateLine)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `adding while nothing is loaded starts playback and says so`() = runTest {
+        // `enqueue` never starts sound, so an add to an empty crate would otherwise leave a
+        // loaded crate and silence - a tap with no evidence it registered.
+        ownedSubmarine()
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            model.onAddToCrate(playNext = false)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(
+                AlbumNotice.AddedToCrate(trackCount = 8, started = true),
+                after.notice,
+            )
+            assertEquals(8, after.crateTrackCount)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(1, playback.playTracksCalls.size)
+        assertTrue("nothing to append to", playback.enqueueCalls.isEmpty())
+    }
+
+    @Test
+    fun `play next asks for the insert, not the append`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.submarineTracks.take(2)), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            model.onAddToCrate(playNext = true)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(
+                AlbumNotice.AddedToCrate(trackCount = 8, playNext = true),
+                after.notice,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(playback.enqueueCalls.single().playNext)
+        // Inserted after the Playing row rather than at the end: the crate's second row is the
+        // first track of the record that was added.
+        assertEquals(
+            SampleLibrary.submarineTracks.first().key,
+            playback.queue.value.items[1].track.key,
+        )
+    }
+
+    @Test
+    fun `adding one row adds that track and nothing else`() = runTest {
+        ownedSubmarine()
+        loadCrate(crate(SampleLibrary.submarineTracks.take(2)), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            model.onAddTrackToCrate(loaded.tracks.first { it.position == 3 }, playNext = false)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(AlbumNotice.AddedToCrate(trackCount = 1), after.notice)
+            assertEquals(3, after.crateTrackCount)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals("Hamptons", playback.enqueueCalls.single().tracks.single().title)
+    }
+
+    @Test
+    fun `adding a row with no file behind it never reaches the player`() = runTest {
+        library.albumsByMbid.value = mapOf(mbid.value to submarine.copy(state = AlbumState.Owned))
+        library.tracksByMbid.value = mapOf(mbid.value to SampleLibrary.submarinePartialTracks)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            model.onAddTrackToCrate(loaded.missingTracks.first(), playNext = false)
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(playback.enqueueCalls.isEmpty())
+        assertTrue(playback.playTracksCalls.isEmpty())
+    }
+
+    @Test
+    fun `adding a record drops the tracks a part-delivered pull never brought`() = runTest {
+        library.albumsByMbid.value = mapOf(mbid.value to submarine.copy(state = AlbumState.Owned))
+        library.tracksByMbid.value = mapOf(mbid.value to SampleLibrary.submarinePartialTracks)
+        loadCrate(crate(SampleLibrary.submarineTracks.take(1)), playing = true)
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.album == null) loaded = awaitItem()
+            model.onAddToCrate(playNext = false)
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        // Eight tracks, two of which exist nowhere: a crate holding them would stall at a gap
+        // the user cannot see the reason for.
+        assertEquals(6, playback.enqueueCalls.single().tracks.size)
+    }
+
     private companion object {
         /** A server with ffmpeg. `FakeSessions` defaults to one without, which is the other case above. */
         val TRANSCODING_SERVER: ServerCapabilities = ServerCapabilities(

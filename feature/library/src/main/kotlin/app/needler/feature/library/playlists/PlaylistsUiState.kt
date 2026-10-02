@@ -181,9 +181,17 @@ sealed interface PlaylistNotice {
      * "In the crate" is fixed by REQUIREMENTS.md "Vocabulary" and is the only
      * name this product gives the play queue.
      */
-    data class AddedToCrate(val count: Int) : PlaylistNotice {
+    data class AddedToCrate(val count: Int, val started: Boolean = false) : PlaylistNotice {
         override val message: String
-            get() = LibraryFormat.plural(count.toLong(), "track") + " added to the crate."
+            get() = if (started) {
+                // Adding to an empty crate loads it and starts nothing, so a plain "added"
+                // would describe a screen that went quiet. The album and search surfaces
+                // say the same thing for the same reason - see `addTracksToCrate`.
+                "The crate was empty, so " +
+                    LibraryFormat.plural(count.toLong(), "track") + " started playing."
+            } else {
+                LibraryFormat.plural(count.toLong(), "track") + " added to the crate."
+            }
     }
 
     /** Something went wrong, in whatever words the domain error justified. */

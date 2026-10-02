@@ -118,6 +118,39 @@ class PlayerScreenshotTest {
         }
     }
 
+    /**
+     * An album the server has no cover art for, which is a different picture from nothing playing.
+     *
+     * Every other render in this file also has no artwork - a JVM render cannot resolve an
+     * `ArtworkRef` - so the player's old flat square was in all of them and read as a cover on its
+     * way. This one is named for the case the device found, so the sleeve in the image can be
+     * checked against the library grid's and the two can be seen to agree.
+     */
+    @Test
+    fun `now playing an album the server has no cover for`() {
+        capture("player-now-playing-no-artwork", PlayerDevice.Phone) {
+            NowPlayingScreen(
+                state = PLAYING.copy(
+                    item = PlayerFixtures.item("q1", PlayerFixtures.illinois),
+                    durationMs = 366_000L,
+                ),
+                progress = { PROGRESS },
+                onClose = {},
+                onOpenCrate = {},
+                onPlayPause = {},
+                onNext = {},
+                onPrevious = {},
+                onSeek = {},
+                onToggleShuffle = {},
+                onCycleRepeat = {},
+                onChooseOutput = {},
+                onToggleFavourite = {},
+                onChooseSleepTimer = {},
+                onOpenArtist = {},
+            )
+        }
+    }
+
     @Test
     fun `now playing when the track will not play`() {
         capture("player-now-playing-error", PlayerDevice.Phone) {

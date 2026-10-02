@@ -215,13 +215,19 @@ public class FakeV1Api : V1Api {
         return TrackRequestResponseDto(status = "queued", taskId = "task-1")
     }
 
+    /**
+     * The `request_kind` is recorded beside the MBID, because on this endpoint the two have to
+     * agree: `DELETE /api/v1/requests/active/{mbid}` takes the recording MBID when the kind is
+     * `track` and the release group when it is `album`, so a test that saw only the id could not
+     * tell a correct call from one that sent the right id under the wrong kind.
+     */
     override suspend fun cancelRequest(musicbrainzId: String, kind: RequestKind): CancelRequestDto {
-        record("cancelRequest(" + musicbrainzId + ")")
+        record("cancelRequest(" + musicbrainzId + "," + kind.wire + ")")
         return cancelRequestResponse(musicbrainzId)
     }
 
     override suspend fun retryRequest(musicbrainzId: String, kind: RequestKind): RetryRequestDto {
-        record("retryRequest(" + musicbrainzId + ")")
+        record("retryRequest(" + musicbrainzId + "," + kind.wire + ")")
         return retryRequestResponse(musicbrainzId)
     }
 

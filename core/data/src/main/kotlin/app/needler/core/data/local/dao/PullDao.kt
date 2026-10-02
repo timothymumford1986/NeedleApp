@@ -47,10 +47,12 @@ public interface PullDao {
             pull.search_job_id AS search_job_id,
             pull.candidate_index AS candidate_index,
             pull.created_at AS created_at,
+            pull.updated_at AS updated_at,
             album.title AS album_title,
             album.artist_name AS album_artist_name,
             album.year AS album_year,
-            album.cover_art_id AS album_cover_art_id
+            album.cover_art_id AS album_cover_art_id,
+            album.quality_policy_summary AS album_quality_policy_summary
         FROM pull
         LEFT JOIN album ON album.release_group_mbid = pull.release_group_mbid
         WHERE pull.status IN (:statuses)
@@ -75,10 +77,12 @@ public interface PullDao {
             pull.search_job_id AS search_job_id,
             pull.candidate_index AS candidate_index,
             pull.created_at AS created_at,
+            pull.updated_at AS updated_at,
             album.title AS album_title,
             album.artist_name AS album_artist_name,
             album.year AS album_year,
-            album.cover_art_id AS album_cover_art_id
+            album.cover_art_id AS album_cover_art_id,
+            album.quality_policy_summary AS album_quality_policy_summary
         FROM pull
         LEFT JOIN album ON album.release_group_mbid = pull.release_group_mbid
         ORDER BY pull.created_at DESC
@@ -108,10 +112,12 @@ public interface PullDao {
             pull.search_job_id AS search_job_id,
             pull.candidate_index AS candidate_index,
             pull.created_at AS created_at,
+            pull.updated_at AS updated_at,
             album.title AS album_title,
             album.artist_name AS album_artist_name,
             album.year AS album_year,
-            album.cover_art_id AS album_cover_art_id
+            album.cover_art_id AS album_cover_art_id,
+            album.quality_policy_summary AS album_quality_policy_summary
         FROM pull
         LEFT JOIN album ON album.release_group_mbid = pull.release_group_mbid
         WHERE pull.status IN (:statuses)
@@ -129,6 +135,18 @@ public interface PullDao {
 
     @Query("SELECT * FROM pull WHERE task_id = :taskId")
     public suspend fun getPullByTaskId(taskId: String): PullEntity?
+
+    /**
+     * Every row in one of [statuses], as whole entities.
+     *
+     * The read half of reconciling the mirror against a full page walk: `refreshPulls` needs to know
+     * which active rows it holds in order to notice the ones the server has stopped reporting. Whole
+     * entities rather than ids, because the decision to drop a row depends on its `task_id`, its
+     * status and its `updated_at` - see `DefaultPullRepository.refreshPulls`. The active set is
+     * bounded by what one user can have in flight, so this is a small read.
+     */
+    @Query("SELECT * FROM pull WHERE status IN (:statuses)")
+    public suspend fun getPullsInStatus(statuses: List<String>): List<PullEntity>
 
     /**
      * The nav badge count - "the reliable channel", since notifications are best-effort. Counts
@@ -169,6 +187,16 @@ public interface PullDao {
 
     @Query("DELETE FROM pull WHERE release_group_mbid = :releaseGroupMbid")
     public suspend fun delete(releaseGroupMbid: String)
+
+    /**
+     * Drops several rows at once, for the reconcile in `DefaultPullRepository.refreshPulls`.
+     *
+     * **Callers must not pass an empty list.** Room expands `IN (:mbids)` to one placeholder per
+     * element, and zero elements is `IN ()`, which SQLite rejects as a syntax error. The caller
+     * already has to check, because it only runs this when it has found something to drop.
+     */
+    @Query("DELETE FROM pull WHERE release_group_mbid IN (:mbids)")
+    public suspend fun deleteAll(mbids: List<String>)
 
     /** Prunes finished pulls so the Completed bucket does not grow without bound. */
     @Query("DELETE FROM pull WHERE status IN (:statuses) AND updated_at < :olderThan")

@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerButtonTone
+import app.needler.core.design.component.NeedlerCrateControl
 import app.needler.core.design.component.PathChevronLeft
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerLinearProgress
@@ -129,6 +130,8 @@ fun AlbumScreen(
     onPlayPause: () -> Unit,
     onShuffle: () -> Unit,
     onPlayTrack: (AlbumTrack) -> Unit,
+    onAddToCrate: (Boolean) -> Unit,
+    onAddTrackToCrate: (AlbumTrack, Boolean) -> Unit,
     onPull: () -> Unit,
     onCancelPull: () -> Unit,
     onRetryPull: () -> Unit,
@@ -176,6 +179,8 @@ fun AlbumScreen(
                     onPlayPause = onPlayPause,
                     onShuffle = onShuffle,
                     onPlayTrack = onPlayTrack,
+                    onAddToCrate = onAddToCrate,
+                    onAddTrackToCrate = onAddTrackToCrate,
                     onPull = onPull,
                     onCancelPull = onCancelPull,
                     onRetryPull = onRetryPull,
@@ -194,6 +199,8 @@ fun AlbumScreen(
                     onPlayPause = onPlayPause,
                     onShuffle = onShuffle,
                     onPlayTrack = onPlayTrack,
+                    onAddToCrate = onAddToCrate,
+                    onAddTrackToCrate = onAddTrackToCrate,
                     onPull = onPull,
                     onCancelPull = onCancelPull,
                     onRetryPull = onRetryPull,
@@ -233,6 +240,8 @@ private fun PhoneAlbum(
     onPlayPause: () -> Unit,
     onShuffle: () -> Unit,
     onPlayTrack: (AlbumTrack) -> Unit,
+    onAddToCrate: (Boolean) -> Unit,
+    onAddTrackToCrate: (AlbumTrack, Boolean) -> Unit,
     onPull: () -> Unit,
     onCancelPull: () -> Unit,
     onRetryPull: () -> Unit,
@@ -278,6 +287,7 @@ private fun PhoneAlbum(
                     state = state,
                     onPlayPause = onPlayPause,
                     onShuffle = onShuffle,
+                    onAddToCrate = onAddToCrate,
                     onPull = onPull,
                     onCancelPull = onCancelPull,
                     onRetryPull = onRetryPull,
@@ -287,7 +297,15 @@ private fun PhoneAlbum(
                 if (state.download != null && state.download != OfflineDownloadState.Complete) {
                     DownloadProgress(state.download)
                 }
-                state.notice?.let { NoticeCard(notice = it, onDismiss = onDismissNotice) }
+                state.notice?.let { notice ->
+                    NoticeCard(
+                        notice = notice,
+                        // The crate's own count and total duration, as the session holds them,
+                        // under the sentence saying what was just added to it.
+                        detail = if (notice is AlbumNotice.AddedToCrate) state.crateLine else null,
+                        onDismiss = onDismissNotice,
+                    )
+                }
                 PartialDeliveryNote(state)
                 Spacer(modifier = Modifier.height(spacing.step2))
             }
@@ -295,6 +313,7 @@ private fun PhoneAlbum(
         trackRows(
             state = state,
             onPlayTrack = onPlayTrack,
+            onAddTrackToCrate = onAddTrackToCrate,
             onRetryTrack = onRetryTrack,
             onToggleTrackFavourite = onToggleTrackFavourite,
         )
@@ -320,6 +339,8 @@ private fun TabletAlbum(
     onPlayPause: () -> Unit,
     onShuffle: () -> Unit,
     onPlayTrack: (AlbumTrack) -> Unit,
+    onAddToCrate: (Boolean) -> Unit,
+    onAddTrackToCrate: (AlbumTrack, Boolean) -> Unit,
     onPull: () -> Unit,
     onCancelPull: () -> Unit,
     onRetryPull: () -> Unit,
@@ -363,6 +384,7 @@ private fun TabletAlbum(
                 state = state,
                 onPlayPause = onPlayPause,
                 onShuffle = onShuffle,
+                onAddToCrate = onAddToCrate,
                 onPull = onPull,
                 onCancelPull = onCancelPull,
                 onRetryPull = onRetryPull,
@@ -370,7 +392,13 @@ private fun TabletAlbum(
                 onRemoveFromDevice = onRemoveFromDevice,
             )
             DownloadProgress(state.download)
-            state.notice?.let { NoticeCard(notice = it, onDismiss = onDismissNotice) }
+            state.notice?.let { notice ->
+                NoticeCard(
+                    notice = notice,
+                    detail = if (notice is AlbumNotice.AddedToCrate) state.crateLine else null,
+                    onDismiss = onDismissNotice,
+                )
+            }
             PartialDeliveryNote(state)
             Spacer(modifier = Modifier.height(spacing.step12))
         }
@@ -381,6 +409,7 @@ private fun TabletAlbum(
             trackRows(
                 state = state,
                 onPlayTrack = onPlayTrack,
+                onAddTrackToCrate = onAddTrackToCrate,
                 onRetryTrack = onRetryTrack,
                 onToggleTrackFavourite = onToggleTrackFavourite,
             )
@@ -409,6 +438,7 @@ private fun TabletAlbum(
 private fun LazyListScope.trackRows(
     state: AlbumUiState,
     onPlayTrack: (AlbumTrack) -> Unit,
+    onAddTrackToCrate: (AlbumTrack, Boolean) -> Unit,
     onRetryTrack: (AlbumTrack) -> Unit,
     onToggleTrackFavourite: (AlbumTrack) -> Unit,
 ) {
@@ -419,6 +449,7 @@ private fun LazyListScope.trackRows(
         val row: AlbumTrack = state.tracks[index]
         val owned: Boolean = state.album?.isOwned == true
         if (row.available) {
+            var crateMenuOpen: Boolean by remember(row.key) { mutableStateOf(false) }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -430,6 +461,23 @@ private fun LazyListScope.trackRows(
                     available = true,
                     onClick = { onPlayTrack(row) },
                     modifier = Modifier.weight(1f),
+                    // The long press used to play the row and replace the crate, because
+                    // `clickable` fires on the release however long the hold was. It opens
+                    // the crate menu now; `needlerRowActions` consumes the press, so the
+                    // tap-to-play cannot fire behind it.
+                    onLongPress = { crateMenuOpen = true },
+                )
+                // Beside the row rather than in it. The row's gesture modifier clears its
+                // own descendants' semantics - see `needlerRowActions` - so a control
+                // placed inside would be drawn and unreachable to TalkBack. This is the
+                // arrangement the star already uses, for the same reason.
+                NeedlerCrateControl(
+                    subject = LibraryFormat.trackLabel(row.track.title),
+                    expanded = crateMenuOpen,
+                    onExpandedChange = { crateMenuOpen = it },
+                    onAddToCrate = { onAddTrackToCrate(row, false) },
+                    onPlayNext = { onAddTrackToCrate(row, true) },
+                    visualSize = 36.dp,
                 )
                 FavouriteButton(
                     isFavourite = row.track.isFavourite,
@@ -744,6 +792,7 @@ private fun AlbumActions(
     state: AlbumUiState,
     onPlayPause: () -> Unit,
     onShuffle: () -> Unit,
+    onAddToCrate: (Boolean) -> Unit,
     onPull: () -> Unit,
     onCancelPull: () -> Unit,
     onRetryPull: () -> Unit,
@@ -758,6 +807,7 @@ private fun AlbumActions(
     // `LibraryFormat.albumLabel`. Resolved once here rather than guarded at each of
     // the six call sites, because the seventh is the one that gets forgotten.
     val label: String = LibraryFormat.albumLabel(album.title)
+    var crateMenuOpen: Boolean by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -801,6 +851,31 @@ private fun AlbumActions(
                         size = NeedlerButtonSize.Medium,
                         enabled = !state.busy && state.hasPlayableTracks,
                         contentDescription = transport.shuffleDescription(label),
+                    )
+                    // The crate menu, as the fourth control rather than as two more buttons.
+                    //
+                    // REQUIREMENTS.md "Queue" gives the crate a count and a total duration and has
+                    // it persist across restarts, and nothing on this screen could put a record
+                    // into it: Play, Shuffle and every track row replace it. The two actions that
+                    // can - append, and play next - live behind one 48dp target here, beside the
+                    // controls that start playback, because that is where a user reaching for
+                    // "queue this record" looks first and the pack draws nothing for them at all.
+                    //
+                    // Not reinstated as a top-bar overflow. The one that was removed held a single
+                    // item duplicating the artist link a few dp below it; this holds two actions
+                    // reachable nowhere else, which is the difference between a menu and a hidden
+                    // link. Not five buttons across either: at 200% text the row already wraps
+                    // twice, and a FlowRow of five makes Play one item in a list rather than the
+                    // primary action.
+                    NeedlerCrateControl(
+                        subject = label,
+                        expanded = crateMenuOpen,
+                        onExpandedChange = { crateMenuOpen = it },
+                        onAddToCrate = { onAddToCrate(false) },
+                        onPlayNext = { onAddToCrate(true) },
+                        enabled = !state.busy && state.hasPlayableTracks,
+                        emphasised = true,
+                        visualSize = 44.dp,
                     )
                     // REQUIREMENTS.md: hide the pin affordance entirely when the
                     // administrator has turned library download off, rather than
@@ -989,12 +1064,26 @@ private fun PartialDeliveryNote(state: AlbumUiState) {
     }
 }
 
-/** A one-line result of the last action, dismissible. */
+/**
+ * The result of the last action, dismissible.
+ *
+ * @param detail a second line under the message, for a figure the message refers to
+ *   rather than states - today the crate's count and total duration after an add. It
+ *   is part of the spoken reading too, which is the point: REQUIREMENTS.md
+ *   "Accessibility" makes the description what a TalkBack user acts on, and an "added
+ *   to the crate" that did not say how big the crate now is would be the same
+ *   un-confirmable tap for them that a silent screen is for everyone else.
+ */
 @Composable
-private fun NoticeCard(notice: AlbumNotice, onDismiss: () -> Unit) {
+private fun NoticeCard(notice: AlbumNotice, detail: String?, onDismiss: () -> Unit) {
     val colors = NeedlerTheme.colors
     val shape = NeedlerTheme.shapes.medium
     val tint = if (notice.isProblem) colors.destructive else colors.positive
+    val spoken: String = if (detail == null) {
+        notice.message
+    } else {
+        notice.message + " " + detail.replace(" · ", ", ")
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1003,18 +1092,29 @@ private fun NoticeCard(notice: AlbumNotice, onDismiss: () -> Unit) {
             .border(NeedlerTheme.sizes.hairlineThickness, tint, shape)
             .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp)
             .semantics(mergeDescendants = true) {
-                contentDescription = notice.message
+                contentDescription = spoken
                 liveRegion = LiveRegionMode.Assertive
             },
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = notice.message,
-            style = NeedlerTheme.typography.caption,
-            color = colors.textSecondary,
+        Column(
             modifier = Modifier.weight(1f),
-        )
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = notice.message,
+                style = NeedlerTheme.typography.caption,
+                color = colors.textSecondary,
+            )
+            if (detail != null) {
+                Text(
+                    text = detail,
+                    style = NeedlerTheme.typography.caption,
+                    color = colors.textMuted,
+                )
+            }
+        }
         NeedlerIconButton(
             contentDescription = "Dismiss",
             onClick = onDismiss,

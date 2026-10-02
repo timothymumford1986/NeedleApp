@@ -4,13 +4,17 @@ import app.needler.core.data.settings.NotificationSettings
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * How often the background poller runs, and when it is allowed not to run at all.
  *
  * REQUIREMENTS.md "Polling schedule" fixes five rows. The two foreground rows - 2 s on the Pulls
- * screen, 20 s elsewhere - are plain coroutines owned by the screens and are none of this object's
- * business. The three background rows are:
+ * screen, 20 s elsewhere - are plain coroutines, driven from
+ * `DefaultPullRepository.observePullsLive` and `observeActivitySummaryLive` rather than from
+ * `WorkManager`; their intervals are [FOREGROUND_TASK_LIST_INTERVAL] and
+ * [FOREGROUND_SUMMARY_INTERVAL] below, kept here so that all five rows of the table are readable in
+ * one place. The three background rows are:
  *
  * | Condition                  | Interval               | Mechanism               |
  * | -------------------------- | ---------------------- | ----------------------- |
@@ -26,6 +30,43 @@ import kotlin.time.Duration.Companion.minutes
  * Everything here is pure so the battery rules can be unit-tested without a device.
  */
 public object PollSchedule {
+
+    /**
+     * The foregrounded Pulls screen's cadence: `GET /api/v1/downloads` every two seconds.
+     *
+     * REQUIREMENTS.md "Polling schedule", row one. The expensive poll, and the only one that is
+     * allowed to be: it is bounded by the screen being on top, which is the one moment the user is
+     * watching a number move. Nothing may poll this often anywhere else.
+     *
+     * Per-task SSE at `GET /api/v1/downloads/{id}/stream` is the thing this is instead of.
+     * REQUIREMENTS.md keeps it out of v1 because "holding open one connection per task keeps the
+     * mobile radio awake and scales badly against a queue of twenty albums" - twenty albums is one
+     * request every two seconds here, and no connection at all between them.
+     */
+    public val FOREGROUND_TASK_LIST_INTERVAL: Duration = 2.seconds
+
+    /**
+     * Everywhere else in a foregrounded app: the activity summary every twenty seconds.
+     *
+     * REQUIREMENTS.md "Polling schedule", row two. Ten times slower than the Pulls screen and on the
+     * cheap endpoint, which returns only
+     * `{revision, active_count, held_count, failed_count, landed_release_group_mbids}` - and
+     * [revisionUnchanged] then makes a poll that found nothing almost free. This is what keeps the
+     * nav badge, "the reliable channel", correct while the user is somewhere else.
+     */
+    public val FOREGROUND_SUMMARY_INTERVAL: Duration = 20.seconds
+
+    /**
+     * How long a `pull` row the server has not mentioned is left alone before it may be dropped.
+     *
+     * The window the mirror reconcile in `DefaultPullRepository.refreshPulls` needs, and the reason
+     * it needs one: a request accepted a moment ago has a local `pull` row *before* the server has a
+     * download task to report for it, so a reconcile with no grace period would delete the row the
+     * user just created and the Pulls screen would blink it out of existence. Two minutes is
+     * comfortably past [EXPEDITED_FIRST_DELAY], by which point either lane that was ever going to
+     * mention it has had sixty two-second polls to do so.
+     */
+    public val RECONCILE_GRACE: Duration = 2.minutes
 
     /** `WorkManager`'s own minimum period. Asking for less silently gets this. */
     public val MINIMUM_PERIODIC_INTERVAL: Duration = 15.minutes

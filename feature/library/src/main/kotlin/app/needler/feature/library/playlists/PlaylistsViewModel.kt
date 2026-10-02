@@ -10,6 +10,7 @@ import app.needler.core.domain.model.Track
 import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.repository.PlaylistRepository
 import app.needler.core.domain.repository.SessionRepository
+import app.needler.feature.library.common.addTracksToCrate
 import app.needler.feature.library.common.hasPlayableFile
 import app.needler.feature.library.common.problemMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -210,8 +211,11 @@ class PlaylistsViewModel @Inject constructor(
         runExclusively {
             val tracks: List<Track> = playableTracks(playlist.id)
             if (tracks.isEmpty()) return@runExclusively NOTHING_TO_PLAY
-            controller.enqueue(tracks, playNext = false)
-            PlaylistNotice.AddedToCrate(tracks.size)
+            // Routed through the shared helper so an empty crate starts playing rather
+            // than loading in silence - the one case `enqueue` cannot cover, because it
+            // never starts sound.
+            val added = controller.addTracksToCrate(tracks, playNext = false)
+            PlaylistNotice.AddedToCrate(tracks.size, started = added.started)
         }
     }
 

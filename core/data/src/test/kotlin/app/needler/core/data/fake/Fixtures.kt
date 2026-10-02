@@ -34,6 +34,7 @@ public fun albumRow(
     addedAt: Long? = 1_000L,
     sizeBytes: Long? = 400_000_000L,
     updatedAt: Long = 0L,
+    qualityPolicySummary: String? = null,
 ): AlbumEntity = AlbumEntity(
     releaseGroupMbid = mbid,
     artistMbid = artistMbid,
@@ -53,7 +54,7 @@ public fun albumRow(
     sizeBytes = sizeBytes,
     coverArtId = "al-" + mbid,
     genres = genres,
-    qualityPolicySummary = null,
+    qualityPolicySummary = qualityPolicySummary,
     updatedAt = updatedAt,
 )
 
@@ -144,6 +145,16 @@ public fun pinRow(
     updatedAt = 500L,
 )
 
+/**
+ * A `pull` row.
+ *
+ * [requestKind] and [recordingMbid] are parameters because cancel and retry of a *request* take the
+ * recording MBID and `request_kind=track` for a single-track request, and the release group for an
+ * album one - and a fixture that could only build album rows is how that went unnoticed. [updatedAt]
+ * is separate from [createdAt] for the same kind of reason: a landed pull's subtitle is dated from
+ * when it changed, not from when it was asked for, and the mirror reconcile measures its grace
+ * window from it.
+ */
 public fun pullRow(
     mbid: String = RG,
     taskId: String? = "task-1",
@@ -152,6 +163,9 @@ public fun pullRow(
     searchJobId: String? = "job-1",
     candidateIndex: Int? = 0,
     createdAt: Long = 100L,
+    updatedAt: Long = createdAt,
+    requestKind: String = PullEntity.REQUEST_KIND_ALBUM,
+    recordingMbid: String? = null,
 ): PullEntity = PullEntity(
     releaseGroupMbid = mbid,
     taskId = taskId,
@@ -165,9 +179,11 @@ public fun pullRow(
     error = null,
     searchJobId = searchJobId,
     candidateIndex = candidateIndex,
+    requestKind = requestKind,
+    recordingMbid = recordingMbid,
     requestedByThisDevice = true,
     createdAt = createdAt,
-    updatedAt = createdAt,
+    updatedAt = updatedAt,
 )
 
 public fun artistRow(

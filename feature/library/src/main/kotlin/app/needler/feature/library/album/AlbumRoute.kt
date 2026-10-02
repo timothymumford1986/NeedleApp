@@ -39,6 +39,8 @@ fun AlbumRoute(
         onPlayPause = viewModel::onPlayPause,
         onShuffle = viewModel::onShuffle,
         onPlayTrack = viewModel::onPlayTrack,
+        onAddToCrate = viewModel::onAddToCrate,
+        onAddTrackToCrate = viewModel::onAddTrackToCrate,
         onPull = viewModel::onPull,
         onCancelPull = viewModel::onCancelPull,
         onRetryPull = viewModel::onRetryPull,

@@ -31,8 +31,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumBadge
 import app.needler.core.design.component.NeedlerAlbumRow
 import app.needler.core.design.component.NeedlerChevronRightIcon
+import app.needler.core.design.component.NeedlerCrateControl
 import app.needler.core.design.component.NeedlerHairline
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerPullButton
@@ -67,7 +70,9 @@ import app.needler.core.design.component.NeedlerStateBadge
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.PathChevronLeft
+import app.needler.core.design.component.CRATE_LONG_PRESS_LABEL
 import app.needler.core.design.component.accessibleLabel
+import app.needler.core.design.component.needlerRowActions
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
@@ -148,6 +153,8 @@ fun SearchScreen(
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
     onPlayTrack: (Track) -> Unit,
+    onAddTrackToCrate: (Track, Boolean) -> Unit,
+    onAddAlbumToCrate: (Album, Boolean) -> Unit,
     onShowAll: (SearchBucket) -> Unit,
     onLoadMore: (SearchBucket) -> Unit,
     onMonitorArtistChange: (Boolean) -> Unit,
@@ -248,6 +255,9 @@ fun SearchScreen(
                             message = notice.message,
                             isProblem = notice.isProblem,
                             onDismiss = onDismissNotice,
+                            // The crate's own count and total duration, under the sentence
+                            // saying something went into it.
+                            detail = if (notice.showsCrate) state.crateLine else null,
                         )
                         Spacer(modifier = Modifier.height(headerGap))
                     }
@@ -290,6 +300,8 @@ fun SearchScreen(
                         onAlbumClick = onAlbumClick,
                         onPull = onPull,
                         onPlayTrack = onPlayTrack,
+                        onAddTrackToCrate = onAddTrackToCrate,
+                        onAddAlbumToCrate = onAddAlbumToCrate,
                         onShowAll = onShowAll,
                         onLoadMore = onLoadMore,
                     )
@@ -514,6 +526,8 @@ private fun LazyListScope.resultBlocks(
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
     onPlayTrack: (Track) -> Unit,
+    onAddTrackToCrate: (Track, Boolean) -> Unit,
+    onAddAlbumToCrate: (Album, Boolean) -> Unit,
     onShowAll: (SearchBucket) -> Unit,
     onLoadMore: (SearchBucket) -> Unit,
 ) {
@@ -567,6 +581,7 @@ private fun LazyListScope.resultBlocks(
             busy = state.busy,
             onAlbumClick = onAlbumClick,
             onPull = onPull,
+            onAddToCrate = onAddAlbumToCrate,
         )
     }
 
@@ -589,6 +604,7 @@ private fun LazyListScope.resultBlocks(
                 track = tracks[index],
                 nowPlayingTrackKey = state.nowPlayingTrackKey,
                 onPlay = onPlayTrack,
+                onAddToCrate = onAddTrackToCrate,
             )
         }
     }
@@ -611,6 +627,7 @@ private fun LazyListScope.resultBlocks(
             busy = state.busy,
             onAlbumClick = onAlbumClick,
             onPull = onPull,
+            onAddToCrate = onAddAlbumToCrate,
         )
         moreRowItem(
             bucket = SearchBucket.ALBUMS,
@@ -637,6 +654,7 @@ private fun LazyListScope.albumRows(
     busy: Boolean,
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onAddToCrate: (Album, Boolean) -> Unit,
 ) {
     if (wide) {
         // Screen 10 lays the albums out as a two-column grid of cards. A
@@ -657,6 +675,7 @@ private fun LazyListScope.albumRows(
                 busy = busy,
                 onAlbumClick = onAlbumClick,
                 onPull = onPull,
+                onAddToCrate = onAddToCrate,
             )
         }
     } else {
@@ -669,6 +688,7 @@ private fun LazyListScope.albumRows(
                 busy = busy,
                 onClick = onAlbumClick,
                 onPull = onPull,
+                onAddToCrate = onAddToCrate,
             )
         }
     }
@@ -788,6 +808,7 @@ private fun AlbumRow(
     busy: Boolean,
     onClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onAddToCrate: (Album, Boolean) -> Unit,
 ) {
     NeedlerAlbumRow(
         title = album.title,
@@ -801,7 +822,14 @@ private fun AlbumRow(
                 modifier = Modifier.size(NeedlerTheme.sizes.artworkRow),
             )
         },
-        trailing = { AlbumTrailing(album = album, busy = busy, onPull = onPull) },
+        trailing = {
+            AlbumTrailing(
+                album = album,
+                busy = busy,
+                onPull = onPull,
+                onAddToCrate = onAddToCrate,
+            )
+        },
     )
 }
 
@@ -812,6 +840,7 @@ private fun AlbumCardRow(
     busy: Boolean,
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onAddToCrate: (Album, Boolean) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -825,6 +854,7 @@ private fun AlbumCardRow(
                 busy = busy,
                 onClick = onAlbumClick,
                 onPull = onPull,
+                onAddToCrate = onAddToCrate,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -850,6 +880,7 @@ private fun AlbumCard(
     busy: Boolean,
     onClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onAddToCrate: (Album, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = NeedlerTheme.colors
@@ -890,7 +921,7 @@ private fun AlbumCard(
                 maxLines = 2,
             )
         }
-        AlbumTrailing(album = album, busy = busy, onPull = onPull)
+        AlbumTrailing(album = album, busy = busy, onPull = onPull, onAddToCrate = onAddToCrate)
     }
 }
 
@@ -908,7 +939,11 @@ private fun AlbumTrailing(
     album: Album,
     busy: Boolean,
     onPull: (Album) -> Unit,
+    onAddToCrate: (Album, Boolean) -> Unit,
 ) {
+    var crateMenuOpen: Boolean by remember(album.releaseGroupMbid.value) {
+        mutableStateOf(false)
+    }
     if (album.state == AlbumState.NotOwned) {
         NeedlerPullButton(
             onClick = { onPull(album) },
@@ -917,6 +952,20 @@ private fun AlbumTrailing(
         )
     } else {
         albumBadge(album.state)?.let { badge -> NeedlerStateBadge(badge = badge) }
+        // The crate control only for a record the server actually has. A catalogue result is
+        // metadata - its tracks exist in MusicBrainz and nowhere else - so queueing one would
+        // add nothing and claim it had; an album still being pulled has no files yet either.
+        // The badge beside this is what says which of those a row is.
+        if (album.isOwned) {
+            NeedlerCrateControl(
+                subject = SearchFormat.albumTitle(album.title),
+                expanded = crateMenuOpen,
+                onExpandedChange = { crateMenuOpen = it },
+                onAddToCrate = { onAddToCrate(album, false) },
+                onPlayNext = { onAddToCrate(album, true) },
+                enabled = !busy,
+            )
+        }
     }
 }
 
@@ -950,44 +999,86 @@ private fun SongRow(
     track: Track,
     nowPlayingTrackKey: TrackKey?,
     onPlay: (Track) -> Unit,
+    onAddToCrate: (Track, Boolean) -> Unit,
 ) {
     val playable: Boolean = track.hasPlayableFile
+    val isPlaying: Boolean = track.key == nowPlayingTrackKey
     val subtitle: String = SearchFormat.songRowSubtitle(track)
-    NeedlerAlbumRow(
-        title = track.title,
-        subtitle = subtitle,
-        minHeight = NeedlerTheme.sizes.albumRowMinHeight,
-        isPlaying = track.key == nowPlayingTrackKey,
-        onClick = if (playable) ({ onPlay(track) }) else null,
-        // No ", playing" here: NeedlerAlbumRow appends that to whatever
-        // description it is given, so adding it as well would have TalkBack say
-        // it twice.
-        contentDescription = buildString {
-            append(track.title)
+    var crateMenuOpen: Boolean by remember(track.key.canonicalString) { mutableStateOf(false) }
+    // The whole reading, because the gesture modifier clears the row's own semantics.
+    // NeedlerAlbumRow would have appended ", playing" to whatever description it was given,
+    // so with those cleared this has to append it instead - and must not when the row keeps
+    // them, or TalkBack says it twice.
+    val spoken: String = buildString {
+        append(track.title)
+        append(", ")
+        append(subtitle.replace(" · ", ", "))
+        SearchFormat.spokenDuration(track.durationMs)?.let { duration ->
             append(", ")
-            append(subtitle.replace(" · ", ", "))
-            SearchFormat.spokenDuration(track.durationMs)?.let { spoken ->
-                append(", ")
-                append(spoken)
-            }
-            if (!playable) append(", not in your library")
-        },
-        artwork = {
-            TrackArtwork(
-                track = track,
-                modifier = Modifier.size(NeedlerTheme.sizes.artworkRow),
-            )
-        },
-        trailing = {
-            SearchFormat.duration(track.durationMs)?.let { drawn ->
-                Text(
-                    text = drawn,
-                    style = NeedlerTheme.typography.duration,
-                    color = NeedlerTheme.colors.textMuted,
+            append(duration)
+        }
+        if (!playable) append(", not in your library")
+        if (playable && isPlaying) append(", playing")
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        NeedlerAlbumRow(
+            title = track.title,
+            subtitle = subtitle,
+            modifier = if (playable) {
+                Modifier
+                    .weight(1f)
+                    // The long press played the song and replaced the crate, because
+                    // `clickable` fires on the release however long the hold was. It opens
+                    // the crate menu now and the tap is consumed rather than firing behind
+                    // it: this was one of the three gestures that could silently lose a
+                    // queue.
+                    .needlerRowActions(
+                        description = spoken,
+                        onTap = { onPlay(track) },
+                        tapLabel = "Play",
+                        onLongPress = { crateMenuOpen = true },
+                        longPressLabel = CRATE_LONG_PRESS_LABEL,
+                    )
+            } else {
+                Modifier.weight(1f)
+            },
+            minHeight = NeedlerTheme.sizes.albumRowMinHeight,
+            isPlaying = isPlaying,
+            // Handed to the modifier whenever there is one: two clickables on one row is a
+            // tap that fires twice.
+            onClick = null,
+            contentDescription = spoken,
+            artwork = {
+                TrackArtwork(
+                    track = track,
+                    modifier = Modifier.size(NeedlerTheme.sizes.artworkRow),
                 )
-            }
-        },
-    )
+            },
+            trailing = {
+                SearchFormat.duration(track.durationMs)?.let { drawn ->
+                    Text(
+                        text = drawn,
+                        style = NeedlerTheme.typography.duration,
+                        color = NeedlerTheme.colors.textMuted,
+                    )
+                }
+            },
+        )
+        // Beside the row rather than in its trailing slot: the gesture modifier clears the
+        // row's descendants, so a control inside would be drawn and unreachable to TalkBack.
+        if (playable) {
+            NeedlerCrateControl(
+                subject = SearchFormat.albumTitle(track.title),
+                expanded = crateMenuOpen,
+                onExpandedChange = { crateMenuOpen = it },
+                onAddToCrate = { onAddToCrate(track, false) },
+                onPlayNext = { onAddToCrate(track, true) },
+            )
+        }
+    }
 }
 
 /** `Mordechai, Khruangbin, 2024, On device` — the whole row in one phrase. */
@@ -1282,9 +1373,18 @@ private fun NoticeLine(
     message: String,
     isProblem: Boolean,
     onDismiss: (() -> Unit)?,
+    detail: String? = null,
 ) {
     val colors = NeedlerTheme.colors
     val shape = NeedlerTheme.shapes.medium
+    val spoken: String = buildString {
+        append(message)
+        if (detail != null) {
+            append(" ")
+            append(detail.replace(" · ", ", "))
+        }
+        if (onDismiss != null) append(" Tap to dismiss.")
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1301,23 +1401,29 @@ private fun NoticeLine(
             .defaultMinSize(minHeight = NeedlerTheme.sizes.listRowMinHeight)
             .padding(horizontal = 14.dp, vertical = 10.dp)
             .semantics(mergeDescendants = true) {
-                contentDescription = if (onDismiss == null) {
-                    message
-                } else {
-                    "$message Tap to dismiss."
-                }
+                contentDescription = spoken
                 liveRegion = LiveRegionMode.Polite
             },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = message,
-            style = NeedlerTheme.typography.caption,
-            // The palette has one emphasis colour and no error colour, so a
-            // problem is drawn in the primary text colour rather than in a red
-            // this design system does not have.
-            color = if (isProblem) colors.textPrimary else colors.textSecondary,
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = message,
+                style = NeedlerTheme.typography.caption,
+                // The palette has one emphasis colour and no error colour, so a
+                // problem is drawn in the primary text colour rather than in a red
+                // this design system does not have.
+                color = if (isProblem) colors.textPrimary else colors.textSecondary,
+            )
+            // The crate's count and total duration, when the message is about the crate.
+            if (detail != null) {
+                Text(
+                    text = detail,
+                    style = NeedlerTheme.typography.caption,
+                    color = colors.textMuted,
+                )
+            }
+        }
     }
 }
 

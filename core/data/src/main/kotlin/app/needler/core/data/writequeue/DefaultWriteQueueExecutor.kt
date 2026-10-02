@@ -13,6 +13,7 @@ import app.needler.core.domain.model.FavouriteTarget
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.PlaylistEdit
+import app.needler.core.domain.model.RequestTarget
 import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.model.WriteOperation
 import app.needler.core.network.subsonic.SubsonicApi
@@ -67,13 +68,31 @@ public class DefaultWriteQueueExecutor(
                 Unit
             }
 
-            is WriteOperation.CancelRequest -> networkCall {
-                v1.cancelRequest(operation.releaseGroupMbid.value, RequestKind.Album)
-            }.flatMapInBand { dto: CancelRequestDto -> dto.success to dto.message }
+            // The id in the path is the release group for an album request and the *recording* for a
+            // track one, and `request_kind` has to agree with it; both ride on the operation, so
+            // neither is assumed here. A track operation with no recording MBID has no id to send
+            // and is dropped rather than replayed against the album it belongs to.
+            is WriteOperation.CancelRequest -> {
+                val mbid: String? = operation.endpointMbid
+                if (mbid == null) {
+                    unsendableRequestKind()
+                } else {
+                    networkCall {
+                        v1.cancelRequest(mbid, requestKind(operation.requestKind))
+                    }.flatMapInBand { dto: CancelRequestDto -> dto.success to dto.message }
+                }
+            }
 
-            is WriteOperation.RetryRequest -> networkCall {
-                v1.retryRequest(operation.releaseGroupMbid.value, RequestKind.Album)
-            }.flatMapInBand { dto: RetryRequestDto -> dto.success to dto.message }
+            is WriteOperation.RetryRequest -> {
+                val mbid: String? = operation.endpointMbid
+                if (mbid == null) {
+                    unsendableRequestKind()
+                } else {
+                    networkCall {
+                        v1.retryRequest(mbid, requestKind(operation.requestKind))
+                    }.flatMapInBand { dto: RetryRequestDto -> dto.success to dto.message }
+                }
+            }
 
             is WriteOperation.EditPlaylist -> replayPlaylistEdit(operation.edit, entityKey)
 
@@ -236,6 +255,27 @@ public class DefaultWriteQueueExecutor(
 
     private suspend fun resolveTrackIds(keys: List<TrackKey>): List<String> =
         keys.mapNotNull { resolveTrackId(it) }
+
+    /** [RequestTarget] in the network layer's spelling. */
+    private fun requestKind(target: RequestTarget): RequestKind = when (target) {
+        RequestTarget.ALBUM -> RequestKind.Album
+        RequestTarget.TRACK -> RequestKind.Track
+    }
+
+    /**
+     * A journalled track cancel or retry with no recording MBID, which cannot be sent at all.
+     *
+     * [NeedlerError.Rejected] rather than a retryable error on purpose: `shouldDrop` on a
+     * [app.needler.core.domain.model.WriteQueueEntry] keys off `isRetryable`, and this entry will
+     * never become sendable - no amount of connectivity supplies an id the row does not hold. So it
+     * is dropped with a notice, exactly as a server-side refusal is, rather than replayed for ever
+     * or replayed against the album the track belongs to.
+     */
+    private fun unsendableRequestKind(): Outcome<Unit> = Outcome.Failure(
+        NeedlerError.Rejected(
+            message = "This track request could not be sent: its recording id was not stored.",
+        ),
+    )
 }
 
 /**

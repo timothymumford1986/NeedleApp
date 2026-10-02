@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.feature.library.SampleLibrary
+import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.library.AlbumScrollAnchor
 import app.needler.feature.library.library.LibraryScreen
 import app.needler.feature.library.library.LibrarySort
@@ -104,6 +105,70 @@ class LibraryScreenshotTest {
     @Test
     fun `at 200 percent text size`() {
         capture("library-large-text", NeedlerDevice.Phone, LOADED, fontScale = 2f)
+    }
+
+    // ---- the crate ----------------------------------------------------------
+
+    /**
+     * The crate control on every album row, beside the Play that replaces the crate.
+     *
+     * The list view is where it is worth rendering: the row carries a format label, a Play and
+     * now a third control, and whether those three still fit beside a two-line title is a
+     * question only a render answers.
+     */
+    @Test
+    fun `album rows offer the crate as well as Play`() {
+        capture(
+            "library-list-crate",
+            NeedlerDevice.Phone,
+            LOADED.copy(viewMode = LibraryViewMode.LIST),
+        )
+    }
+
+    /** The same row at 200% text, which is where a third trailing control would clip. */
+    @Test
+    fun `album rows with the crate control at 200 percent text size`() {
+        capture(
+            "library-list-crate-large-text",
+            NeedlerDevice.Phone,
+            LOADED.copy(viewMode = LibraryViewMode.LIST),
+            fontScale = 2f,
+        )
+    }
+
+    /**
+     * What the user sees after adding: the sentence and the crate's own two figures.
+     *
+     * Adding to a queue with no visible change is indistinguishable from a tap that did not
+     * register, so this line is the whole feedback and is worth a baseline of its own.
+     */
+    @Test
+    fun `the added-to-the-crate line, with the count and the duration`() {
+        capture(
+            "library-crate-added",
+            NeedlerDevice.Phone,
+            LOADED.copy(
+                tab = LibraryTab.SONGS,
+                songs = SampleLibrary.submarineTracks,
+                notice = AlbumNotice.AddedToCrate(trackCount = 8),
+                crateTrackCount = 10,
+                crateDurationMs = 2_120_000L,
+            ),
+        )
+    }
+
+    /** The Songs tab, where every row now carries the crate control beside its duration. */
+    @Test
+    fun `song rows offer the crate`() {
+        capture(
+            "library-songs-crate",
+            NeedlerDevice.Phone,
+            LOADED.copy(
+                tab = LibraryTab.SONGS,
+                songs = SampleLibrary.submarineTracks,
+                nowPlayingTrackKey = SampleLibrary.submarineTracks[1].key,
+            ),
+        )
     }
 
     // ---- the grid/list toggle keeps your place -------------------------------
@@ -215,6 +280,9 @@ class LibraryScreenshotTest {
             onAlbumPlay = {},
             onArtistClick = {},
             onSongPlay = {},
+            onAlbumAddToCrate = { _, _ -> },
+            onSongAddToCrate = { _, _ -> },
+            onDismissNotice = {},
             onSyncNow = {},
             scrollAnchor = scrollAnchor,
         )

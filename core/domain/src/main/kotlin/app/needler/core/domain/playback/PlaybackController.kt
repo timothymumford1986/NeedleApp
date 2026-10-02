@@ -144,6 +144,25 @@ public interface PlaybackController {
      *
      * [playNext] is the difference between the product's two actions: "Play next" inserts directly
      * after the Playing row, "Add to crate" appends.
+     *
+     * ## Adding to an empty crate is not the same as adding to a playing one
+     *
+     * **This never starts sound.** Adding to a crate that is playing leaves the current track
+     * exactly where it is, which is the whole promise of the two actions; adding to an empty crate
+     * therefore leaves a loaded crate and silence. Implementations make those rows *playable* - the
+     * session is prepared, so the transport on any surface starts them - and nothing more.
+     *
+     * A caller that wants the add to be audible when nothing is loaded calls [playTracks] instead,
+     * and has to choose between them before the command: `currentState().hasCurrentItem` is the
+     * test, and the library features share one helper that makes the choice and reports which of
+     * the two happened, because "added to the crate" and "started playing" are different sentences
+     * to the person who tapped. Deciding it here instead was rejected: a caller that cannot tell
+     * which happened cannot say so, and an `enqueue` that sometimes starts playback would break the
+     * guarantee the lock screen, Auto and Wear read this interface for.
+     *
+     * The added rows persist like every other crate edit - REQUIREMENTS.md "Queue": the crate
+     * "lives on the device and persists across restarts" - because the session's own timeline
+     * change is what writes it, not the command that caused it.
      */
     public suspend fun enqueue(tracks: List<Track>, playNext: Boolean = false)
 

@@ -265,10 +265,11 @@ public abstract class NeedlerDatabase : RoomDatabase() {
     public companion object {
 
         /**
-         * Schema version 2: `stream_override` added. Bumping this requires a hand-written migration in
-         * [NeedlerMigrations.ALL] - there is no destructive fallback, by requirement.
+         * Schema version 3: `pull.request_kind` and `pull.recording_mbid` added. Bumping this
+         * requires a hand-written migration in [NeedlerMigrations.ALL] - there is no destructive
+         * fallback, by requirement.
          */
-        public const val VERSION: Int = 2
+        public const val VERSION: Int = 3
 
         public const val DATABASE_NAME: String = "needler.db"
 

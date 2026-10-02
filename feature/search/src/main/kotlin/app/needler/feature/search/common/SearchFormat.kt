@@ -160,6 +160,49 @@ internal object SearchFormat {
     fun plural(count: Long, noun: String): String =
         if (count == 1L) "$count $noun" else "$count ${noun}s"
 
+    /**
+     * `19 in the crate · 1 hr 14 min`, or null when the crate is empty.
+     *
+     * The two figures REQUIREMENTS.md "Queue" puts on the crate screen - "an Up next
+     * list with a count and total duration" - said on the screen the user added from,
+     * because that is where "did that work" gets asked. "In the crate" is the product's
+     * own phrase and the only one allowed in anything a user reads.
+     *
+     * A duplicate of `LibraryFormat.crateLine`, as every other member of this object is
+     * a duplicate of its twin there: a test source set is not publishable and neither is
+     * a formatter shared between two feature modules without a `:core:*` to put it in.
+     * The totals are deliberately **not** pushed into `:core:design` with the control
+     * that shows them, because the sentence is product copy about domain figures and
+     * that module takes no domain dependency.
+     */
+    fun crateLine(trackCount: Int, durationMs: Long): String? {
+        if (trackCount <= 0) return null
+        val parts: List<String> = buildList {
+            add(trackCount.toString() + " in the crate")
+            runningTime(durationMs)?.let { add(it) }
+        }
+        return parts.joinToString(separator = " · ")
+    }
+
+    /**
+     * `28 min`, the whole-crate figure. Null for an unknown or zero total.
+     *
+     * Private because [crateLine] is the only caller this module has; `LibraryFormat`'s
+     * copy is public there because screen 11 draws an album's running time on its own.
+     */
+    private fun runningTime(milliseconds: Long?): String? {
+        val ms: Long = milliseconds ?: return null
+        if (ms <= 0L) return null
+        val totalMinutes: Long = (ms / 60_000L).coerceAtLeast(1L)
+        val hours: Long = totalMinutes / 60L
+        val minutes: Long = totalMinutes % 60L
+        return when {
+            hours == 0L -> totalMinutes.toString() + " min"
+            minutes == 0L -> hours.toString() + " hr"
+            else -> hours.toString() + " hr " + minutes + " min"
+        }
+    }
+
     // The letter drawn in an artist avatar when there is no image used to be computed here. It is
     // `:core:design`'s `artworkPlaceholderInitial` now, behind `NeedlerArtwork`, which draws the
     // letter and the tint together for albums, artists and widgets alike. Two copies of that rule

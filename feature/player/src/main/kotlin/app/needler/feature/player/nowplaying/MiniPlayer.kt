@@ -77,13 +77,15 @@ fun MiniPlayer(
     ) {
         PlayerArtwork(
             artwork = state.item?.track?.artwork,
+            identity = state.item?.track?.releaseGroupMbid?.value,
             albumTitle = state.item?.track?.albumTitle,
             artistName = state.item?.track?.artistName,
             modifier = Modifier.size(NeedlerTheme.sizes.artworkThumb),
             describe = false,
-            // The card is already the raised surface, which is what the default placeholder tint
-            // is, so a cover that has not arrived would leave an invisible hole.
-            placeholderColor = colors.surface,
+            // Only the nothing-playing slot is drawn in a flat colour now, and the card is already
+            // the raised surface that the default tint is, so that slot would be an invisible hole.
+            // A loaded track draws the shared letter placeholder, whose tint is never the surface.
+            emptyColor = colors.surface,
         )
         Column(
             modifier = Modifier.weight(1f),

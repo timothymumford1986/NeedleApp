@@ -11,6 +11,7 @@ import app.needler.core.data.background.NotificationPermissionTrigger
 import app.needler.core.data.background.PollSchedule
 import app.needler.core.data.background.SyncTrigger
 import app.needler.core.data.background.SyncTriggerResolver
+import app.needler.core.domain.model.PullActivitySummary
 import app.needler.core.domain.model.PullBucket
 import app.needler.core.domain.repository.PullRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -58,6 +59,31 @@ class BackgroundViewModel @Inject constructor(
      */
     val pullsBadgeCount: StateFlow<Int> = pullRepository.observePullBadgeCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), 0)
+
+    /**
+     * The twenty-second activity poll REQUIREMENTS.md "Polling schedule" asks for everywhere that is
+     * not the Pulls screen.
+     *
+     * The schedule names three cadences and only two had an owner: the Pulls screen drives its own
+     * two-second task-list poll while it is foregrounded, and `WorkManager` covers the backgrounded
+     * cases. "App foregrounded, elsewhere" had nowhere to live, because only the host knows what
+     * "elsewhere" is - every screen that is not Pulls - and this view model is the one thing scoped
+     * to exactly that.
+     *
+     * Collected for its effect rather than its value: the repository writes each summary to the
+     * mirror, which is what [pullsBadgeCount] reads, so a pull landing while the user is in the
+     * library moves the badge without them opening Pulls. REQUIREMENTS.md calls that badge "the
+     * reliable channel" precisely because notifications are best-effort, and a badge that only
+     * refreshed on the Pulls screen would be reliable about nothing.
+     *
+     * `WhileSubscribed` is the foregrounding condition: the subscription lives as long as the host
+     * composable does, so the poll stops when the app goes away and no separate lifecycle callback
+     * has to remember to stop it. The `revision` field makes an unchanged poll nearly free, which is
+     * what makes twenty seconds affordable at all.
+     */
+    val activitySummary: StateFlow<PullActivitySummary?> =
+        pullRepository.observeActivitySummaryLive()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
 
     private val permissionRequest = MutableStateFlow(false)
 

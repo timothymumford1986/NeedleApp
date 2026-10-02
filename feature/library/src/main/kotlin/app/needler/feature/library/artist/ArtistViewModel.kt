@@ -12,6 +12,7 @@ import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.FavouriteTarget
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.PlayQueue
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.Track
@@ -23,6 +24,7 @@ import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.domain.usecase.RequestAlbumUseCase
 import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.common.RequestSheetState
+import app.needler.feature.library.common.addTracksToCrate
 import app.needler.feature.library.common.hasPlayableFile
 import app.needler.feature.library.common.problemMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -160,7 +162,18 @@ class ArtistViewModel @Inject constructor(
     }
 
     /**
-     * The three flows that change because the user did something.
+     * The live crate, for the count and total duration the "added" notice is confirmed by.
+     *
+     * `observeQueue` rather than a figure this screen works out for itself: the session is the
+     * authority on the crate - `PlaybackController`'s "Who owns the crate" - so the only honest
+     * count is the one it has actually applied. With no controller bound the crate reads as empty,
+     * which is also what a screenshot renders.
+     */
+    private val crate: Flow<PlayQueue> =
+        playback.orElse(null)?.observeQueue() ?: flowOf(PlayQueue.Empty)
+
+    /**
+     * The flows that change because the user did something, plus the crate they changed.
      *
      * Grouped rather than combined individually because `combine` has typed
      * overloads up to five flows and this ViewModel now has more than that; a
@@ -170,8 +183,15 @@ class ArtistViewModel @Inject constructor(
         busy,
         notice,
         requestSheet,
-    ) { isBusy, currentNotice, sheet ->
-        Interaction(busy = isBusy, notice = currentNotice, requestSheet = sheet)
+        crate,
+    ) { isBusy, currentNotice, sheet, queue ->
+        Interaction(
+            busy = isBusy,
+            notice = currentNotice,
+            requestSheet = sheet,
+            crateTrackCount = queue.items.size,
+            crateDurationMs = queue.totalDurationMs,
+        )
     }
 
     val state: StateFlow<ArtistUiState> = combine(
@@ -199,6 +219,8 @@ class ArtistViewModel @Inject constructor(
             notice = acted.notice,
             requestSheet = acted.requestSheet,
             playableTracks = current.playableTracks,
+            crateTrackCount = acted.crateTrackCount,
+            crateDurationMs = acted.crateDurationMs,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -276,6 +298,36 @@ class ArtistViewModel @Inject constructor(
     fun onPlayAlbum(mbid: ReleaseGroupMbid) {
         val controller: PlaybackController = playback.orElse(null) ?: return
         viewModelScope.launch { controller.playAlbum(mbid) }
+    }
+
+    /**
+     * Put everything this artist has in the library into the crate, at the end or next.
+     *
+     * The same track list [onPlay] would play, in the same order, which is the point: a user who
+     * pressed Play here and liked the order should get that order when they queue it behind
+     * something else rather than a differently-assembled one.
+     */
+    fun onAddToCrate(playNext: Boolean) {
+        addToCrate(playNext) { state.value.playableTracks }
+    }
+
+    /**
+     * Put one owned album from the list into the crate.
+     *
+     * The tracks are read from the mirror here rather than taken from the row, because a row is an
+     * [Album] and carries no tracks - and `PlaybackController.enqueue` takes tracks, where
+     * `playAlbum` resolves them inside the session for itself. The read is a Room query behind the
+     * repository, so it works offline like the rest of this screen.
+     *
+     * Unplayable tracks are filtered out for the reason `playableTracks` filters them out:
+     * REQUIREMENTS.md "Partial content is a normal state" means an owned album can have holes, and
+     * a crate with a hole in it stalls at the hole. An album that is nothing but holes adds nothing
+     * and says nothing, exactly as its Play button does nothing.
+     */
+    fun onAddAlbumToCrate(mbid: ReleaseGroupMbid, playNext: Boolean) {
+        addToCrate(playNext) {
+            library.observeAlbumTracks(mbid).first().filter { it.hasPlayableFile }
+        }
     }
 
     // ---- favourites ---------------------------------------------------------
@@ -450,6 +502,32 @@ class ArtistViewModel @Inject constructor(
         }
     }
 
+    /**
+     * One add, whatever it was an add of, behind the screen's own busy gate.
+     *
+     * [tracksOf] is a suspending lambda rather than a list because one caller has its tracks in
+     * state and the other has to read them from the mirror, and the read belongs inside the gate -
+     * two adds in flight at once would interleave their rows in the crate in an order neither tap
+     * asked for.
+     *
+     * An empty list leaves the notice alone rather than reporting an add of nothing.
+     */
+    private fun addToCrate(playNext: Boolean, tracksOf: suspend () -> List<Track>) {
+        val controller: PlaybackController = playback.orElse(null) ?: return
+        if (busy.value) return
+        busy.value = true
+        viewModelScope.launch {
+            try {
+                val tracks: List<Track> = tracksOf()
+                if (tracks.isNotEmpty()) {
+                    notice.value = controller.addTracksToCrate(tracks, playNext)
+                }
+            } finally {
+                busy.value = false
+            }
+        }
+    }
+
     private data class Content(
         val artist: Artist?,
         val owned: List<Album>,
@@ -461,6 +539,8 @@ class ArtistViewModel @Inject constructor(
         val busy: Boolean,
         val notice: AlbumNotice?,
         val requestSheet: RequestSheetState?,
+        val crateTrackCount: Int,
+        val crateDurationMs: Long,
     )
 
     companion object {

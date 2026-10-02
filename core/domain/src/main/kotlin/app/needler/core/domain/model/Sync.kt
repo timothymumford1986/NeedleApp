@@ -113,9 +113,46 @@ public sealed interface WriteOperation {
 
     public data class PlaceTrackRequest(val request: TrackRequest) : WriteOperation
 
-    public data class CancelRequest(val releaseGroupMbid: ReleaseGroupMbid) : WriteOperation
+    /**
+     * `DELETE /api/v1/requests/active/{mbid}`, journalled.
+     *
+     * ## Why this carries a kind and a second MBID
+     *
+     * REQUIREMENTS.md "Placing a request" says the endpoint "takes `request_kind`, either `album` or
+     * `track`", and the id in the path changes with it: an album request is keyed on the release
+     * group, a track request on the **recording** - "`POST /api/v1/tracks/{recording_mbid}/request`
+     * — keyed on recording MBID, not release group". The `pull` row this operation is made from is
+     * keyed on the release group either way, because that is the join key REQUIREMENTS.md "Identity
+     * model" mandates, so the recording MBID has to travel separately or the cancel is sent for the
+     * wrong thing with the wrong kind - which is a `404`, or worse a cancel the server honours
+     * against something the user did not name.
+     *
+     * [releaseGroupMbid] stays first and stays the identity, so this remains the key the queue
+     * coalesces on and the row the UI reconciles against. The two new fields default to the album
+     * case, which is what every `write_queue` row an older build already wrote means.
+     */
+    public data class CancelRequest(
+        val releaseGroupMbid: ReleaseGroupMbid,
+        val requestKind: RequestTarget = RequestTarget.ALBUM,
+        /** Required when [requestKind] is [RequestTarget.TRACK]; meaningless otherwise. */
+        val recordingMbid: RecordingMbid? = null,
+    ) : WriteOperation {
+        /** The MBID the endpoint's path takes, or null when a track row has lost its recording. */
+        public val endpointMbid: String?
+            get() = requestEndpointMbid(requestKind, releaseGroupMbid, recordingMbid)
+    }
 
-    public data class RetryRequest(val releaseGroupMbid: ReleaseGroupMbid) : WriteOperation
+    /** `POST /api/v1/requests/retry/{mbid}`, journalled. Keyed exactly as [CancelRequest] is. */
+    public data class RetryRequest(
+        val releaseGroupMbid: ReleaseGroupMbid,
+        val requestKind: RequestTarget = RequestTarget.ALBUM,
+        /** Required when [requestKind] is [RequestTarget.TRACK]; meaningless otherwise. */
+        val recordingMbid: RecordingMbid? = null,
+    ) : WriteOperation {
+        /** The MBID the endpoint's path takes, or null when a track row has lost its recording. */
+        public val endpointMbid: String?
+            get() = requestEndpointMbid(requestKind, releaseGroupMbid, recordingMbid)
+    }
 
     /** A playlist mutation. Last-write-wins: Subsonic offers no revision or conflict signal. */
     public data class EditPlaylist(val edit: PlaylistEdit) : WriteOperation
@@ -127,6 +164,24 @@ public sealed interface WriteOperation {
 
     /** A play, submitted with its original timestamp so offline listening lands correctly. */
     public data class SubmitScrobble(val scrobble: ScrobbleEvent) : WriteOperation
+}
+
+/**
+ * Which MBID `DELETE /api/v1/requests/active/{mbid}` and `POST /api/v1/requests/retry/{mbid}` take.
+ *
+ * One function for both operations so the album-or-recording choice is made once. Written as a
+ * `when` over [RequestTarget] rather than as `recordingMbid ?: releaseGroupMbid`, because that
+ * elvis is exactly the bug: a track request whose recording MBID was never stored would silently
+ * fall back to cancelling the release group, and the server would answer `200` for a request the
+ * user did not name. Null instead, so the caller has to refuse to send anything.
+ */
+private fun requestEndpointMbid(
+    kind: RequestTarget,
+    releaseGroupMbid: ReleaseGroupMbid,
+    recordingMbid: RecordingMbid?,
+): String? = when (kind) {
+    RequestTarget.ALBUM -> releaseGroupMbid.value
+    RequestTarget.TRACK -> recordingMbid?.value
 }
 
 /** The outcome of one write-queue flush. */

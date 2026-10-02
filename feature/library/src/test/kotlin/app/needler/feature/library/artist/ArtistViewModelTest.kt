@@ -8,6 +8,7 @@ import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.FavouriteTarget
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.QueueItem
 import app.needler.feature.library.FakeFavouriteRepository
 import app.needler.feature.library.FakeLibraryRepository
 import app.needler.feature.library.FakePlaybackController
@@ -16,6 +17,7 @@ import app.needler.feature.library.FakeSessions
 import app.needler.feature.library.MainDispatcherRule
 import app.needler.feature.library.SampleLibrary
 import app.needler.feature.library.album.AlbumNotice
+import app.needler.feature.library.common.hasPlayableFile
 import java.util.Optional
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -491,6 +493,118 @@ class ArtistViewModelTest {
         }
         assertEquals(2, pulls.batchRequests.single().size)
         assertTrue(pulls.batchRequests.single().all { it.monitorArtist })
+    }
+
+    // ---- the crate ----------------------------------------------------------
+    // This screen could play an artist and shuffle an artist, and both replaced the crate. Each
+    // test asserts the negative too: that `enqueue` was used and `playTracks`, the command that
+    // replaces, was not.
+
+    @Test
+    fun `adding an artist appends to the crate rather than replacing it`() = runTest {
+        stocked()
+        playback.playbackState.value = playback.playbackState.value.copy(
+            currentItem = QueueItem(id = "q-0", track = SampleLibrary.submarineTracks.first()),
+            isPlaying = true,
+        )
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.playableTracks.isEmpty()) loaded = awaitItem()
+            model.onAddToCrate(playNext = false)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(AlbumNotice.AddedToCrate(trackCount = 8), after.notice)
+            // The session's own figures, straight off `observeQueue`.
+            assertEquals(8, after.crateTrackCount)
+            assertEquals("8 in the crate · 28 min", after.crateLine)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertFalse(playback.enqueueCalls.single().playNext)
+        assertEquals(8, playback.enqueueCalls.single().tracks.size)
+        assertTrue("the crate must not be replaced", playback.playTracksCalls.isEmpty())
+    }
+
+    @Test
+    fun `adding an artist while nothing is loaded starts playback`() = runTest {
+        stocked()
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.playableTracks.isEmpty()) loaded = awaitItem()
+            model.onAddToCrate(playNext = false)
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(
+                AlbumNotice.AddedToCrate(trackCount = 8, started = true),
+                after.notice,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(1, playback.playTracksCalls.size)
+        assertTrue(playback.enqueueCalls.isEmpty())
+    }
+
+    @Test
+    fun `adding one album row reads that album's tracks from the mirror`() = runTest {
+        stocked()
+        playback.playbackState.value = playback.playbackState.value.copy(
+            currentItem = QueueItem(id = "q-0", track = SampleLibrary.submarineTracks.first()),
+            isPlaying = true,
+        )
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.ownedAlbums.isEmpty()) loaded = awaitItem()
+            model.onAddAlbumToCrate(
+                loaded.ownedAlbums.single().releaseGroupMbid,
+                playNext = true,
+            )
+            advanceUntilIdle()
+            val after = expectMostRecentItem()
+            assertEquals(
+                AlbumNotice.AddedToCrate(trackCount = 8, playNext = true),
+                after.notice,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(playback.enqueueCalls.single().playNext)
+        assertEquals(
+            SampleLibrary.submarineTracks.map { it.title },
+            playback.enqueueCalls.single().tracks.map { it.title },
+        )
+    }
+
+    @Test
+    fun `an album with nothing playable in it adds nothing and says nothing`() = runTest {
+        library.ownedByArtist.value = mapOf(artist.mbid.value to owned)
+        library.discographyByArtist.value = mapOf(artist.mbid.value to owned)
+        library.tracksByMbid.value = mapOf(
+            SampleLibrary.submarine.releaseGroupMbid.value to
+                SampleLibrary.submarinePartialTracks.filter { !it.hasPlayableFile },
+        )
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.ownedAlbums.isEmpty()) loaded = awaitItem()
+            model.onAddAlbumToCrate(
+                loaded.ownedAlbums.single().releaseGroupMbid,
+                playNext = false,
+            )
+            advanceUntilIdle()
+            assertNull(expectMostRecentItem().notice)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(playback.enqueueCalls.isEmpty())
+        assertTrue(playback.playTracksCalls.isEmpty())
     }
 
     private companion object {

@@ -23,6 +23,7 @@ import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.Pin
 import app.needler.core.domain.model.PinSource
 import app.needler.core.domain.model.PlayQueue
+import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.PlaybackSpeed
 import app.needler.core.domain.model.PlayerOnlyReason
 import app.needler.core.domain.model.Pull
@@ -488,6 +489,19 @@ internal class FakePlaybackController : PlaybackController {
     val playAlbumCalls: MutableList<PlayAlbumCall> = mutableListOf()
     val playTracksCalls: MutableList<List<Track>> = mutableListOf()
 
+    data class EnqueueCall(val tracks: List<Track>, val playNext: Boolean)
+
+    /**
+     * Every add to the crate, in order.
+     *
+     * Recorded rather than ignored because the assertion that matters about an add is a
+     * *negative* one: it must reach `enqueue` and must **not** reach `playTracks` or
+     * `playAlbum`, which are the commands that replace the crate. That was the whole of the
+     * defect - every surface in the library could only replace - and "did not call" is only
+     * assertable if the calls are kept.
+     */
+    val enqueueCalls: MutableList<EnqueueCall> = mutableListOf()
+
     /**
      * Every transport command this controller was given, in order, named as the interface names it:
      * `play`, `pause`, `playPause`, `playAlbum`.
@@ -534,9 +548,36 @@ internal class FakePlaybackController : PlaybackController {
 
     override suspend fun playTracks(tracks: List<Track>, startIndex: Int) {
         playTracksCalls += tracks
+        // Starting a queue loads it and makes something current, which is what the real
+        // session does and what the screens then read back as "the crate has 12 in it".
+        queue.value = PlayQueue(items = tracks.map(::rowFor), currentIndex = 0)
+        playbackState.value = playbackState.value.copy(
+            currentItem = queue.value.currentItem,
+            isPlaying = true,
+        )
     }
 
-    override suspend fun enqueue(tracks: List<Track>, playNext: Boolean) = Unit
+    /**
+     * Appends, or inserts after the playing row, exactly as the interface promises.
+     *
+     * The crate is really mutated rather than only recorded, so that a test can assert the
+     * count and the total duration the screens show came from the session and not from an
+     * expectation the ViewModel formed for itself. Nothing about [PlaybackState] changes:
+     * `PlaybackController.enqueue` never starts sound, and a fake that quietly started
+     * playing would hide the one case the feature has to handle itself.
+     */
+    override suspend fun enqueue(tracks: List<Track>, playNext: Boolean) {
+        enqueueCalls += EnqueueCall(tracks = tracks, playNext = playNext)
+        val rows: List<QueueItem> = tracks.map(::rowFor)
+        val at: Int? = if (playNext) (queue.value.currentIndex ?: -1) + 1 else null
+        queue.value = queue.value.withItemsInserted(rows, index = at)
+    }
+
+    /** A crate row for a track, with an id as unlikely to collide as the session's own. */
+    private fun rowFor(track: Track): QueueItem =
+        QueueItem(id = (nextRowId++).toString() + "@" + track.key.canonicalString, track = track)
+
+    private var nextRowId: Int = 1
 
     override suspend fun moveQueueItem(fromIndex: Int, toIndex: Int) = Unit
 

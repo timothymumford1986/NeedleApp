@@ -291,4 +291,33 @@ class LibraryFormatTest {
         assertNull(albumFormatSpokenLabel(AudioQuality.Unknown, onDevice = true))
         assertNull(albumFormatSpokenLabel(AudioQuality(AudioFormat.UNKNOWN, null), onDevice = false))
     }
+
+    // ---- the crate line ------------------------------------------------------
+
+    /**
+     * The two figures REQUIREMENTS.md "Queue" gives the crate - "a count and total duration" -
+     * said on the screen the user added from, in the product's own vocabulary. "Queue" never
+     * appears in anything a user reads.
+     */
+    @Test
+    fun `the crate line carries the count and the total duration`() {
+        assertEquals("10 in the crate · 35 min", LibraryFormat.crateLine(10, 2_120_000L))
+        // 239 seconds is three whole minutes: the total truncates like every other running
+        // time in this object, rather than rounding a crate up to a length it does not have.
+        assertEquals("1 in the crate · 3 min", LibraryFormat.crateLine(1, 239_000L))
+        assertEquals("40 in the crate · 2 hr 30 min", LibraryFormat.crateLine(40, 9_000_000L))
+    }
+
+    /**
+     * An empty crate has no line, and a crate of unknown length keeps its count.
+     *
+     * A total of `0 min` would be a claim about music the mirror has no durations for, which is
+     * the one case `runningTime` returns null for.
+     */
+    @Test
+    fun `an empty crate has no line and an unknown total is dropped`() {
+        assertNull(LibraryFormat.crateLine(0, 0L))
+        assertNull(LibraryFormat.crateLine(-1, 10_000L))
+        assertEquals("3 in the crate", LibraryFormat.crateLine(3, 0L))
+    }
 }

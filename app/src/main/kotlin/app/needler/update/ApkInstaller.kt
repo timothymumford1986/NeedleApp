@@ -14,6 +14,7 @@ import java.io.File
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -95,6 +96,17 @@ class ApkInstaller @Inject constructor(
     val status: StateFlow<InstallStatus> = mutableStatus.asStateFlow()
 
     /**
+     * The session this app has committed and not yet heard an outcome for, or [NO_SESSION].
+     *
+     * Volatile because it is written on [Dispatchers.IO] inside [install] and on whatever thread a
+     * broadcast arrives on, and read by [committedSessionIsGone] from the coroutine collecting
+     * [UpdateRepository.observe] — three different threads, no lock, and a stale read here would
+     * mean the banner's escape from a dead install fires against the wrong session.
+     */
+    @Volatile
+    private var committedSessionId: Int = NO_SESSION
+
+    /**
      * Has the listener allowed Needler to install packages?
      *
      * `canRequestPackageInstalls()` arrived in API 26, which is this project's minSdk, so there is
@@ -120,7 +132,38 @@ class ApkInstaller @Inject constructor(
 
     /** Put the state machine back to its resting position, before a retry or after a dismissal. */
     fun reset() {
+        committedSessionId = NO_SESSION
         mutableStatus.value = InstallStatus.Idle
+    }
+
+    /**
+     * Has the session this app committed stopped existing without ever reporting an outcome?
+     *
+     * The one piece of evidence available for the failure this class cannot otherwise detect. After
+     * `commit` the platform owns the install and is supposed to broadcast what happened, but a
+     * confirmation dialogue the listener never answers — Home, Back, swiped out of recents, or
+     * dismissed at Play Protect's own sheet — produces no broadcast at all. The app is left
+     * believing an install is under way for as long as the process lives.
+     *
+     * `getSessionInfo` returns `null` once a session is gone, so a `null` here while
+     * [committedSessionId] is still set means the one message that could have moved this state
+     * machine on is never coming. That turns [UpdateCheckPolicy.INSTALL_HANDOVER_TIMEOUT_MILLIS]
+     * from the only escape into a backstop behind a fact.
+     *
+     * It is deliberately a question and not a status change. This class reports what the platform
+     * did; whether a vanished session should put the banner back to offering the update is
+     * [UpdateRepository]'s decision, in the one place the two halves of the state are folded.
+     *
+     * Returns `false` when nothing has been committed, and `false` — not `true` — if the query
+     * itself throws. A missing session is a finding; a failed query is an absence of findings, and
+     * the timeout still covers it.
+     */
+    fun committedSessionIsGone(): Boolean {
+        val sessionId = committedSessionId
+        if (sessionId == NO_SESSION) return false
+        return runCatching {
+            context.packageManager.packageInstaller.getSessionInfo(sessionId) == null
+        }.getOrDefault(false)
     }
 
     /**
@@ -140,6 +183,25 @@ class ApkInstaller @Inject constructor(
      * Returns once the session is committed, which is long before the install has happened: from
      * here on the platform drives, and the outcome arrives on [status] by way of
      * [UpdateInstallReceiver].
+     *
+     * ## Cancellation, and why staging is deliberately not interruptible
+     *
+     * The caller's scope is a `viewModelScope`, so a listener who leaves the app mid-stage cancels
+     * this. `copyTo` is a blocking JVM call that does not observe the coroutine, and it is left
+     * that way on purpose — unlike the per-buffer `ensureActive` in [ApkDownloader], which exists
+     * so that a cancelled *download* stops spending someone's mobile data. The outcomes are not
+     * symmetric. An abandoned download has cost bytes and achieved nothing; an abandoned stage
+     * throws away an install the listener explicitly asked for, seconds from the point where the
+     * platform would have put its confirmation dialogue up under its own background-launch
+     * allowance and finished the job. So the copy runs to completion, the session commits, and the
+     * install can still succeed after the listener has moved on. The cancellation surfaces to the
+     * caller at the `withContext` boundary instead, which [UpdateRepository.downloadAndInstall]
+     * handles.
+     *
+     * The `CancellationException` arm below is therefore insurance rather than a live path: it
+     * covers a cancellation observed *before* the commit, where nothing has been handed over and
+     * leaving [status] at [InstallStatus.Staging] would report an install that stopped existing.
+     * After the commit the platform owns it and there is nothing to undo, so the status stands.
      */
     suspend fun install(apk: File): Unit = withContext(Dispatchers.IO) {
         if (!canInstallPackages()) {
@@ -154,6 +216,7 @@ class ApkInstaller @Inject constructor(
         mutableStatus.value = InstallStatus.Staging
         val packageInstaller = context.packageManager.packageInstaller
         var sessionId = NO_SESSION
+        var committed = false
 
         try {
             val params = PackageInstaller.SessionParams(
@@ -174,14 +237,28 @@ class ApkInstaller @Inject constructor(
                     session.fsync(output)
                 }
                 mutableStatus.value = InstallStatus.Committing
+                // Recorded before the commit, not after: once `commit` has been called the session
+                // may be gone by the time this line would otherwise run, and a session id never
+                // written down is a session [committedSessionIsGone] can never ask about.
+                committedSessionId = sessionId
+                committed = true
                 session.commit(statusIntentSender(sessionId))
             }
+        } catch (cancelled: CancellationException) {
+            if (!committed) {
+                abandon(sessionId)
+                committedSessionId = NO_SESSION
+                mutableStatus.value = InstallStatus.Idle
+            }
+            throw cancelled
         } catch (failure: IOException) {
             abandon(sessionId)
+            committedSessionId = NO_SESSION
             mutableStatus.value = InstallStatus.Failed(GENERIC_FAILURE)
         } catch (failure: SecurityException) {
             // The permission was revoked between the check above and the session being created.
             abandon(sessionId)
+            committedSessionId = NO_SESSION
             mutableStatus.value = InstallStatus.PermissionRequired
         }
     }
@@ -211,6 +288,7 @@ class ApkInstaller @Inject constructor(
                 )
                 if (confirmation == null) {
                     abandon(sessionId)
+                    committedSessionId = NO_SESSION
                     mutableStatus.value = InstallStatus.Failed(GENERIC_FAILURE)
                     return
                 }
@@ -224,6 +302,7 @@ class ApkInstaller @Inject constructor(
                     )
                 }.onFailure {
                     abandon(sessionId)
+                    committedSessionId = NO_SESSION
                     mutableStatus.value = InstallStatus.Failed(GENERIC_FAILURE)
                 }
             }
@@ -231,12 +310,14 @@ class ApkInstaller @Inject constructor(
             // Rarely seen: by the time the platform can say this, this process has usually already
             // been replaced by the new one. Handled anyway, because "usually" is not "always".
             PackageInstaller.STATUS_SUCCESS -> {
+                committedSessionId = NO_SESSION
                 mutableStatus.value = InstallStatus.Succeeded
             }
 
             // The listener pressed Cancel on the platform's dialogue. Not a failure, and not
             // something to report as one: the banner simply goes back to offering the update.
             PackageInstaller.STATUS_FAILURE_ABORTED -> {
+                committedSessionId = NO_SESSION
                 mutableStatus.value = InstallStatus.Cancelled
             }
 
@@ -245,6 +326,7 @@ class ApkInstaller @Inject constructor(
                 // developer-facing ("INSTALL_FAILED_UPDATE_INCOMPATIBLE: Package app.needler
                 // signatures do not match previously installed version") and the one thing it must
                 // not do is send a listener looking for a way to uninstall first.
+                committedSessionId = NO_SESSION
                 mutableStatus.value = InstallStatus.Failed(GENERIC_FAILURE)
             }
         }

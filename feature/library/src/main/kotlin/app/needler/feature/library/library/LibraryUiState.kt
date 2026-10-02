@@ -10,6 +10,7 @@ import app.needler.core.domain.model.StatsSource
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.model.TrackListKind
+import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.common.LibraryFormat
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -52,6 +53,22 @@ data class LibraryUiState(
     /** A delta sync is running, so the header's scan time is about to move. */
     val syncing: Boolean = false,
 
+    /**
+     * What the last add to the crate did, or null.
+     *
+     * [app.needler.feature.library.album.AlbumNotice] rather than a type of this screen's own,
+     * because it is already the module's shared notice type - the artist screen reads the same
+     * one - and a second sealed hierarchy saying "added to the crate" in slightly different words
+     * is how two screens come to disagree about what happened.
+     */
+    val notice: AlbumNotice? = null,
+
+    /** How many rows the crate holds, from `PlaybackController.observeQueue`. */
+    val crateTrackCount: Int = 0,
+
+    /** The crate's total running time in milliseconds, from the same flow. */
+    val crateDurationMs: Long = 0L,
+
     /** When the state was assembled, so "last scan 47m ago" is computed from a fixed instant. */
     val renderedAt: Instant = Instant.fromEpochSeconds(0L),
 ) {
@@ -66,6 +83,15 @@ data class LibraryUiState(
 
     /** The empty state is only honest once the mirror has actually answered. */
     val showEmptyState: Boolean get() = !loading && isEmpty
+
+    /**
+     * `19 in the crate · 1 hr 14 min`, or null when the crate is empty.
+     *
+     * Shown under the line an add leaves behind. Adding to a queue with no visible
+     * change is indistinguishable from a tap that did not register, and these are the
+     * two figures REQUIREMENTS.md "Queue" asks the crate screen itself to show.
+     */
+    val crateLine: String? get() = LibraryFormat.crateLine(crateTrackCount, crateDurationMs)
 
     /**
      * `176 albums · 42 GB · last scan 47m ago`.

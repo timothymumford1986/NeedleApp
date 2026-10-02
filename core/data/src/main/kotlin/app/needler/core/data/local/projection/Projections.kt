@@ -108,6 +108,20 @@ public data class DownloadedAlbumRow(
 /**
  * An active pull joined to whatever the mirror knows about the album, so the Pulls screen and the
  * pull widget render from one query even for an album that is not owned yet.
+ *
+ * ## Why [updatedAt] and [albumQualityPolicySummary] are here
+ *
+ * Both were missing, and both are drawn. `PullsFormat.detailParts` composes a row's second line out
+ * of `Pull.qualityPolicySummary` and `Pull.updatedAt`, and this projection is what every list query
+ * on the Pulls screen returns - so with neither selected, a landed pull's subtitle dated from the
+ * moment it was *requested* rather than the moment it arrived, and the pack's `FLAC` / `MP3 320`
+ * badge appeared in the screenshot fixtures and nowhere else.
+ *
+ * The quality summary is read off the joined `album` row rather than from a column of its own.
+ * REQUIREMENTS.md "Design pack discrepancies" settles the figure as "a fact about one request's
+ * outcome rather than a preference", riding "on the `album` row and on the `pull`" - and the album
+ * row already has the column, which this projection already joins for the title. Adding a second
+ * copy to `pull` would mean two rows holding one server-side policy with no rule for which wins.
  */
 public data class PullRow(
     @ColumnInfo(name = "release_group_mbid") val releaseGroupMbid: String,
@@ -123,10 +137,14 @@ public data class PullRow(
     @ColumnInfo(name = "search_job_id") val searchJobId: String?,
     @ColumnInfo(name = "candidate_index") val candidateIndex: Int?,
     @ColumnInfo(name = "created_at") val createdAt: Long,
+    /** When the row last changed. A completed pull's line says when it landed, not when it was asked for. */
+    @ColumnInfo(name = "updated_at") val updatedAt: Long,
     @ColumnInfo(name = "album_title") val albumTitle: String?,
     @ColumnInfo(name = "album_artist_name") val albumArtistName: String?,
     @ColumnInfo(name = "album_year") val albumYear: Int?,
     @ColumnInfo(name = "album_cover_art_id") val albumCoverArtId: String?,
+    /** `album.quality_policy_summary`: the server-side policy this request was answered under. */
+    @ColumnInfo(name = "album_quality_policy_summary") val albumQualityPolicySummary: String?,
 )
 
 /**

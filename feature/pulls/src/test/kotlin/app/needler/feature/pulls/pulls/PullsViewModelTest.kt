@@ -140,17 +140,36 @@ class PullsViewModelTest {
     }
 
     @Test
-    fun `opening the screen refreshes and marks the landed albums as seen`() = runTest {
+    fun `opening the screen marks the landed albums as seen`() = runTest {
         val repository = FakePullRepository(pulls = SamplePulls.pack)
         viewModel(repository)
         advanceUntilIdle()
 
-        assertEquals(1, repository.refreshCount)
         assertEquals(1, repository.markedSeen.size)
         assertEquals(
             setOf(SamplePulls.mbid("two-star"), SamplePulls.mbid("heaven")),
             repository.markedSeen.single(),
         )
+    }
+
+    /**
+     * The queue is read from the polling flow, not the plain one.
+     *
+     * REQUIREMENTS.md "Polling schedule" gives this screen `GET /api/v1/downloads` "every 2 s" while
+     * it is foregrounded, and the loop lives in `:core:data` behind
+     * `PullRepository.observePullsLive` — this module's part is subscribing to it, and subscribing to
+     * `observePulls` instead would leave the screen static with nothing failing. The one-shot
+     * `refreshPulls` this [init] used to do is gone with it: the live flow polls before it first
+     * sleeps, so asking as well would be the same page walk twice per ViewModel.
+     */
+    @Test
+    fun `the queue is read from the polling flow and asks for no extra refresh`() = runTest {
+        val repository = FakePullRepository(pulls = SamplePulls.pack)
+        subscribe(viewModel(repository))
+        advanceUntilIdle()
+
+        assertEquals(1, repository.liveSubscriptions)
+        assertEquals(0, repository.refreshCount)
     }
 
     @Test

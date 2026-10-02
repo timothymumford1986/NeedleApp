@@ -1,6 +1,9 @@
 package app.needler.feature.library.playlists
 
 import app.cash.turbine.test
+import app.needler.core.domain.playback.PlaybackState
+import app.needler.core.domain.model.PlayQueue
+import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
@@ -330,6 +333,18 @@ class PlaylistsViewModelTest {
             SamplePlaylists.onServer.id.value to
                 SamplePlaylists.entries(SampleLibrary.submarineTracks),
         )
+        // Something has to be playing for "appends rather than replacing" to mean
+        // anything. Without this the crate is empty, the add correctly starts
+        // playback instead of appending, and the test passed while asserting the
+        // opposite of its own name.
+        val playingQueue = PlayQueue(
+            items = listOf(QueueItem(id = "q-0", track = SampleLibrary.submarineTracks.first())),
+            currentIndex = 0,
+        )
+        playback.queue.value = playingQueue
+        playback.playbackState.value =
+            PlaybackState(currentItem = playingQueue.currentItem, isPlaying = true)
+
         val model = viewModel()
         model.state.test {
             awaitItem()

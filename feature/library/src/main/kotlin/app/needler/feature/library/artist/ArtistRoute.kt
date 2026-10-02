@@ -50,6 +50,8 @@ fun ArtistRoute(
         onPlay = viewModel::onPlay,
         onShuffle = viewModel::onShuffle,
         onPlayAlbum = viewModel::onPlayAlbum,
+        onAddToCrate = viewModel::onAddToCrate,
+        onAddAlbumToCrate = viewModel::onAddAlbumToCrate,
         onToggleFavourite = viewModel::onToggleFavourite,
         onMonitorArtistChange = viewModel::onMonitorArtistChange,
         onConfirmRequest = viewModel::onConfirmRequest,

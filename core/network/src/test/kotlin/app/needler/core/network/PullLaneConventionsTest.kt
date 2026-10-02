@@ -198,6 +198,53 @@ class PullLaneConventionsTest {
         assertFalse(response.success)
     }
 
+    // ---- the kind and the id in the path have to agree ----------------------
+
+    /**
+     * REQUIREMENTS.md "Placing a request": cancel "takes `request_kind`, either `album` or `track`",
+     * and a track request is "keyed on recording MBID, not release group".
+     *
+     * Both halves are on the wire and neither is inferable from the other, so both are asserted
+     * here. `DefaultPullRepository` used to send `request_kind=album` with the release-group id for
+     * *every* row, which for a track request is a cancel aimed at the album the track came from -
+     * and the only evidence of that is this query string.
+     */
+    @Test
+    fun `a track request cancel carries the recording MBID and request_kind track`() {
+        server.enqueue(json(200, "{\"success\":true,\"message\":\"cancelled\"}"))
+
+        runBlocking { api().cancelRequest(RECORDING, RequestKind.Track) }
+
+        val url = server.takeRequest().url
+        assertTrue("path was " + url.encodedPath, url.encodedPath.endsWith("/requests/active/" + RECORDING))
+        assertEquals("track", url.queryParameter("request_kind"))
+        assertFalse("the release group must not appear", url.encodedPath.contains(RG))
+    }
+
+    @Test
+    fun `an album request cancel carries the release group and request_kind album`() {
+        server.enqueue(json(200, "{\"success\":true,\"message\":\"cancelled\"}"))
+
+        runBlocking { api().cancelRequest(RG, RequestKind.Album) }
+
+        val url = server.takeRequest().url
+        assertTrue("path was " + url.encodedPath, url.encodedPath.endsWith("/requests/active/" + RG))
+        assertEquals("album", url.queryParameter("request_kind"))
+    }
+
+    @Test
+    fun `a track request retry is keyed the same way as the cancel`() {
+        server.enqueue(json(200, "{\"success\":true,\"message\":\"retrying\"}"))
+
+        runBlocking { api().retryRequest(RECORDING, RequestKind.Track) }
+
+        val request: RecordedRequest = server.takeRequest()
+        assertEquals("POST", request.method)
+        val url = request.url
+        assertTrue("path was " + url.encodedPath, url.encodedPath.endsWith("/requests/retry/" + RECORDING))
+        assertEquals("track", url.queryParameter("request_kind"))
+    }
+
     @Test
     fun `a download cancel for a task that is gone is a 404, not an in-band false`() {
         server.enqueue(json(404, "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"no such task\"}}"))
@@ -341,5 +388,8 @@ class PullLaneConventionsTest {
 
     private companion object {
         const val RG = "0f1c3b5e-8a2d-4f6b-9c7e-1d2a3b4c5d6e"
+
+        /** A recording MBID, which is what a `request_kind=track` cancel is keyed on. */
+        const val RECORDING = "7a9b2c1d-3e4f-5a6b-8c9d-0e1f2a3b4c5d"
     }
 }

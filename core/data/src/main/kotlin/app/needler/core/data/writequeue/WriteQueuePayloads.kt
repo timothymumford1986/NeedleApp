@@ -11,6 +11,7 @@ import app.needler.core.domain.model.PlaylistEdit
 import app.needler.core.domain.model.PlaylistId
 import app.needler.core.domain.model.RecordingMbid
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.RequestTarget
 import app.needler.core.domain.model.ScrobbleEvent
 import app.needler.core.domain.model.TrackFetchHandle
 import app.needler.core.domain.model.TrackKey
@@ -38,6 +39,15 @@ public data class WriteQueuePayload(
     @SerialName("artist_name") val artistName: String? = null,
     @SerialName("year") val year: Int? = null,
     @SerialName("monitor_artist") val monitorArtist: Boolean = false,
+    /**
+     * `album` or `track`, for a journalled request cancel or retry.
+     *
+     * `DELETE /api/v1/requests/active/{mbid}` takes a `request_kind`, and the id in its path is the
+     * recording MBID when that kind is `track`. Both have to survive the journal or a cancel made
+     * offline replays against the wrong thing - which is the same defect the online path had. Absent
+     * on every row an older build wrote, and absent means `album`, which is what those rows are.
+     */
+    @SerialName("request_kind") val requestKind: String? = null,
     @SerialName("playlist_id") val playlistId: String? = null,
     @SerialName("playlist_name") val playlistName: String? = null,
     @SerialName("track_keys") val trackKeys: List<String> = emptyList(),
@@ -93,16 +103,26 @@ public object WriteQueueCodec {
             ),
         )
 
+        // `entity_key` stays the release group for both, because that is what the queue coalesces
+        // on and what the UI reconciles against; the recording MBID rides in the payload.
         is WriteOperation.CancelRequest -> EncodedWrite(
             type = WriteOperationTypeDb.PULL_CANCEL,
             entityKey = operation.releaseGroupMbid.value,
-            payload = WriteQueuePayload(releaseGroupMbid = operation.releaseGroupMbid.value),
+            payload = WriteQueuePayload(
+                releaseGroupMbid = operation.releaseGroupMbid.value,
+                recordingMbid = operation.recordingMbid?.value,
+                requestKind = operation.requestKind.token,
+            ),
         )
 
         is WriteOperation.RetryRequest -> EncodedWrite(
             type = WriteOperationTypeDb.PULL_RETRY,
             entityKey = operation.releaseGroupMbid.value,
-            payload = WriteQueuePayload(releaseGroupMbid = operation.releaseGroupMbid.value),
+            payload = WriteQueuePayload(
+                releaseGroupMbid = operation.releaseGroupMbid.value,
+                recordingMbid = operation.recordingMbid?.value,
+                requestKind = operation.requestKind.token,
+            ),
         )
 
         is WriteOperation.EditPlaylist -> encodePlaylistEdit(operation.edit)
@@ -187,10 +207,22 @@ public object WriteQueueCodec {
         }.getOrNull() ?: return null
         return when (type) {
             WriteOperationTypeDb.PULL_REQUEST -> decodeRequest(body)
-            WriteOperationTypeDb.PULL_CANCEL -> body.releaseGroupMbid
-                ?.let { WriteOperation.CancelRequest(ReleaseGroupMbid(it)) }
-            WriteOperationTypeDb.PULL_RETRY -> body.releaseGroupMbid
-                ?.let { WriteOperation.RetryRequest(ReleaseGroupMbid(it)) }
+            // A payload with no `request_kind` is an album cancel, which is what every row written
+            // before the field existed is; `fromServerToken` already reads absent that way.
+            WriteOperationTypeDb.PULL_CANCEL -> body.releaseGroupMbid?.let {
+                WriteOperation.CancelRequest(
+                    releaseGroupMbid = ReleaseGroupMbid(it),
+                    requestKind = RequestTarget.fromServerToken(body.requestKind),
+                    recordingMbid = body.recordingMbid?.let(::RecordingMbid),
+                )
+            }
+            WriteOperationTypeDb.PULL_RETRY -> body.releaseGroupMbid?.let {
+                WriteOperation.RetryRequest(
+                    releaseGroupMbid = ReleaseGroupMbid(it),
+                    requestKind = RequestTarget.fromServerToken(body.requestKind),
+                    recordingMbid = body.recordingMbid?.let(::RecordingMbid),
+                )
+            }
             WriteOperationTypeDb.PLAYLIST_CREATE -> WriteOperation.EditPlaylist(
                 PlaylistEdit.Create(
                     name = body.playlistName.orEmpty(),

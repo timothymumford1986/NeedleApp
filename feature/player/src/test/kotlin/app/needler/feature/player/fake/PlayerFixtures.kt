@@ -3,6 +3,7 @@ package app.needler.feature.player.fake
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.ArtistMbid
+import app.needler.core.domain.model.ArtworkRef
 import app.needler.core.domain.model.AudioFormat
 import app.needler.core.domain.model.CastAvailability
 import app.needler.core.domain.model.FileId
@@ -34,6 +35,7 @@ object PlayerFixtures {
         trackNumber: Int,
         format: AudioFormat = AudioFormat.FLAC,
         bitrateKbps: Int? = null,
+        artwork: ArtworkRef? = null,
     ): Track = Track(
         key = TrackKey(
             releaseGroupMbid = ReleaseGroupMbid(mbid),
@@ -51,10 +53,11 @@ object PlayerFixtures {
             format = format,
             bitrateKbps = bitrateKbps,
         ),
-        // Artwork is deliberately null: `:feature:player` cannot resolve an ArtworkRef to a URL -
-        // that needs the server address and the session, which live in :core:data - so a render
-        // shows the placeholder tint, which is what the screen shows before a cover arrives anyway.
-        artwork = null,
+        // Null by default: `:feature:player` cannot resolve an ArtworkRef to a URL - that needs the
+        // server address and the session, which live in :core:data - so a render shows the
+        // placeholder, which is what the screen shows before a cover arrives anyway. Pass a ref to
+        // render the case where the album *has* a cover the renderer cannot fetch; see [illinois].
+        artwork = artwork,
     )
 
     private const val SUBMARINE = "marias-submarine"
@@ -80,6 +83,39 @@ object PlayerFixtures {
     )
     val superstar: Track =
         track("Superstar", "Beach House", "Once Twice Melody", 175_000L, MELODY, 7)
+
+    private const val ILLINOIS = "sufjan-illinois"
+
+    /**
+     * A record the reference library has no cover art for at all.
+     *
+     * Named rather than reusing the pack's crate because the absence is the point. Every fixture
+     * above happens to carry no [ArtworkRef] - a JVM render cannot resolve one anyway - so the
+     * player's own fallback was in every committed screenshot and nobody read it as wrong: a flat
+     * tinted square looks exactly like a cover that has not arrived. Illinois is one of the two
+     * albums the device audit found, and a fixture that says so is what makes the next person
+     * looking at the render know which of those two things they are looking at.
+     *
+     * Its title also carries the letter the placeholder draws, `I`, which the tests assert on.
+     */
+    val illinois: Track = track(
+        title = "Chicago",
+        artist = "Sufjan Stevens",
+        album = "Illinois",
+        durationMs = 366_000L,
+        mbid = ILLINOIS,
+        trackNumber = 9,
+    )
+
+    /**
+     * The same record as one the server *does* hold a cover for, which this renderer cannot fetch.
+     *
+     * The pair is the regression test for the fix: a coverless album and an album whose cover is
+     * still in flight have to draw the same thing from the player's point of view, because nothing
+     * at that layer can tell them apart. [illinois] alone would pass against a branch on
+     * `artwork == null`, which is exactly the branch that shipped the defect.
+     */
+    val illinoisWithCover: Track = illinois.copy(artwork = ArtworkRef.Owned("al-illinois"))
 
     /** A queue row. The id is queue-local, not a track identity: the same track may appear twice. */
     fun item(id: String, track: Track): QueueItem = QueueItem(id = id, track = track)

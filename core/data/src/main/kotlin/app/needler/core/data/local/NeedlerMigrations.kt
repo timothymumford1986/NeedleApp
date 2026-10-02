@@ -23,6 +23,18 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * lossless wherever I am" is a row per item. Nothing is copied, no table is rewritten, and the search
  * triggers are untouched because neither `album` nor `track` is involved.
  *
+ * ## Version 3: `pull.request_kind` and `pull.recording_mbid`
+ *
+ * [MIGRATION_2_3] adds two columns to `pull` and touches nothing else. `DELETE
+ * /api/v1/requests/active/{mbid}` takes a `request_kind` of `album` or `track`, and the id in its
+ * path is the *recording* MBID for a track request while `pull` is keyed on the release group - so
+ * cancelling or retrying a track request was impossible to get right without storing both. See
+ * [app.needler.core.data.local.entity.PullEntity.requestKind] for why the alternative, declining to
+ * offer cancel on a track row, cannot be built without the same column.
+ *
+ * `pull` has no foreign key and is not an FTS content table, so rules 1 to 3 below do not apply. The
+ * `album` and `track` triggers are untouched.
+ *
  * ## Writing one
  *
  * Rules that apply to every migration in this database, learned from the shape of the schema:
@@ -88,10 +100,38 @@ public object NeedlerMigrations {
     }
 
     /**
+     * Adds `pull.request_kind` and `pull.recording_mbid`, so a *track* request can be cancelled and
+     * retried against the id its endpoint actually takes.
+     *
+     * `ALTER TABLE ... ADD COLUMN` only, which SQLite does in place: no table is copied, renamed or
+     * dropped, so no child row can be lost and no FTS trigger needs recreating. Nothing is
+     * back-filled either - every existing row is an album request, which is exactly what the
+     * `DEFAULT 'album'` makes it, and no existing row has a recording MBID to recover.
+     *
+     * The default is written here **and** declared on
+     * [app.needler.core.data.local.entity.PullEntity.requestKind] as `defaultValue`, per rule 4 in
+     * this file's header: Room reads `dflt_value` back out of `PRAGMA table_info` on the next open
+     * and compares it against its own exported schema, so a default present in one place and absent
+     * from the other fails validation on the *following* version rather than on this one. The
+     * quoting matters for the same reason - a TEXT default is `'album'` with the quotes, which is
+     * what SQLite reports back.
+     *
+     * `recording_mbid` is deliberately nullable with no default. It is meaningful only on a track
+     * row, and `NOT NULL DEFAULT ''` would make "this row has no recording MBID" and "this row is an
+     * album" the same value, which is the distinction the column exists to make.
+     */
+    internal val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE `pull` ADD COLUMN `request_kind` TEXT NOT NULL DEFAULT 'album'")
+            db.execSQL("ALTER TABLE `pull` ADD COLUMN `recording_mbid` TEXT")
+        }
+    }
+
+    /**
      * Every migration, in ascending order. Passed to `addMigrations` as a whole, so Room can also
      * compose them to skip versions.
      */
-    public val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
+    public val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 
     /**
      * Convenience for a migration that has rewritten `album` or `track`: drops the search triggers,

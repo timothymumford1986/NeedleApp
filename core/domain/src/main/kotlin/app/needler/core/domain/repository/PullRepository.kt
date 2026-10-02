@@ -31,6 +31,33 @@ public interface PullRepository {
 
     public fun observePulls(bucket: PullBucket): Flow<List<Pull>>
 
+    /**
+     * [observePulls], with `GET /api/v1/downloads` re-polled every two seconds while it is collected.
+     *
+     * REQUIREMENTS.md "Polling schedule": "Pulls screen foregrounded | 2 s | Coroutine, full task
+     * list". This is that coroutine, and it is here rather than in `:feature:pulls` for two reasons.
+     * `:feature:pulls` sees only `:core:domain` and `:core:design`, so it could not reach
+     * `GET /api/v1/downloads` at all; and a loop in a feature module would be a second writer on the
+     * `pull` table, which would put the battery rule `PullPoller` enforces - do not poll when
+     * nothing is active - somewhere it cannot be enforced from.
+     *
+     * **Polling, deliberately, not SSE.** `GET /api/v1/downloads/{id}/stream` exists and
+     * REQUIREMENTS.md rules it out of v1: "holding open one connection per task keeps the mobile
+     * radio awake and scales badly against a queue of twenty albums". Twenty albums is one request
+     * every two seconds here, and none at all once the screen is gone.
+     *
+     * The subscription is the whole lifecycle: collecting starts the poll, cancelling stops it, so a
+     * screen that is not on top costs nothing and no caller has to remember to switch it off. A
+     * failed poll is swallowed - the mirror is still drawn, and REQUIREMENTS.md "Failure handling"
+     * does not make a dropped poll a user-visible error - so this flow does not end on a dead
+     * network.
+     *
+     * The default serves the mirror without polling, for the hand-written fakes [requestHistory]
+     * documents: a fake with no server is a coherent implementation of this, which an abstract
+     * member would not let it be.
+     */
+    public fun observePullsLive(): Flow<List<Pull>> = observePulls()
+
     public fun observePull(mbid: ReleaseGroupMbid): Flow<Pull?>
 
     /**
@@ -43,6 +70,23 @@ public interface PullRepository {
 
     /** The last activity summary. Its `revision` makes an unchanged poll nearly free. */
     public fun observeActivitySummary(): Flow<PullActivitySummary?>
+
+    /**
+     * [observeActivitySummary], re-polled every twenty seconds while it is collected.
+     *
+     * The other half of REQUIREMENTS.md "Polling schedule"'s foreground pair: "App foregrounded,
+     * elsewhere | 20 s | Coroutine, activity summary". Separate from [observePullsLive] because the
+     * endpoints and the costs are different - this one returns only
+     * `{revision, active_count, held_count, failed_count, landed_release_group_mbids}`, and the
+     * `revision` "makes a no-change poll nearly free" - and because the two must never run together:
+     * the Pulls screen already has the whole task list, so adding the summary to it would be a
+     * second request for a subset of what the first one just said.
+     *
+     * The owner of this one is whatever knows the app is foregrounded, which is the host rather than
+     * any feature module. It is offered here so that the knowledge stays in one place; nothing in
+     * `:core:data` can decide what "elsewhere in the app" means.
+     */
+    public fun observeActivitySummaryLive(): Flow<PullActivitySummary?> = observeActivitySummary()
 
     /**
      * The number on the Pulls tab badge: active pulls plus unseen completions.

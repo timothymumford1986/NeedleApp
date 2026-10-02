@@ -72,6 +72,38 @@ class UpdateCheckPolicyTest {
         assertTrue(due(lastCheckAt = 0L, lastAttemptAt = now + day))
     }
 
+    // ---- leaving an install the platform never answered ---------------------
+
+    /**
+     * `UpdateState.Installing` is not terminal, and the arithmetic that stops it behaving like one
+     * is here. A device was left on "Installing 0.0.11" with no action and no dismissal, for ever,
+     * because the only event that could have cleared it was the install that could not start.
+     */
+    @Test
+    fun `a hand-over nothing came back from goes stale`() {
+        val timeout = UpdateCheckPolicy.INSTALL_HANDOVER_TIMEOUT_MILLIS
+        assertFalse(stale(handedOverAt = now - timeout + 1L))
+        assertTrue(stale(handedOverAt = now - timeout))
+        assertTrue(stale(handedOverAt = now - timeout - day))
+    }
+
+    /** No hand-over has happened, so there is nothing waiting to be given up on. */
+    @Test
+    fun `nothing handed over is never stale`() {
+        assertFalse(stale(handedOverAt = 0L))
+    }
+
+    /**
+     * The one comparison in this object that resolves a moved clock the *strict* way, and for the
+     * same underlying reason as all the lenient ones: take whichever side leads back to a working
+     * update path. Elsewhere that means checking rather than waiting it out. Here it means letting
+     * the listener off a bar they cannot otherwise leave.
+     */
+    @Test
+    fun `a hand-over stamped in the future is stale, not a wait of unknown length`() {
+        assertTrue(stale(handedOverAt = now + day))
+    }
+
     // ---- what gets offered --------------------------------------------------
 
     @Test
@@ -114,6 +146,9 @@ class UpdateCheckPolicyTest {
         retryNotBeforeMillis = retryNotBefore,
         lastAttemptAtMillis = lastAttemptAt,
     )
+
+    private fun stale(handedOverAt: Long): Boolean =
+        UpdateCheckPolicy.isHandoverStale(now = now, handedOverAtMillis = handedOverAt)
 
     private fun shouldOffer(
         candidate: Long,

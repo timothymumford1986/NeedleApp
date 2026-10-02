@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.CatalogueSearchPage
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.PlayQueue
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.SearchSuggestion
@@ -21,6 +22,7 @@ import app.needler.core.domain.repository.SearchRepository
 import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.domain.usecase.RequestAlbumUseCase
 import app.needler.core.domain.usecase.UnifiedSearchUseCase
+import app.needler.feature.search.common.addTracksToCrate
 import app.needler.feature.search.common.hasPlayableFile
 import app.needler.feature.search.common.problemMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -34,6 +36,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -93,7 +96,7 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val search: SearchRepository,
-    library: LibraryRepository,
+    private val library: LibraryRepository,
     pulls: PullRepository,
     sessions: SessionRepository,
     private val playback: Optional<PlaybackController>,
@@ -208,11 +211,27 @@ class SearchViewModel @Inject constructor(
         )
     }
 
+    /**
+     * The live crate, for the count and total duration an "added" notice is confirmed by.
+     *
+     * `observeQueue` and not a figure this screen keeps: `PlaybackController`'s "Who owns
+     * the crate" makes the session the authority on it. With no controller bound the crate
+     * reads as empty, which is also what a screenshot renders.
+     */
+    private val crate: Flow<PlayQueue> =
+        playback.orElse(null)?.observeQueue() ?: flowOf(PlayQueue.Empty)
+
     private val status: Flow<Status> = combine(
         sessions.observeConnectivity(),
         nowPlayingKey,
-    ) { connectivity, playingKey ->
-        Status(offline = !connectivity.isOnline, nowPlayingTrackKey = playingKey)
+        crate,
+    ) { connectivity, playingKey, queue ->
+        Status(
+            offline = !connectivity.isOnline,
+            nowPlayingTrackKey = playingKey,
+            crateTrackCount = queue.items.size,
+            crateDurationMs = queue.totalDurationMs,
+        )
     }
 
     /**
@@ -249,6 +268,8 @@ class SearchViewModel @Inject constructor(
             monitorArtist = sheet.monitorArtist,
             paging = lane.paging,
             notice = currentNotice,
+            crateTrackCount = current.crateTrackCount,
+            crateDurationMs = current.crateDurationMs,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -481,6 +502,47 @@ class SearchViewModel @Inject constructor(
         viewModelScope.launch { controller.playTracks(listOf(track)) }
     }
 
+    /**
+     * Put one song from the Songs block into the crate, at the end or next.
+     *
+     * The Songs block is the local lane - catalogue search returns artists and albums only -
+     * so the track in hand is a library track with a file behind it, and nothing has to be
+     * fetched. The playability check is still repeated, for the reason [onPlayTrack] repeats
+     * it: a ViewModel that trusts its screen to have filtered correctly is one refactor away
+     * from handing the session a track that cannot play.
+     */
+    fun onAddTrackToCrate(track: Track, playNext: Boolean) {
+        if (!track.hasPlayableFile) return
+        val controller: PlaybackController = playback.orElse(null) ?: return
+        viewModelScope.launch {
+            notice.value = controller.addTracksToCrate(listOf(track), playNext)
+        }
+    }
+
+    /**
+     * Put one album from the results into the crate.
+     *
+     * Only an album the server already has can be queued, and the screen only offers the
+     * control there: a catalogue result is metadata with no files anywhere, so its rows exist
+     * in MusicBrainz and nothing else. Its action is **Pull**, which is already in the same
+     * trailing slot and is mutually exclusive with this by [Album.state].
+     *
+     * The tracks are read from the mirror because `PlaybackController.enqueue` takes tracks and
+     * an [Album] carries none. It is a Room query behind the repository interface - the mirror
+     * is the read path - so it works with no connection, which is also when this screen is most
+     * likely to be showing library results only.
+     */
+    fun onAddAlbumToCrate(album: Album, playNext: Boolean) {
+        val controller: PlaybackController = playback.orElse(null) ?: return
+        viewModelScope.launch {
+            val tracks: List<Track> = library.observeAlbumTracks(album.releaseGroupMbid)
+                .first()
+                .filter { it.hasPlayableFile }
+            if (tracks.isEmpty()) return@launch
+            notice.value = controller.addTracksToCrate(tracks, playNext)
+        }
+    }
+
     fun onDismissNotice() {
         notice.value = null
     }
@@ -503,6 +565,8 @@ class SearchViewModel @Inject constructor(
     private data class Status(
         val offline: Boolean,
         val nowPlayingTrackKey: TrackKey?,
+        val crateTrackCount: Int,
+        val crateDurationMs: Long,
     )
 
     private data class PullSheet(

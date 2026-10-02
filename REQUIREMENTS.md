@@ -370,7 +370,7 @@ Requesting is one tap on any un-owned album, and the app then tracks the album u
 | --- | --- | --- |
 | Request an album | `POST /api/v1/requests/new` | **202.** Body carries `musicbrainz_id`, plus `artist`, `album`, `year` as hints |
 | Request a single track | `POST /api/v1/tracks/{recording_mbid}/request` | Keyed on recording MBID, not release group |
-| Request several albums | `POST /api/v1/requests/batch` | **202.** At most 500 items; returns `requested` and `skipped` |
+| Request several albums | `POST /api/v1/requests/batch` | **202.** At most 500 items; returns `requested` and `skipped`. Chunk failures are partial, not total - see below |
 | Cancel before completion | `DELETE /api/v1/requests/active/{mbid}` | Takes `request_kind`, either `album` or `track` |
 | Retry a failed request | `POST /api/v1/requests/retry/{mbid}` | Same `request_kind` parameter |
 
@@ -379,6 +379,15 @@ Three details of this lane are easy to get wrong, and two of them were wrong in 
 1. **The accepted status is `202`, not `200`.** Both request endpoints answer 202, which is correct — the server has accepted the request, not completed it — but a client that treats anything other than 200 as failure reports every successful pull as an error.
 2. **The batch cap is a decode-time `422`, and `overflow` is dead.** The response carries an `overflow` field and the first draft told callers to read it. The server never sets it to anything but `0`: a 501-item body is rejected before the handler runs. Callers must chunk to 500 themselves, and must not rely on `overflow` for anything at all.
 3. **Cancel and retry of a *request* refuse in-band; cancel and retry of a *download* do not.** A refused request cancel or retry is **`200` with `success=false`** and a reason, with `403` reserved for an MBID belonging to another user's request. The download-task equivalents are the opposite and use real statuses: `404` for a task that is gone, `403` for another user's, `400` for a task in a state that cannot be retried. Two adjacent pairs of endpoints with opposite conventions, so their error handling cannot be shared.
+
+**A batch that fails part-way reports what was accepted.** The cap makes chunking the caller's job,
+so a 1,200-album request is three calls and the second can fail on its own. Reporting that as a flat
+failure would be false: the first 500 are requested, their rows are written, and the server is
+already acting on them. So nothing accepted is a plain failure; something accepted is a success
+carrying what was taken, what was not sent, and why; and a *retryable* mid-batch failure journals the
+remainder instead, which is what the wholly-offline path and a single-album request already do. Note
+`skipped` is per chunk and must not be summed as though it described the whole request - an album
+that was never sent is not an album the server already had.
 
 The response returns `status`, which is `pending` or an approval state. Needler must render the status the server returned rather than inferring it from the cached role, because the role may have changed moments earlier. Requests placed while offline queue locally and submit on reconnect.
 
@@ -418,7 +427,7 @@ flowchart LR
 Three shapes in this lane constrain what the screen can offer:
 
 - **Download task ids are strings**, not integers, and every `*_at` on a task is epoch seconds as a float — unlike the `/requests` lane, which uses ISO-8601 strings. Both appear on the same screen, so neither convention can be assumed globally.
-- **`GET /api/v1/downloads` has no `total` and no `total_pages`.** Paging is blind: ask for a page, and a full page means there may be another. An infinitely scrolling list is fine; a "page 3 of 7" control is not implementable.
+- **`GET /api/v1/downloads` has no `total` and no `total_pages`.** Paging is blind: ask for a page, and a full page means there may be another. An infinitely scrolling list is fine; a "page 3 of 7" control is not implementable. The same blindness governs **pruning**: a task the server has forgotten must eventually leave the mirror, or it inflates the badge for ever - but silence on a truncated walk proves nothing, so a row may only be deleted when the walk ended on a **short page** *and* `requests/active` answered. A walk that stopped at its page cap, or a failed `requests/active` folded into an empty list, would otherwise delete every parked approval on one timeout.
 - **`retryDownload` returns a *new* task id.** The old task is not resurrected, so the local `pull` row must be re-keyed rather than updated in place, or the screen goes on polling a task the server has forgotten.
 
 `GET /api/v1/requests/active` and `GET /api/v1/requests/wanted` have **no paging at all** and return the whole list. Only `GET /api/v1/requests/history` pages, taking `page`, `page_size`, `status` and `sort`.
@@ -644,7 +653,7 @@ The third one pulls artist following into v1, which the feature scope had deferr
 | Condition | Interval | Mechanism |
 | --- | --- | --- |
 | Pulls screen foregrounded | 2 s | Coroutine, full task list |
-| App foregrounded, elsewhere | 20 s | Coroutine, activity summary |
+| App foregrounded, elsewhere | 20 s | Coroutine, activity summary. Owned by `:app` - only the host knows what "elsewhere" is |
 | Pull placed, app backgrounded | 1 min, then backing off to 15 min | Expedited `WorkManager` |
 | Active pulls, app backgrounded | 15 min | Periodic `WorkManager` |
 | No active pulls | 6 h | Periodic `WorkManager`, also drives metadata sync |
@@ -881,7 +890,7 @@ One Room database holds the mirror, the pins, the cache index and the write queu
 | `favourite` | Entity type + ID | starred-at, resolved release-group MBID + disc + track, pending-sync |
 | `pin` | Release-group MBID | pinned-at, source (manual or auto-pulled), download state, tracks complete/total, bytes done/total, error |
 | `audio_cache` | Track key | file path, byte size, complete, pinned, last played, play count, downloaded-at, and four `source_*` fingerprint columns |
-| `pull` | Release-group MBID | task ID, status, percent, files done, files total, downloaded bytes, total bytes, `search_job_id`, `candidate_index`, source, error, created-at, updated-at |
+| `pull` | Release-group MBID | task ID, status, percent, files done, files total, downloaded bytes, total bytes, `search_job_id`, `candidate_index`, `request_kind`, `recording_mbid`, source, error, created-at, updated-at |
 | `write_queue` | Sequence | operation type, payload, attempts, last error |
 | `sync_state` | Singleton | library revision, last full sync, last delta sync, last scan time |
 | `stream_override` | Scope (track or album) + item ID | the rung pinned to that item |
@@ -897,6 +906,15 @@ The `album.format` and `album.bitrate` columns exist because screen 13 badges ev
 `audio_cache.pinned` is what makes one store serve both tiers. Eviction scans unpinned rows by `last_played` ascending until the device is back above its free-space floor; pinned rows are never offered as candidates at all.
 
 **`pull` carries `search_job_id` and `candidate_index`.** The first draft *required* the Searching and Needs-attention states — "`queued` with no `search_job_id`", "`queued` with a `search_job_id` but no `candidate_index`" — while the schema it specified stored neither, which made both states impossible to derive. They are columns. `pull` also carries `downloaded_bytes` and `total_size_bytes`, because the queue screen shows byte progress as well as a percentage and the two do not always agree.
+
+**`pull` carries `request_kind` and `recording_mbid`, and the table's own key is why.** The row is
+keyed on the release group, because that is what an album pull is. But `DELETE
+/api/v1/requests/active/{mbid}` and its retry twin take a `request_kind`, and for `track` they want
+the **recording** MBID - which the key is not. Without both columns the cancel this document
+specifies cannot be issued for a track request at all: the only id to hand is the release group, and
+sending that under `request_kind=album` cancels the album the track belongs to, silently and
+wrongly. A track row that reaches cancel with no recording MBID stored must therefore refuse rather
+than guess.
 
 **`favourite` carries resolved key columns.** Keyed on entity type plus entity id, it cannot join to `track`, whose identity is the (release group, disc, track) tuple rather than a single id. A starred track therefore stores the resolved tuple alongside the opaque id, so "show my starred songs" is a join rather than a fetch-then-filter. `pending_sync` marks a star made offline that the write queue has not yet replayed.
 
@@ -1024,7 +1042,7 @@ Ten things in the server, and eight in the design pack, constrain what Needler c
 
 "Prefer FLAC" is the one worth explaining. The request body carries no quality field: `POST /api/v1/requests/new` accepts only the MBIDs, title hints and the two artist-monitoring flags. Quality is a server-side policy under `/api/v1/download-clients/policy`, which is admin-only to change.
 
-The response does return `quality_snapshot_summary`, the policy applied to that request. So Needler can honestly show what quality will be sought, but a regular user cannot override it per album, and presenting it as a user toggle would be a lie.
+The response does return `quality_snapshot_summary`, the policy applied to that request. So Needler can honestly show what quality will be sought, but a regular user cannot override it per album, and presenting it as a user toggle would be a lie. It is **stored once, on the `album` row, and shown both on the album and on its pull** through the existing join - not duplicated onto `pull`, where it would be a second copy of one server answer with no way to tell which had gone stale.
 
 **Settled since: the summary is shown on the album and on its pull, and Settings carries nothing.** It is a fact about one request's outcome rather than a preference, so it rides on the `album` row and on the `pull`, and it is shown where the request is made — the album screen, the request sheet, and the pull's own detail. Settings has no quality control of any kind for the simple reason that the figure lives somewhere Settings cannot reach: it is on the album, not in any preference store. That leaves the design pack's whole **Pulling** section with nothing in it, so the section is not drawn. Letting an admin edit the policy from the app was the other half of the original question and is not in v1; it belongs with the rest of the admin surfaces under "Out of scope".
 

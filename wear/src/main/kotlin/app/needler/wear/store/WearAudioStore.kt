@@ -76,8 +76,19 @@ import kotlinx.coroutines.withContext
  * the very things this class exists to get right. REQUIREMENTS.md records the phone's version of those as
  * an actual shipped bug ("a row claiming a file is checked against the file existing"), which is reason
  * enough not to leave them behind a constructor no test can reach.
+ *
+ * A temporary directory is not a temporary *volume*, though, which is why [freeSpace] is a second
+ * parameter: see [WearFreeSpace] for the thirteen assertions that turned out to be measuring the build
+ * machine's drive rather than the store.
+ *
+ * @param root the store's directory. The app's `filesDir`; a temporary folder in a test.
+ * @param freeSpace how room on that volume is read. Defaults to [FileWearFreeSpace] over the same
+ *   [root], which is the real measurement and the only thing the app ever passes.
  */
-class WearAudioStore internal constructor(private val root: File) {
+class WearAudioStore internal constructor(
+    private val root: File,
+    private val freeSpace: WearFreeSpace = FileWearFreeSpace(root),
+) {
 
     private val writeLock: Mutex = Mutex()
 
@@ -103,29 +114,16 @@ class WearAudioStore internal constructor(private val root: File) {
     /**
      * Room on the volume the store sits on, read fresh.
      *
-     * Read fresh every time rather than cached, for the reason REQUIREMENTS.md gives for the phone: "it
-     * is read fresh every time, because a stale figure is precisely how a cache overshoots."
+     * Delegated to [freeSpace] rather than measured here, which is what lets a test state the volume it
+     * is testing against instead of inheriting the build machine's - see [WearFreeSpace]. The
+     * measurement itself, and the reasons for every part of it, moved to [FileWearFreeSpace] unchanged.
      *
-     * `usableSpace` and `totalSpace` rather than `StatFs`. It is the same measurement - both end at
-     * `statfs` - and it needs no Android import, which is what lets [WearStoreSpace] and every decision
-     * that depends on it be unit-tested on the JVM against a temporary directory. `usableSpace` is also
-     * the stricter of the two figures the platform offers, being free blocks minus the reserve a
-     * non-root process may not use, which is the right one for an app-private write.
+     * Still a function and still called on every room check rather than read once and kept, for the
+     * reason REQUIREMENTS.md gives for the phone: "it is read fresh every time, because a stale figure
+     * is precisely how a cache overshoots." A cache in front of this would be the one way the seam could
+     * change what the app does, so there is not one.
      */
-    fun space(): WearStoreSpace {
-        // The audio directory only exists once something has been written, and `usableSpace` answers
-        // 0 for a path that names no partition - so measuring it before the first ingest reported an
-        // unreadable volume, which `canAccept` refuses outright. That made the first transfer to a
-        // fresh watch fail with NoRoom and stay failing, because the directory that would have fixed
-        // the reading is created *after* the room check. The root is on the same volume and always
-        // exists, so it is the honest fallback.
-        val directory: File = audioDirectory().takeIf { it.isDirectory } ?: root
-        return try {
-            WearStoreSpace(usableBytes = directory.usableSpace, totalBytes = directory.totalSpace)
-        } catch (failure: SecurityException) {
-            WearStoreSpace.Unknown
-        }
-    }
+    fun space(): WearStoreSpace = freeSpace.read()
 
     /**
      * Writes one transferred track into the store.
