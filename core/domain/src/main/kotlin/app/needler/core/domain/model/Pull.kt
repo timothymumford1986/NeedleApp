@@ -285,6 +285,21 @@ public data class TrackRequest(
     val recordingMbid: RecordingMbid,
     val trackTitle: String? = null,
     val artistName: String? = null,
+    /**
+     * `monitor_artist` as the *album* request carries it — and **this lane has nowhere to send it**.
+     *
+     * REQUIREMENTS.md "Placing a request" puts the flag "on the request body", and the body it means
+     * is `POST /api/v1/requests/new`'s. `POST /api/v1/tracks/{recording_mbid}/request` takes a
+     * different body with no such field, so a value set here is journalled by the write queue,
+     * replayed, and then dropped at the wire boundary. Nothing in the app sets it today.
+     *
+     * Kept rather than deleted because the two request shapes are one domain concept and a caller
+     * that has the flag should not have to know which endpoint will carry it; deleting it would also
+     * silently drop the field from `write_queue` rows an older build has already written. It is
+     * documented here instead, because a parameter that is accepted and ignored is worse than one
+     * that is absent. Sending it would need a server-side field on the track endpoint, which is a
+     * question for a human rather than a client-side fix.
+     */
     val monitorArtist: Boolean = false,
 )
 
@@ -340,12 +355,29 @@ public enum class RequestStatus {
 /**
  * The result of `POST /api/v1/requests/batch`, capped at 500 items server-side.
  *
- * [overflow] is the server's own count of items beyond what it would accept.
+ * [requested] and [skipped] are the two figures the endpoint really reports. The cap is enforced at
+ * **decode time**: 501 items is a `422` before the handler runs, so a caller chunks to 500 and the
+ * repository does exactly that.
  */
 public data class BatchRequestReceipt(
     val requested: List<RequestReceipt>,
     val skipped: List<ReleaseGroupMbid>,
-    val overflow: Int,
+    /**
+     * Always `0`. Not a count of anything, and nothing may be built on it.
+     *
+     * REQUIREMENTS.md "Placing a request", item 2: the response carries an `overflow` field, "the
+     * first draft told callers to read it", and "the server never sets it to anything but `0`" —
+     * because a 501-item body never reaches the handler that would have counted the excess. This
+     * KDoc previously described it as "the server's own count of items beyond what it would accept",
+     * which is the first draft's error restated as a fact in the one place a caller would look it up.
+     *
+     * Kept as a field, with a default, so that the dead value has a documented home rather than
+     * being a silent omission a future reader re-adds from the wire DTO. Removing it was the
+     * preferred end state and was rejected only because [BatchRequestReceipt] is constructed by
+     * hand-written fakes in test source sets owned by other work in flight; dropping the parameter is
+     * a one-line change per file once those have caught up.
+     */
+    val overflow: Int = 0,
 )
 
 /**

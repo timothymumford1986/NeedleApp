@@ -8,10 +8,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * The exact words a bug report will contain, for every way the audio store declines to keep a stream.
+ * The exact words a bug report will contain, for every ending a streamed write can have - the refusals
+ * the store makes before it opens one, and the endings of a write it did open.
  *
  * These assertions are on whole strings on purpose, which is unusual and is the right trade here. The
- * value of this work is not that a line exists - it is that the line says which of six things happened
+ * value of this work is not that a line exists - it is that the line says which of nine things happened
  * and gives the numbers the decision was taken against. A test that asserted `line.contains("not
  * cached")` would pass on a line that named the wrong reason, which is the defect being fixed rather
  * than a regression of it.
@@ -142,6 +143,38 @@ class AudioRetentionEventTest {
 
         assertEquals(
             "not cached " + RG + "/2/9 - wrote 0 bytes with no declared length to check, discarded",
+            event.line,
+        )
+    }
+
+    @Test
+    fun `a reader that stopped short names the shortfall and what was taken`() {
+        // 128 bytes is an ID3v1 tag, which is what an Mp3Extractor reading to the end of the audio
+        // data leaves behind. Exact counts, not rounded: this line's whole job is to let a reader
+        // tell "a trailing tag" from "the user skipped the track" at a glance.
+        val event = AudioRetentionEvent.ReaderStoppedShort(
+            key = key,
+            shortfallBytes = 128L,
+            tailBytes = 128L,
+            declaredBytes = 9_929_813L,
+        )
+
+        assertEquals(DiagnosticsLevel.Debug, event.level)
+        assertEquals(
+            "reader stopped short on " + RG + "/2/9 - 128 of 9929813 declared bytes were never read; " +
+                "took 128 from the same response",
+            event.line,
+        )
+    }
+
+    @Test
+    fun `a store that stopped accepting bytes is a warning, not silence`() {
+        val event = AudioRetentionEvent.WriteFailed(key = key, writtenBytes = 3_145_728L)
+
+        assertEquals(DiagnosticsLevel.Warn, event.level)
+        assertEquals(
+            "not cached " + RG + "/2/9 - the store stopped accepting bytes after 3145728, " +
+                "nothing published",
             event.line,
         )
     }

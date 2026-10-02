@@ -302,10 +302,21 @@ public object CatalogueMappers {
      * The status is rendered as returned and never inferred from the cached role: an admin may have
      * changed the role moments earlier, and the server is the only authority on whether this
      * particular request needs approval.
+     *
+     * ## Only an explicit `false` is a rejection
+     *
+     * `POST /api/v1/requests/new` answers **202**, and 202 means the server has accepted the
+     * request. REQUIREMENTS.md "Placing a request" puts the in-band refusal — 200 with
+     * `success=false` — on cancel and retry of a *request* and nowhere else, and warns in the same
+     * breath that a client reading an acceptance as a failure "reports every successful pull as an
+     * error". `dto.success` is therefore consulted only when the server actually said `false`: an
+     * absent or null flag on an accepted 202 leaves [RequestAcceptedDto.status] as the answer, which
+     * is the field the requirement says to render. See [RequestAcceptedDto.success] for why absent
+     * and `false` used to be the same value here, and what that cost.
      */
     public fun receipt(dto: RequestAcceptedDto): RequestReceipt = RequestReceipt(
         releaseGroupMbid = dto.musicbrainzId.trim().takeIf { it.isNotEmpty() }?.let { ReleaseGroupMbid(it) },
-        status = if (!dto.success) RequestStatus.REJECTED else RequestStatus.fromServerToken(dto.status),
+        status = if (dto.success == false) RequestStatus.REJECTED else RequestStatus.fromServerToken(dto.status),
         taskId = null,
         qualityPolicySummary = dto.qualitySnapshotSummary,
         message = dto.message.takeIf { it.isNotBlank() },

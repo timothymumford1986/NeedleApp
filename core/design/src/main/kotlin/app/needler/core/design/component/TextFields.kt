@@ -19,7 +19,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,6 +32,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.theme.NeedlerTheme
@@ -123,11 +126,19 @@ fun NeedlerLabelledTextField(
                         .background(colors.surface)
                         .border(sizes.hairlineThickness, borderColor, shape)
                         .defaultMinSize(minHeight = sizes.textFieldMinHeight)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        // The 8dp of vertical air belongs to the text, not to the row. A
+                        // [trailingIcon] is a 48dp touch target - the floor REQUIREMENTS.md
+                        // "Accessibility" sets - and inside a row that padded itself it would make
+                        // the field 64dp tall, ten more than the two fields above it on Connect.
+                        // Padding the text alone leaves the 48dp target inside the pack's 54dp box.
+                        .padding(start = 16.dp, end = if (trailingIcon == null) 16.dp else 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    Box(
+                        modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
                         if (value.isEmpty() && placeholder != null) {
                             Text(
                                 text = placeholder,
@@ -154,6 +165,140 @@ fun NeedlerLabelledTextField(
         }
     }
 }
+
+/**
+ * [NeedlerLabelledTextField] for a secret, with a reveal toggle.
+ *
+ * Masked fields on Connect had no way to show what was typed. That screen is reached by someone
+ * who is already locked out, on a phone keyboard, often with a generated secret of 32 or 64
+ * characters, and a mis-typed character there is indistinguishable from a wrong password: both
+ * come back as "that username or password was rejected". The toggle turns a guessing game into
+ * something the user can check.
+ *
+ * ## It is a control, not a decoration
+ *
+ * The toggle is a [NeedlerIconButton], so it is a `Role.Button` with a 48dp touch target - the
+ * floor REQUIREMENTS.md "Accessibility" sets - and its content description comes from
+ * [secretRevealContentDescription], which states the current state *and* what a tap does, and
+ * which reads differently in the two states. A toggle whose description never changes announces
+ * the same thing after being pressed as before it, which tells a screen-reader user nothing about
+ * whether the press worked; the device audit reads these labels and that is the defect it looks
+ * for.
+ *
+ * ## Masked by default, and no control on an empty field
+ *
+ * [VisualTransformation] starts as [PasswordVisualTransformation] on every composition: revealing
+ * a secret is a choice the user makes each time, never a state the screen restores for them. And
+ * while [value] is empty there is nothing to reveal, so the toggle is not drawn at all rather than
+ * offered as a tap that does nothing visible.
+ *
+ * The reveal choice survives the field going empty and being typed again, which is what someone
+ * who cleared a half-typed secret to start over wants: they turned it on to watch themselves type.
+ * The toggle is gone while the field is empty, so it is the next character that shows it is still
+ * on.
+ *
+ * ## No placeholder, still
+ *
+ * This component takes no `placeholder`, and that is deliberate rather than an omission. The
+ * design pack draws sixteen bullets inside the password box; transcribed as placeholder text it
+ * made the one field that must look obviously empty look obviously full, and made TalkBack read
+ * out sixteen bullet characters where a field's supporting text should be. Masking is
+ * [PasswordVisualTransformation]'s job, on characters the user actually typed. A reveal toggle
+ * does not bring any of that back - it is a sibling control with its own label, not a text node
+ * inside the field's decoration - and leaving the parameter off means it cannot be re-introduced
+ * through this component by accident.
+ *
+ * @param secretName the secret's name as a screen reader should say it - "Password", "Proxy
+ *   password", "Header 2 value". Not [label], which the pack writes uppercase ("PASSWORD") and
+ *   which several fields on one form can repeat; this is spoken, so it is sentence case and
+ *   distinct per field.
+ */
+@Composable
+fun NeedlerSecretTextField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    secretName: String,
+    modifier: Modifier = Modifier,
+    helperText: String? = null,
+    errorText: String? = null,
+    enabled: Boolean = true,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+) {
+    var revealRequested by remember { mutableStateOf(false) }
+    val revealed: Boolean = revealRequested && value.isNotEmpty()
+    val colors = NeedlerTheme.colors
+
+    NeedlerLabelledTextField(
+        label = label,
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        helperText = helperText,
+        errorText = errorText,
+        enabled = enabled,
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        visualTransformation = if (revealed) {
+            VisualTransformation.None
+        } else {
+            PasswordVisualTransformation()
+        },
+        trailingIcon = if (value.isEmpty()) {
+            null
+        } else {
+            {
+                NeedlerIconButton(
+                    contentDescription = secretRevealContentDescription(secretName, revealed),
+                    onClick = { revealRequested = !revealRequested },
+                    enabled = enabled,
+                    visualSize = NeedlerTheme.sizes.minTouchTarget,
+                ) {
+                    NeedlerStrokeIcon(
+                        pathData = if (revealed) PathEyeOpen else PathEyeClosed,
+                        tint = if (enabled) colors.textSecondary else colors.textMuted,
+                        size = 20.dp,
+                    )
+                }
+            }
+        },
+    )
+}
+
+/**
+ * What a screen reader announces for the reveal toggle on [NeedlerSecretTextField].
+ *
+ * A plain function, and public, so the two strings can be asserted on in a unit test with no
+ * Robolectric and no rendering. What matters about them is not how they look but that they say
+ * which state the field is in, say what a tap will do, and **differ** between the two states -
+ * and a screenshot cannot check any of the three.
+ */
+fun secretRevealContentDescription(secretName: String, revealed: Boolean): String =
+    if (revealed) {
+        secretName + " is showing. Tap to hide it."
+    } else {
+        secretName + " is hidden. Tap to show it."
+    }
+
+/**
+ * An open eye, on the pack's 24x24 viewport with its 1.8-unit round-capped stroke: the lens, then
+ * the pupil as two half-circle arcs.
+ *
+ * Drawn when the secret **is** showing. The glyph states the field's current condition rather than
+ * the action a tap performs, which is the same convention as the chevron on the proxy disclosure
+ * beneath it; the action is in the content description, where a screen reader will actually find
+ * it, and the two conventions must not be mixed on one screen.
+ *
+ * Private to this file rather than added to `Icons.kt`, because the reveal toggle is the only
+ * thing in the design that uses an eye. It moves to the shared set the day a second caller wants
+ * one.
+ */
+private const val PathEyeOpen: String =
+    "M3 12 q9 -8 18 0 q-9 8 -18 0 M14.5 12 a2.5 2.5 0 1 1 -5 0 a2.5 2.5 0 1 1 5 0"
+
+/** The same eye struck through: the secret is masked, which is every field's starting state. */
+private const val PathEyeClosed: String = PathEyeOpen + " M4 20 L20 4"
 
 /**
  * The search field from Library and Search (02, 03, 09, 10).

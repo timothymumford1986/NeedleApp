@@ -39,6 +39,16 @@ import app.needler.core.domain.model.TrackKey
  * report with no lines at all points at the write path. Without it, the absence of evidence has two
  * explanations.
  *
+ * ## Opening the write is not the end of the path
+ *
+ * Instrumenting the refusals above was not enough, and the way it failed is worth recording. A device
+ * on the build that added them played a track with `format=raw` and a full `Content-Length` - so the
+ * write *was* opened - and the log still held nothing from this path. Every refusal had a line; what
+ * had none was the ending *after* a handle exists. [ReaderStoppedShort] and [WriteFailed] are those
+ * endings, and [IncompleteWrite] is now reached from the streaming path rather than being short-circuited
+ * by a duplicate check in `WriteThroughSink`. The lesson generalises: a log that covers every way a
+ * function declines still says nothing about the writes it granted.
+ *
  * ## Why the reason is a log line and not a return value
  *
  * [AudioCacheWriter.openWrite] deliberately still returns a plain nullable handle. Its KDoc is
@@ -227,6 +237,63 @@ public sealed interface AudioRetentionEvent {
                 }
                 return "not cached " + key.canonicalString + " - " + body
             }
+    }
+
+    /**
+     * The reader closed the stream before the end of the file, and the tail was taken from the same
+     * response so that the file on disk is whole.
+     *
+     * ## Why a read that reached the end of the track can still be short
+     *
+     * An extractor reads the *track*, and a file is not only its track. `Mp3Extractor` asks its seeker
+     * where the audio data ends and reports end-of-stream there; with a Xing or VBRI header that is the
+     * byte count the encoder wrote into the header, so a trailing ID3v1 tag (128 bytes), Lyrics3v2 or
+     * APEv2 block is never requested. Media3 reads nothing from a `DataSource` that its extractor did
+     * not ask for, so the write ends a tag's worth of bytes short of `Content-Length` on a track that
+     * played perfectly from the first byte to the last - and the store, holding the write to the length
+     * the response declared, discarded it. Every play, every track. That is what a device reporting
+     * `Cached while listening 0 B` beside `Downloaded 440 MB` looked like from the outside.
+     *
+     * [DiagnosticsLevel.Debug]: nothing failed, and the line exists so that the next report of an empty
+     * cache says whether the tail was taken, how big it was, and therefore whether the reader or the
+     * store is the half to look at.
+     *
+     * @property shortfallBytes how far short of [declaredBytes] the reader stopped.
+     * @property tailBytes how much of that shortfall was actually read. Less than [shortfallBytes] means
+     *   the body ended early or the read was interrupted, and the store then refuses the write and
+     *   reports [IncompleteWrite] with both counts.
+     * @property declaredBytes the length the write is held to.
+     */
+    public data class ReaderStoppedShort(
+        override val key: TrackKey,
+        public val shortfallBytes: Long,
+        public val tailBytes: Long,
+        public val declaredBytes: Long,
+    ) : AudioRetentionEvent {
+        override val level: DiagnosticsLevel get() = DiagnosticsLevel.Debug
+        override val line: String
+            get() = "reader stopped short on " + key.canonicalString + " - " + shortfallBytes +
+                " of " + declaredBytes + " declared bytes were never read; took " + tailBytes +
+                " from the same response"
+    }
+
+    /**
+     * The store stopped accepting bytes part way through, so there is nothing to publish.
+     *
+     * A full volume, a file that went away underneath the write, a database that would not answer. The
+     * handle has already thrown its partial away by the time this is reported, and playback never
+     * noticed - which is the rule, and exactly why nothing else in the app will ever mention it.
+     *
+     * @property writtenBytes how far the write got before it gave up.
+     */
+    public data class WriteFailed(
+        override val key: TrackKey,
+        public val writtenBytes: Long,
+    ) : AudioRetentionEvent {
+        override val level: DiagnosticsLevel get() = DiagnosticsLevel.Warn
+        override val line: String
+            get() = "not cached " + key.canonicalString + " - the store stopped accepting bytes after " +
+                writtenBytes + ", nothing published"
     }
 
     public companion object {

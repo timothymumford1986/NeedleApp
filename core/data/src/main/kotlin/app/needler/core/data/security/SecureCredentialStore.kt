@@ -2,6 +2,7 @@ package app.needler.core.data.security
 
 import android.content.Context
 import android.content.SharedPreferences
+import app.needler.core.domain.diagnostics.DiagnosticsLevel
 import app.needler.core.domain.diagnostics.DiagnosticsSink
 import app.needler.core.network.CredentialProvider
 import app.needler.core.network.ProxyCredentialStore
@@ -27,10 +28,12 @@ import kotlinx.coroutines.flow.asStateFlow
  *  * **Never written to Room, logs, analytics or crash reports.** Nothing in this class logs a
  *    value, and nothing returns a value that reads as a credential in a stack trace: [toString] is
  *    overridden to say nothing at all, because the default data-class-ish rendering of a holder
- *    object is exactly how a token ends up in a bug report. The one thing this package does log is
- *    the *failure to open the file* - see `CredentialStoreUnlock.kt` and
- *    `credentialStoreDiagnostics` for why that is required rather than merely allowed, and why it
- *    carries no secret.
+ *    object is exactly how a token ends up in a bug report. What this package does log is the
+ *    *failure to open the file* and, per write, **which key was written and whether it reached the
+ *    disk** - a key name from this class's own constants and a boolean, never a value. See
+ *    `CredentialStoreUnlock.kt` and `credentialStoreDiagnostics` for why logging here is required
+ *    rather than merely allowed, and [commit] for why the successful case has to be on the record
+ *    too.
  *  * `android:allowBackup="false"` in the `:app` manifest keeps the file off cloud backups. That
  *    manifest belongs to another module; if the flag is ever flipped on, this file must be excluded
  *    explicitly, because a Keystore-encrypted blob restored onto a different device is not just
@@ -49,6 +52,11 @@ import kotlinx.coroutines.flow.asStateFlow
  * The app-password secret is returned by the server exactly once and is never re-fetchable, so a
  * failed write must abort the flow and revoke it (Authentication point 3). `apply()` cannot report
  * failure; `commit()` can, and every setter returns whether the value actually reached the disk.
+ *
+ * Every one of those commits also leaves a diagnostics line, successful or not. [commit] says why
+ * the successful half is not noise: without it, a device that came back on the Connect screen with
+ * a silent log could not distinguish a store that was never written from a session lost elsewhere,
+ * and that ambiguity cost an afternoon on a cable.
  *
  * ## What happens when the file will not open
  *
@@ -182,7 +190,7 @@ public class SecureCredentialStore private constructor(
      * is intercepted for no visible reason.
      */
     override fun saveProxyCredentials(credentials: ProxyCredentials): Boolean {
-        val committed: Boolean = commit {
+        val committed: Boolean = commit(KEY_PROXY_HEADERS) {
             if (credentials.isEmpty) {
                 it.remove(KEY_PROXY_HEADERS)
             } else {
@@ -208,6 +216,10 @@ public class SecureCredentialStore private constructor(
     override fun onBearerRejected() {
         cachedBearer = null
         sessionStaleState.value = true
+        // Logged for the same reason a successful write is: this is one of the two ways a session
+        // the user had can stop existing, and a log that records only the unlock failures cannot
+        // tell it apart from a session that was never saved.
+        report(DiagnosticsLevel.Warn, KEY_COMPANION_BEARER, "discarded - the /api/v1 lane said 401")
         runCatching {
             preferences.edit()
                 .remove(KEY_COMPANION_BEARER)
@@ -236,6 +248,11 @@ public class SecureCredentialStore private constructor(
     override fun onAppPasswordRejected() {
         cachedAppPassword = null
         appPasswordRepairNeededState.value = true
+        report(
+            DiagnosticsLevel.Warn,
+            KEY_APP_PASSWORD,
+            "discarded - Subsonic said the secret was revoked; the bearer is kept to mint another",
+        )
         runCatching {
             preferences.edit()
                 .remove(KEY_APP_PASSWORD)
@@ -290,7 +307,9 @@ public class SecureCredentialStore private constructor(
     public fun saveServerUrl(serverUrl: ServerUrl): Boolean {
         val rendered: String = serverUrl.baseUrl
         runCatching { serverMirror?.edit()?.putString(KEY_SERVER_URL, rendered)?.apply() }
-        val committed: Boolean = commit { it.putString(KEY_SERVER_URL, rendered) }
+        val committed: Boolean = commit(KEY_SERVER_URL + " (and the unencrypted mirror)") {
+            it.putString(KEY_SERVER_URL, rendered)
+        }
         if (committed) {
             cachedServerUrl = rendered
             parsedServerUrl = serverUrl
@@ -305,7 +324,7 @@ public class SecureCredentialStore private constructor(
      * the app can warn from day 25 rather than letting re-authentication be a surprise.
      */
     public fun saveCompanionBearer(token: String, issuedAtMillis: Long): Boolean {
-        val committed: Boolean = commit {
+        val committed: Boolean = commit(KEY_COMPANION_BEARER + " + " + KEY_BEARER_ISSUED_AT) {
             it.putString(KEY_COMPANION_BEARER, token)
             it.putLong(KEY_BEARER_ISSUED_AT, issuedAtMillis)
         }
@@ -325,7 +344,7 @@ public class SecureCredentialStore private constructor(
      * credential neither side can use.
      */
     public fun saveAppPassword(secret: String): Boolean {
-        val committed: Boolean = commit { it.putString(KEY_APP_PASSWORD, secret) }
+        val committed: Boolean = commit(KEY_APP_PASSWORD) { it.putString(KEY_APP_PASSWORD, secret) }
         if (committed) {
             cachedAppPassword = secret
             appPasswordRepairNeededState.value = false
@@ -341,7 +360,7 @@ public class SecureCredentialStore private constructor(
      * explicit call and not a side effect of a TLS failure.
      */
     public fun pinCertificate(sha256Fingerprint: String?): Boolean {
-        val committed: Boolean = commit {
+        val committed: Boolean = commit(KEY_CERT_FINGERPRINT) {
             if (sha256Fingerprint == null) {
                 it.remove(KEY_CERT_FINGERPRINT)
             } else {
@@ -411,7 +430,7 @@ public class SecureCredentialStore private constructor(
      */
     public fun clear(): Boolean {
         runCatching { serverMirror?.edit()?.clear()?.apply() }
-        val committed: Boolean = commit { it.clear() }
+        val committed: Boolean = commit("every key (sign-out)") { it.clear() }
         if (committed) {
             cachedServerUrl = null
             cachedBearer = null
@@ -429,17 +448,55 @@ public class SecureCredentialStore private constructor(
     override fun toString(): String =
         "SecureCredentialStore(provisioned=" + isFullyProvisioned() + ", state=" + storeState + ")"
 
-    private fun commit(block: (SharedPreferences.Editor) -> Unit): Boolean {
-        if (!healIfLocked()) return false
+    /**
+     * One synchronous write, reported either way.
+     *
+     * ## Why a *successful* write is logged, when nothing else on a healthy launch is
+     *
+     * Because the absence of a line was indistinguishable from the absence of a write. The unlock
+     * path logs only failures - deliberately, and `EncryptedCredentialFile` argues the case - so a
+     * device that came back on the Connect screen with a silent log supported two readings at once:
+     * the store was never written, or the store was written and something else lost the session.
+     * Those have different fixes, and separating them took a device, a cable and an afternoon. One
+     * line per write settles it from a log the user can share, which is what REQUIREMENTS.md
+     * "Observability" asks a diagnostics log to be for.
+     *
+     * It carries no secret and cannot be made to. [what] is a **key name**, supplied by this class
+     * from its own `KEY_` constants and never derived from a value, and the only other thing on the
+     * line is whether the commit returned true. The `SecurityException` from a failed encryption
+     * stays unlogged for the reason it always did: its message can quote the value that failed.
+     *
+     * The level is deliberately asymmetric. A write that landed is `Info`, which is one line per
+     * sign-in and two per silent repair; a write that did not is `Error`, because the app-password
+     * is shown exactly once and the caller is about to abort and revoke on the strength of it.
+     *
+     * @param what the preference key or keys this write touches, for the log line.
+     */
+    private fun commit(what: String, block: (SharedPreferences.Editor) -> Unit): Boolean {
+        if (!healIfLocked()) {
+            report(DiagnosticsLevel.Error, "wrote " + what, "refused, the store is locked")
+            return false
+        }
         val editor: SharedPreferences.Editor = preferences.edit()
         block(editor)
-        return try {
+        val committed: Boolean = try {
             editor.commit()
         } catch (error: SecurityException) {
             // Deliberately swallowed without logging: the exception message can contain the value
             // that failed to encrypt. The boolean is the signal the caller must act on.
             false
         }
+        report(
+            level = if (committed) DiagnosticsLevel.Info else DiagnosticsLevel.Error,
+            what = "wrote " + what,
+            outcome = if (committed) "reached the disk" else "did NOT reach the disk",
+        )
+        return committed
+    }
+
+    /** One line, in the same `NeedlerCreds` voice as the unlock sequence. Never a value. */
+    private fun report(level: DiagnosticsLevel, what: String, outcome: String) {
+        diagnostics.record(level, "credential store: " + what + " - " + outcome)
     }
 
     /**

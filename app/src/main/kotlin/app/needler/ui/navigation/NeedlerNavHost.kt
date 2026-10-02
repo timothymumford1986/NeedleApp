@@ -168,9 +168,19 @@ private fun genreRoute(genre: String): String = "genre/" + Uri.encode(genre)
  * [NeedlerNavigationScaffold]'s content slot, so switching tab recomposes the
  * content and leaves the bar, the rail and the player sidebar alone.
  *
- * @param startConnected start at Home rather than Connect. The host passes true
- *   once a saved session exists; until `SessionRepository` has an
- *   implementation behind it, a cold start begins at Connect.
+ * @param startConnected start at Home rather than Connect. **Nothing passes it,
+ *   and that is now deliberate.** It was written for a host that would resolve
+ *   the saved session before this composes, which was never wired up - and for
+ *   eleven versions a cold start therefore dropped a signed-in user on the
+ *   sign-in form, because `startDestination` is read once and the default is
+ *   false. The session is resolved one layer down instead:
+ *   `ConnectViewModel.arriveWith` reports `connected` the moment it sees a usable
+ *   session and this graph pops Connect off the back stack exactly as it does
+ *   after a real sign-in, underneath the splash that `NeedlerApp` draws over the
+ *   navigation. That KDoc carries the reasoning and the alternative rejected.
+ *   The parameter stays so a preview or a test can start at Home without a
+ *   session; it must not become the production answer again without resolving
+ *   the session first, which is the part that cost the eleven versions.
  */
 // ModalBottomSheet carries @ExperimentalMaterial3Api in some Material3
 // releases and not others. Opting in costs a warning when it is stable and

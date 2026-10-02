@@ -431,6 +431,10 @@ public class AudioCacheStoreWriter(
         private suspend fun commitLocked(): Outcome<CachedAudio> {
             if (finished) return Outcome.Failure(NeedlerError.Cancelled)
             if (failed) {
+                // The caller is a Media3 data source, which has nowhere to show an error: a cache
+                // write may never fail the playback it rides along with, so the returned failure is
+                // swallowed by design. One line, because otherwise nothing in the app mentions it.
+                report(AudioRetentionEvent.WriteFailed(key = key, writtenBytes = written))
                 discardLocked()
                 return Outcome.Failure(NeedlerError.Unexpected("audio cache write failed"))
             }

@@ -1,12 +1,14 @@
 package app.needler.core.data.repository
 
 import app.needler.core.data.mapper.CatalogueMappers
+import app.needler.core.data.mapper.ErrorMapper
 import app.needler.core.data.mapper.networkCall
 import app.needler.core.data.platform.NetworkMonitor
 import app.needler.core.data.security.SecureCredentialStore
 import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.NeedlerError
+import app.needler.core.domain.model.OfflineCause
 import app.needler.core.domain.model.OpenSubsonicExtension
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.PlayerOnlyReason
@@ -17,18 +19,23 @@ import app.needler.core.domain.model.ServerProbe
 import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.model.User
 import app.needler.core.domain.repository.SessionRepository
+import app.needler.core.network.NetworkError
 import app.needler.core.network.ServerUrl
 import app.needler.core.network.ServerUrlResult
 import app.needler.core.network.capability.CapabilityProbe
 import app.needler.core.network.capability.CapabilityProbeResult
 import app.needler.core.network.capability.ServerCapabilitiesDto
+import app.needler.core.network.tls.CertificateDetails
+import app.needler.core.network.tls.TlsCertificateProbe
 import app.needler.core.network.v1.V1Api
 import app.needler.core.network.v1.dto.AppPasswordCreateResponseDto
 import app.needler.core.network.v1.dto.AppPasswordDto
 import app.needler.core.network.v1.dto.AppPasswordListDto
+import app.needler.core.network.v1.dto.AuthProvidersDto
 import app.needler.core.network.v1.dto.AuthResponseDto
 import app.needler.core.network.v1.dto.DeviceSessionResponseDto
 import app.needler.core.network.v1.dto.UserDto
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -64,6 +71,15 @@ public class DefaultSessionRepository(
     private val capabilityProbe: CapabilityProbe,
     private val networkMonitor: NetworkMonitor,
     private val nowMillis: () -> Long = System::currentTimeMillis,
+    /**
+     * Reads the leaf certificate of a rung that failed TLS, so the Connect screen can show a
+     * fingerprint instead of "no connection".
+     *
+     * Defaulted, so the Hilt module needs no change for it: this object holds no state, keeps no
+     * socket between calls and is only ever used on the Connect path, so one per repository costs
+     * nothing. A parameter at all only so a test can answer for it without a server.
+     */
+    private val certificates: TlsCertificateProbe = TlsCertificateProbe(),
 ) : SessionRepository {
 
     private val sessionState: MutableStateFlow<SessionState> = MutableStateFlow(initialState())
@@ -113,11 +129,11 @@ public class DefaultSessionRepository(
             )
             is ServerUrlResult.Valid -> parsed.url
         }
-        var lastFailure: NeedlerError? = null
+        var bestFailure: NeedlerError? = null
         for (candidate in url.ladder()) {
             currentCoroutineContext().ensureActive()
             credentials.saveServerUrl(candidate)
-            when (val call = networkCall { v1.authProviders() }) {
+            when (val call = probeRung(candidate)) {
                 is Outcome.Success -> return Outcome.Success(
                     ServerProbe(
                         identity = ServerIdentity(baseUrl = candidate.baseUrl),
@@ -132,7 +148,10 @@ public class DefaultSessionRepository(
                 is Outcome.Failure -> {
                     val failure: NeedlerError = probeFailure(call.error, candidate)
                     if (endsTheLadder(failure)) return Outcome.Failure(failure)
-                    lastFailure = failure
+                    val best: NeedlerError? = bestFailure
+                    if (best == null || tellsTheUserMore(failure) > tellsTheUserMore(best)) {
+                        bestFailure = failure
+                    }
                 }
             }
         }
@@ -140,7 +159,111 @@ public class DefaultSessionRepository(
         // Nothing answered. Leave the address the user typed saved rather than whichever rung was
         // tried last, so Settings and a retry both show what they entered.
         credentials.saveServerUrl(url)
-        return Outcome.Failure(lastFailure ?: NeedlerError.NotADroppedNeedleServer(url.baseUrl))
+        return Outcome.Failure(bestFailure ?: NeedlerError.NotADroppedNeedleServer(url.baseUrl))
+    }
+
+    /**
+     * How much a rung's failure is worth saying, so a finished walk reports its most informative
+     * rung rather than whichever one happened to be last.
+     *
+     * Reporting the last rung loses the only failure on this screen whose fix is a field the user
+     * cannot see. A bare domain name puts `https` first, which is where a forward-auth proxy -
+     * Cloudflare Access, Authelia - intercepts; the two cleartext rungs after it are then refused
+     * by a port with nothing on it, and the proxy notice the Connect screen has a whole state and
+     * a whole form for is replaced by "no connection". That is the 45-second dead screen the proxy
+     * work was done to remove, re-introduced by the ladder.
+     *
+     * An interception therefore outranks everything, and anything that answered at all outranks
+     * [NeedlerError.Offline], which only ever says that nothing was listening. Ties go to the
+     * earlier rung, because [ServerUrl.ladder] is already ordered by what the address most likely
+     * is.
+     *
+     * The walk is **not** cut short for an interception, unlike an untrusted certificate. A proxy
+     * on 443 says nothing about DroppedNeedle's own port on the same host, so a LAN rung may still
+     * answer and deserves its turn; only the message is affected.
+     */
+    private fun tellsTheUserMore(error: NeedlerError): Int = when {
+        error is NeedlerError.Unexpected && error.cause is NetworkError.AuthenticatingProxy -> 2
+        error is NeedlerError.Offline -> 0
+        else -> 1
+    }
+
+    /**
+     * One rung of the walk: `GET /api/v1/auth/providers` against whatever [credentials] now holds.
+     *
+     * Not [networkCall], which is otherwise this module's only way to make a request, because
+     * `ErrorMapper` deliberately flattens [NetworkError.TlsNotTrusted] into
+     * [NeedlerError.Offline] - the transport only ever saw a handshake fail, it has no
+     * [CertificateInfo] to offer, and for the rest of the app a distrusted server really is just
+     * unreachable. The Connect screen is the one caller that needs the certificate itself, and
+     * REQUIREMENTS.md "Self-signed certificates" puts the reading of it here: "show the
+     * fingerprint, subject and expiry, and let the user pin that exact certificate for this one
+     * host".
+     *
+     * Flattening it here would be a silent downgrade, which is the one thing the ladder must never
+     * do. A bare domain name puts `https` first; a self-hosted server with its own certificate
+     * fails that rung, and an [NeedlerError.Offline] does not end the walk, so the probe would go
+     * on to `http` on 8688 and then 80, succeed on cleartext if anything were listening, and
+     * complete onboarding over plain HTTP against a server the user had set up with TLS - never
+     * having been shown the fingerprint they were entitled to decide on.
+     */
+    private suspend fun probeRung(candidate: ServerUrl): Outcome<AuthProvidersDto> = try {
+        Outcome.Success(v1.authProviders())
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (failure: Throwable) {
+        Outcome.Failure(
+            if (failure is NetworkError.TlsNotTrusted) {
+                certificateDecision(candidate)
+            } else {
+                ErrorMapper.toNeedlerError(failure)
+            },
+        )
+    }
+
+    /**
+     * Reads the certificate the failing rung presented and decides which of the two certificate
+     * failures the user is looking at.
+     *
+     * [TlsCertificateProbe] completes a second handshake without validating the chain, purely to
+     * read the leaf. Nothing is trusted by doing so - the socket is closed without a byte being
+     * written to it - and the certificate becomes an exception only once the **user** pins it.
+     *
+     * A pin that exists and does not match is [NeedlerError.CertificateChanged], which must fail
+     * loudly and be re-confirmed; anything else is [NeedlerError.CertificateUntrusted], the
+     * ordinary self-hosted case. Either way the walk stops, because the user has a decision to
+     * make and the next rung would make it for them.
+     *
+     * When the second handshake cannot be completed either, there is no fingerprint to show, so
+     * this falls back to the flattened answer the rest of the app would have given - an address
+     * that cannot be reached. The alternative, an empty certificate prompt, asks the user to
+     * compare a fingerprint that is not there.
+     */
+    private suspend fun certificateDecision(candidate: ServerUrl): NeedlerError {
+        val details: CertificateDetails? = try {
+            certificates.probe(candidate)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (unreadable: Exception) {
+            // Swallowed rather than logged: this class holds no log, and the handshake that
+            // produced `TlsNotTrusted` has already been logged by the engine. Anything thrown
+            // here - the host stopped answering between the two handshakes, no TLS provider for
+            // the algorithm it offered - means the same thing to the caller.
+            null
+        }
+        if (details == null) return NeedlerError.Offline(OfflineCause.CONNECTION_FAILED)
+        val presented = CertificateInfo(
+            sha256Fingerprint = details.sha256Hex,
+            subject = details.subject,
+            issuer = details.issuer,
+            notAfter = Instant.fromEpochMilliseconds(details.notAfter.time),
+        )
+        val pinned: String? = credentials.pinnedCertificateSha256()
+        return if (pinned != null && pinned != presented.sha256Fingerprint) {
+            NeedlerError.CertificateChanged(expectedFingerprint = pinned, presented = presented)
+        } else {
+            NeedlerError.CertificateUntrusted(presented)
+        }
     }
 
     /**

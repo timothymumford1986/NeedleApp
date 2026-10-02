@@ -4,6 +4,7 @@ import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineCause
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.PlayerOnlyReason
 import app.needler.core.domain.model.ReonboardingReason
 import app.needler.core.domain.model.SessionState
 import app.needler.core.network.ApiLane
@@ -133,6 +134,130 @@ class ConnectViewModelTest {
             OfflineCause.DNS_FAILURE,
             (failure as ConnectFailure.ServerUnreachable).cause,
         )
+    }
+
+    /**
+     * REQUIREMENTS.md "Accepted URL forms": a bare host is typed, and the probe walks
+     * `ServerUrl.ladder` behind the user's back. When nothing answers, the three addresses it
+     * dialled are the only thing that can tell someone running on port 8080 why - so the message
+     * has to contain them, in the ladder's own order.
+     */
+    @Test
+    fun `a bare host that answers nowhere names every address that was tried`() = runTest {
+        repository.probeOutcome =
+            Outcome.Failure(NeedlerError.Offline(OfflineCause.CONNECTION_FAILED))
+        val viewModel = viewModel().apply {
+            onServerChange("music.mumfordhome.com")
+            onUsernameChange("yourname")
+            onPasswordChange("hunter2")
+        }
+
+        viewModel.connect()
+
+        val detail: String = requireNotNull(viewModel.state.value.failure).detail
+        assertEquals(
+            listOf(
+                "https://music.mumfordhome.com",
+                "http://music.mumfordhome.com:8688",
+                "http://music.mumfordhome.com",
+            ),
+            (viewModel.state.value.failure as ConnectFailure.ServerUnreachable).attempted,
+        )
+        assertTrue(
+            detail,
+            detail.contains(
+                " Needler tried https://music.mumfordhome.com, " +
+                    "http://music.mumfordhome.com:8688 and http://music.mumfordhome.com.",
+            ),
+        )
+        // The one thing a list of addresses cannot show on its own.
+        assertTrue(detail, detail.contains("listens on another port"))
+    }
+
+    /**
+     * A LAN address is walked in the opposite order - DroppedNeedle's own port first, TLS last -
+     * and the message has to say so rather than printing a canonical order the probe did not use.
+     */
+    @Test
+    fun `a lan address names its rungs in the order they were dialled`() = runTest {
+        repository.probeOutcome =
+            Outcome.Failure(NeedlerError.NotADroppedNeedleServer("http://192.168.1.50:8688"))
+        val viewModel = viewModel().apply {
+            onServerChange("192.168.1.50")
+            onUsernameChange("yourname")
+            onPasswordChange("hunter2")
+        }
+
+        viewModel.connect()
+
+        val failure = viewModel.state.value.failure as ConnectFailure.BadServerAddress
+        assertEquals(
+            listOf("http://192.168.1.50:8688", "http://192.168.1.50", "https://192.168.1.50"),
+            failure.attempted,
+        )
+        assertTrue(failure.detail, failure.detail.contains("http://192.168.1.50:8688,"))
+    }
+
+    /**
+     * A typed scheme is one rung, and the sentence is singular. The port is still worth printing:
+     * `https://music.yourhome.net` means 443, which is not what the user typed and not where a
+     * self-hosted server usually is.
+     */
+    @Test
+    fun `a typed scheme names the one address that was tried`() = runTest {
+        repository.probeOutcome =
+            Outcome.Failure(NeedlerError.Offline(OfflineCause.TIMEOUT))
+        val viewModel = filledIn()
+
+        viewModel.connect()
+
+        val failure = viewModel.state.value.failure as ConnectFailure.ServerUnreachable
+        assertEquals(listOf("https://music.yourhome.net"), failure.attempted)
+        assertTrue(
+            failure.detail,
+            failure.detail.contains(" Needler tried https://music.yourhome.net."),
+        )
+    }
+
+    /**
+     * DNS is the one cause that gets no list. No rung was dialled at all, and the three addresses
+     * differ only in a scheme and a port that were never used - printing them would claim three
+     * attempts where there were none.
+     */
+    @Test
+    fun `a host name that does not resolve is not told what was tried`() = runTest {
+        repository.probeOutcome = Outcome.Failure(NeedlerError.Offline(OfflineCause.DNS_FAILURE))
+        val viewModel = viewModel().apply {
+            onServerChange("music.mumfordhome.com")
+            onUsernameChange("yourname")
+            onPasswordChange("hunter2")
+        }
+
+        viewModel.connect()
+
+        val detail: String = requireNotNull(viewModel.state.value.failure).detail
+        assertFalse(detail, detail.contains("Needler tried"))
+    }
+
+    /**
+     * Only the probe gets the ladder. A failure after an address has answered - a dropped network
+     * during sign-in - must not describe a walk that did not happen on this step.
+     */
+    @Test
+    fun `a failure after the probe does not claim a ladder was walked`() = runTest {
+        repository.connectOutcome =
+            Outcome.Failure(NeedlerError.Offline(OfflineCause.CONNECTION_FAILED))
+        val viewModel = viewModel().apply {
+            onServerChange("music.mumfordhome.com")
+            onUsernameChange("yourname")
+            onPasswordChange("hunter2")
+        }
+
+        viewModel.connect()
+
+        val failure = viewModel.state.value.failure as ConnectFailure.ServerUnreachable
+        assertEquals(emptyList<String>(), failure.attempted)
+        assertFalse(failure.detail, failure.detail.contains("Needler tried"))
     }
 
     @Test
@@ -412,6 +537,76 @@ class ConnectViewModelTest {
     // ---- arriving on this screen without having asked to -------------------
 
     @Test
+    fun `a saved session hands straight over to the library instead of asking for it again`() {
+        // The device fault of 2026-10-02, reported twice: signed in, library loaded, then an app
+        // update replaced the process and the app came back on three empty fields. The credentials
+        // were on the disk the whole time - 440 MB of downloads and a 289-album mirror with them.
+        // Connect is the navigation graph's start destination on every launch and nothing told it
+        // the user was already signed in, so the only way off the screen was to sign in again and
+        // rotate a perfectly good device session.
+        val viewModel = ConnectViewModel(
+            FakeSessionRepository(initialSession = FakeSessionRepository.AUTHENTICATED),
+            proxyStore,
+        )
+
+        assertTrue(viewModel.state.value.connected)
+        assertNull(viewModel.state.value.failure)
+    }
+
+    @Test
+    fun `an expired bearer resumes as a music player rather than a sign-in form`() {
+        // REQUIREMENTS.md "Expiry, and why playback survives it": an expired session "degrades the
+        // app to a pure music player rather than bricking it". A sign-in form with no way past it
+        // is the bricking.
+        val viewModel = ConnectViewModel(
+            FakeSessionRepository(
+                initialSession = SessionState.PlayerOnly(
+                    server = FakeSessionRepository.IDENTITY,
+                    user = FakeSessionRepository.USER,
+                    capabilities = FakeSessionRepository.CAPABILITIES,
+                    reason = PlayerOnlyReason.BEARER_EXPIRED,
+                ),
+            ),
+            proxyStore,
+        )
+
+        assertTrue(viewModel.state.value.connected)
+        assertNull(viewModel.state.value.failure)
+    }
+
+    @Test
+    fun `a repair in flight is not announced with a sign-in form`() {
+        // A process that died mid-repair resumes the repair. The domain is explicit that nothing in
+        // the UI announces this state - "no dialog, no prompt, no sign-in screen" - because there is
+        // nothing for the user to do and the repair is one round trip.
+        val viewModel = ConnectViewModel(
+            FakeSessionRepository(
+                initialSession = SessionState.RepairingAppPassword(
+                    server = FakeSessionRepository.IDENTITY,
+                    user = FakeSessionRepository.USER,
+                    capabilities = FakeSessionRepository.CAPABILITIES,
+                    bearerExpiresAt = null,
+                ),
+            ),
+            proxyStore,
+        )
+
+        assertTrue(viewModel.state.value.connected)
+    }
+
+    @Test
+    fun `a genuine first run still gets the empty form`() {
+        val viewModel = ConnectViewModel(
+            FakeSessionRepository(initialSession = SessionState.NotConfigured),
+            proxyStore,
+        )
+
+        assertFalse(viewModel.state.value.connected)
+        assertNull(viewModel.state.value.failure)
+        assertEquals("", viewModel.state.value.server)
+    }
+
+    @Test
     fun `a session the keystore would not unlock is explained, not shown as a fresh install`() {
         // The worst bug in the app, from the user's side: signed in for weeks, then three empty
         // fields and no explanation. REQUIREMENTS.md "Expiry, and why playback survives it" is
@@ -468,6 +663,9 @@ class ConnectViewModelTest {
         )
 
         assertNull(viewModel.state.value.failure)
+        // The address is still carried over, though. An empty form is how the app told a user who
+        // had been signed in for weeks that they never had been, and it is not a secret.
+        assertEquals("https://music.yourhome.net", viewModel.state.value.server)
     }
 
     private fun cloudflareAccessError(): NeedlerError = NeedlerError.Unexpected(

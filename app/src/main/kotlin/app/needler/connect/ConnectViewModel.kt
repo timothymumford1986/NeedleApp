@@ -9,6 +9,7 @@ import app.needler.core.domain.model.ReonboardingReason
 import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.network.ProxyCredentialStore
+import app.needler.core.network.ServerUrl
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -38,6 +39,15 @@ import kotlinx.coroutines.launch
  *    screen, never later." The probe is public, so it runs before any
  *    credential is sent, and it is where a typo and an untrusted certificate
  *    are caught.
+ *
+ *    The screen passes what the user typed, verbatim. A bare host with no
+ *    scheme is not an instruction and is not defaulted here: REQUIREMENTS.md
+ *    "Accepted URL forms" makes it a *guess*, and the repository walks
+ *    `ServerUrl.ladder` until a rung answers. Typing
+ *    `music.yourhome.net` therefore works. What this class owns is the other
+ *    half of that: when no rung answers, the failure names every address that
+ *    was dialled, because the user typed none of them and cannot otherwise
+ *    learn that their non-standard port was never tried.
  * 2. **Connect.** Log in, mint a device session named for this device, create
  *    the app-password, store both. Wrong credentials surface here.
  * 3. **Negotiate capabilities.** This is where the `subsonic_enabled` gate
@@ -71,28 +81,106 @@ class ConnectViewModel @Inject constructor(
     private var attempt: Job? = null
 
     init {
-        // Why the screen asks the repository anything at all before the user has touched it: this
-        // route is also where a *failed* session restore lands, and a blank form is the wrong thing
-        // to show someone who was signed in a minute ago. See ConnectFailure.SavedSessionLocked.
-        //
-        // Only the one reason is read. `BOTH_CREDENTIALS_DEAD` is an ordinary expiry and arrives
-        // through the non-blocking prompt the rest of the app owns; `SIGNED_OUT` is deliberate and
-        // must show the empty form; `SERVER_IDENTITY_CHANGED` is a different story with a different
-        // message. `CREDENTIALS_UNREADABLE` is the only one that is nobody's fault.
-        viewModelScope.launch {
-            val session: SessionState = sessions.currentSession()
-            if (session !is SessionState.ReonboardingRequired) return@launch
-            if (session.reason != ReonboardingReason.CREDENTIALS_UNREADABLE) return@launch
-            val server: String? = session.server?.baseUrl?.takeIf { it.isNotBlank() }
-            _state.update { current ->
+        viewModelScope.launch { arriveWith(sessions.currentSession()) }
+    }
+
+    /**
+     * What this screen is for, decided from the session the data layer rebuilt from the keystore.
+     *
+     * ## Why a sign-in form has to ask whether the user is already signed in
+     *
+     * Because it is the navigation graph's **start destination on every launch**.
+     * `NeedlerNavHost` takes a `startConnected` flag to begin at Home instead, and nothing has ever
+     * passed it - `NeedlerApp` calls the host with the flag left at its `false` default, and its
+     * KDoc still says "until `SessionRepository` has an implementation behind it, a cold start
+     * begins at Connect". That implementation landed. So a cold start lands here holding a perfectly
+     * good session, finds a view model that only ever looked for one failure reason, and renders
+     * three empty fields: the user reads that as having been signed out, signs in again, and the
+     * device session is rotated for nothing. Observed on a device on 2026-10-02 after an app update
+     * replaced the process, with the credentials intact on disk and the Room mirror and 440 MB of
+     * downloads untouched - which is the signature of a *navigation* fault, not a credential one.
+     *
+     * Resuming from here rather than from the host is the deliberate choice, and the alternative was
+     * rejected on two counts. Passing `startConnected` means resolving the session before the
+     * `NavHost` composes, because `startDestination` is read once; that means either building the
+     * whole Hilt singleton graph - Room, OkHttp, the credential file - on the main thread before the
+     * first frame, which REQUIREMENTS.md "Performance budgets" will not pay for, or gating the first
+     * frame on a coroutine and making the splash the reason the app feels slow, which the same
+     * section forbids in those words. This path costs nothing: the view model already injects
+     * [SessionRepository] and already asks it one question on arrival, and because `NeedlerApp`
+     * draws the 2.1 s splash *over* the navigation rather than gating it, the hand-off to Home
+     * happens underneath the animation and the form is never on screen.
+     *
+     * ## What each state gets
+     *
+     * REQUIREMENTS.md "Expiry, and why playback survives it" requires re-onboarding "in exactly one
+     * case: both credentials are dead", so anything that can still do something is handed straight
+     * to the library - including [SessionState.PlayerOnly], whose whole point is that an expired
+     * bearer "degrades the app to a pure music player rather than bricking it" and which a sign-in
+     * form is precisely the bricking of, and [SessionState.RepairingAppPassword], which "nothing in
+     * the UI announces - no dialog, no prompt, no sign-in screen".
+     *
+     * The rest stay, and the server address is pre-filled for every one of them that has one. That
+     * is not cosmetic: an empty form is how the app said "you were never signed in" to a user who
+     * was, which is the confusion `SecureCredentialStore`'s unencrypted server mirror exists to make
+     * impossible. Only a deliberate sign-out gets the blank form, because only that user asked for
+     * it.
+     */
+    private fun arriveWith(session: SessionState) {
+        when (session) {
+            is SessionState.Authenticated,
+            is SessionState.PlayerOnly,
+            is SessionState.RepairingAppPassword,
+            -> _state.update { it.copy(connected = true, failure = null) }
+
+            // Unreachable from a cold start - the data layer reconstructs this state only from a
+            // live negotiation, never from the keystore - and handled rather than swallowed because
+            // the one thing this state must never do is look like a wrong password.
+            is SessionState.SubsonicDisabled -> _state.update { current ->
                 current.copy(
-                    // Pre-filled rather than merely quoted: the address is not a secret and never
-                    // had to be lost with the key, and re-typing a LAN address with a port is the
-                    // part of re-onboarding users get wrong.
-                    server = current.server.ifBlank { server.orEmpty() },
-                    failure = ConnectFailure.SavedSessionLocked(server),
+                    server = current.server.ifBlank { session.server.baseUrl },
+                    failure = ConnectFailure.SubsonicDisabled,
                 )
             }
+
+            is SessionState.ReonboardingRequired -> explain(session)
+
+            // A genuine first run. The empty form is the right answer and the only one.
+            SessionState.NotConfigured -> Unit
+        }
+    }
+
+    /**
+     * The four ways a saved session ends, and which of them owes the user an explanation here.
+     *
+     * Only [ReonboardingReason.CREDENTIALS_UNREADABLE] gets a notice, because it is the only one
+     * that is nobody's fault: the secrets are still on the disk under a key this launch could not
+     * use, and `SecureCredentialStore` has deleted nothing. `BOTH_CREDENTIALS_DEAD` is an ordinary
+     * expiry that the non-blocking prompt elsewhere in the app owns, and claiming the keystore
+     * failed would be a false explanation; `SERVER_IDENTITY_CHANGED` is a different story with its
+     * own message; `SIGNED_OUT` is deliberate.
+     *
+     * Three of the four still pre-fill the address, which is the part that was missing. Re-typing a
+     * LAN address with a non-standard port is the step of re-onboarding users get wrong, and the
+     * address is not a secret - it never had to be lost with the key, and `saveServerUrl` keeps it
+     * outside the encrypted file for exactly this moment.
+     */
+    private fun explain(session: SessionState.ReonboardingRequired) {
+        val server: String? = session.server?.baseUrl?.takeIf { it.isNotBlank() }
+        val failure: ConnectFailure? = when (session.reason) {
+            ReonboardingReason.CREDENTIALS_UNREADABLE -> ConnectFailure.SavedSessionLocked(server)
+            ReonboardingReason.BOTH_CREDENTIALS_DEAD,
+            ReonboardingReason.SERVER_IDENTITY_CHANGED,
+            -> null
+            // The one state that must look like a fresh install, because the user asked for it: no
+            // notice, and no address carried over from the server they just left.
+            ReonboardingReason.SIGNED_OUT -> return
+        }
+        _state.update { current ->
+            current.copy(
+                server = current.server.ifBlank { server.orEmpty() },
+                failure = failure,
+            )
         }
     }
 
@@ -226,7 +314,17 @@ class ConnectViewModel @Inject constructor(
         val probe = sessions.probeServer(typedUrl)
         currentCoroutineContext().ensureActive()
         val serverUrl = when (probe) {
-            is Outcome.Failure -> return fail(probe.error, typedUrl)
+            // The only step that gets the ladder: a probe failure is the one failure where the
+            // user's address was never confirmed, and so the one where the addresses tried are
+            // news. Derived from the same `ladder()` the repository walked rather than reported
+            // back by it, because `NeedlerError.Offline` - the commonest of these, and the one
+            // whose message is least use - carries no room for a list, and `:core:domain` is not
+            // this change's to widen.
+            is Outcome.Failure -> return fail(
+                error = probe.error,
+                typedUrl = typedUrl,
+                attempted = ServerUrl.ladderFor(typedUrl).map { it.baseUrl },
+            )
             is Outcome.Success -> probe.value.identity.baseUrl
         }
 
@@ -269,10 +367,14 @@ class ConnectViewModel @Inject constructor(
         }
     }
 
-    private fun fail(error: NeedlerError, typedUrl: String) {
+    private fun fail(
+        error: NeedlerError,
+        typedUrl: String,
+        attempted: List<String> = emptyList(),
+    ) {
         attempt = null
         _state.update {
-            val failure: ConnectFailure = ConnectFailure.from(error, typedUrl)
+            val failure: ConnectFailure = ConnectFailure.from(error, typedUrl, attempted)
             it.copy(
                 connecting = false,
                 attemptIsSlow = false,

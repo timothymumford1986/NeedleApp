@@ -38,13 +38,13 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerChevronDownIcon
 import app.needler.core.design.component.NeedlerChevronRightIcon
 import app.needler.core.design.component.NeedlerLabelledTextField
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerSecondaryButton
+import app.needler.core.design.component.NeedlerSecretTextField
 import app.needler.core.design.component.NeedlerSegmentedTabs
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.NeedlerTextButton
@@ -118,6 +118,26 @@ data class ConnectProxyCallbacks(
  *
  * Nothing about the keyboard changes: every field keeps its `KeyboardType`,
  * its `ImeAction`, its disabled auto-correct and its place in the focus order.
+ *
+ * ## Every secret field can be revealed
+ *
+ * All four are `NeedlerSecretTextField`, which adds the reveal toggle. Masked
+ * with no way to look was a guessing game on exactly the screen a locked-out
+ * user reaches, with a phone keyboard and often a generated secret.
+ *
+ * The proxy fields get the toggle too, and they are the stronger case rather
+ * than the afterthought. A Cloudflare Access service-token secret is 64 hex
+ * characters that nobody has memorised, and a single wrong character there
+ * produces a proxy 401 - which is the failure
+ * [ConnectFailure.ProxyIntercepted] exists because users read as a wrong
+ * server password. Letting the user check the thing they pasted is the cheapest
+ * way to tell those two apart. One component for all four also means one pair
+ * of content descriptions and one touch-target rule, instead of four chances to
+ * get the accessible version of this wrong.
+ *
+ * The toggle is not a return of the bullets: it is a sibling control with its
+ * own label, outside the field's decoration, and `NeedlerSecretTextField` takes
+ * no `placeholder` parameter at all so none can be passed to it.
  *
  * ## Failures
  *
@@ -437,15 +457,15 @@ private fun ConnectForm(
                 autoCorrectEnabled = false,
             ),
         )
-        NeedlerLabelledTextField(
+        NeedlerSecretTextField(
             // REQUIREMENTS.md "Required change to the Connect screen": the pack
             // says APP PASSWORD and it cannot work. See the file header.
             label = "PASSWORD",
             value = state.password,
             onValueChange = onPasswordChange,
+            secretName = "Password",
             helperText = "your Dropped Needle account password",
             enabled = !state.connecting,
-            visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Go,
@@ -608,15 +628,15 @@ private fun ProxySection(
                         autoCorrectEnabled = false,
                     ),
                 )
-                NeedlerLabelledTextField(
+                NeedlerSecretTextField(
                     label = "CF-ACCESS-CLIENT-SECRET",
                     value = proxy.cloudflareClientSecret,
                     onValueChange = {
                         callbacks.onFieldChange(ProxyField.CloudflareClientSecret, it)
                     },
+                    secretName = "Client secret",
                     helperText = "Kept on this device only, with your other credentials.",
                     enabled = enabled,
-                    visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Next,
@@ -639,12 +659,12 @@ private fun ProxySection(
                         autoCorrectEnabled = false,
                     ),
                 )
-                NeedlerLabelledTextField(
+                NeedlerSecretTextField(
                     label = "PROXY PASSWORD",
                     value = proxy.basicPassword,
                     onValueChange = { callbacks.onFieldChange(ProxyField.BasicPassword, it) },
+                    secretName = "Proxy password",
                     enabled = enabled,
-                    visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(
                         keyboardType = KeyboardType.Password,
                         imeAction = ImeAction.Next,
@@ -669,14 +689,17 @@ private fun ProxySection(
                             autoCorrectEnabled = false,
                         ),
                     )
-                    NeedlerLabelledTextField(
+                    NeedlerSecretTextField(
                         label = "HEADER " + (index + 1) + " VALUE",
                         value = draft.value,
                         onValueChange = {
                             callbacks.onCustomHeaderChange(index, draft.name, it)
                         },
+                        // Numbered, because up to ProxyCredentials.MAX_HEADERS of these can be on
+                        // screen at once and four toggles all announcing "Header value" would
+                        // leave a screen-reader user unable to tell which one they had hold of.
+                        secretName = "Header " + (index + 1) + " value",
                         enabled = enabled,
-                        visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Password,
                             imeAction = ImeAction.Next,

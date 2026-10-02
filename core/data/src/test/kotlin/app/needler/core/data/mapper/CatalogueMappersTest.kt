@@ -204,6 +204,29 @@ public class CatalogueMappersTest {
         assertEquals(RequestStatus.REJECTED, receipt.status)
     }
 
+    /**
+     * The 202 that used to be read as a rejection.
+     *
+     * REQUIREMENTS.md "Placing a request", item 1: the accepted status is 202, and "a client that
+     * treats anything other than 200 as failure reports every successful pull as an error". A
+     * non-null `success` defaulting to `false` was that same false negative reached through the
+     * body: the server's structs emit every field including nulls, the decoder coerced the null onto
+     * the default, and an accepted request became `REJECTED` - a `pull` row stored `FAILED` and the
+     * album marked failed in the mirror. Only an explicit `false` is a refusal.
+     */
+    @Test
+    public fun `a receipt with no success flag is not a rejection`() {
+        val absent = CatalogueMappers.receipt(
+            RequestAcceptedDto(musicbrainzId = RG, status = "awaiting_approval"),
+        )
+        val explicitNull = CatalogueMappers.receipt(
+            RequestAcceptedDto(success = null, musicbrainzId = RG, status = "queued"),
+        )
+
+        assertEquals(RequestStatus.PENDING_APPROVAL, absent.status)
+        assertEquals(RequestStatus.ACCEPTED, explicitNull.status)
+    }
+
     // -------------------------------------------------------------------- stats
 
     @Test

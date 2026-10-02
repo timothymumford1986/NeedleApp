@@ -83,12 +83,28 @@ sealed interface ConnectFailure {
      * `GET /api/v1/auth/providers`, which is public, before accepting. A wrong
      * URL must fail here, on the Connect screen, never later.
      */
-    data class BadServerAddress(val typed: String) : ConnectFailure {
+    data class BadServerAddress(
+        val typed: String,
+        /** The addresses actually dialled, in ladder order. See [triedSentence]. */
+        val attempted: List<String> = emptyList(),
+    ) : ConnectFailure {
         override val title: String get() = "That is not a Dropped Needle server"
         override val detail: String
-            get() = "Nothing at $typed answered as a Dropped Needle. Check the address, " +
-                "including the port and any sub-path. A local server usually looks like " +
-                "http://192.168.1.50:8688."
+            get() = buildString {
+                append("Nothing at ")
+                append(typed)
+                append(" answered as a Dropped Needle. Check the address")
+                if (attempted.isEmpty()) {
+                    append(", including the port and any sub-path. A local server usually looks ")
+                    append("like http://192.168.1.50:8688.")
+                } else {
+                    // Neither the example nor the word "port" is repeated here: the list of
+                    // addresses is a better example than a made-up one, and it carries the port
+                    // advice with it.
+                    append(" and any sub-path.")
+                }
+                append(triedSentence(attempted))
+            }
     }
 
     /**
@@ -99,19 +115,27 @@ sealed interface ConnectFailure {
      * to solve with a VPN or a reverse proxy, so the copy says so rather than
      * implying Needler could reach further.
      */
-    data class ServerUnreachable(val cause: OfflineCause) : ConnectFailure {
+    data class ServerUnreachable(
+        val cause: OfflineCause,
+        /** The addresses actually dialled, in ladder order. See [triedSentence]. */
+        val attempted: List<String> = emptyList(),
+    ) : ConnectFailure {
         override val title: String get() = "Cannot reach that server"
         override val detail: String
             get() = when (cause) {
+                // The one cause that gets no list of addresses. DNS failed, so no rung was dialled
+                // at all and all three differ only in a scheme and a port that were never used -
+                // printing them would suggest three things were tried when nothing was.
                 OfflineCause.DNS_FAILURE ->
                     "That host name did not resolve. Check the spelling, or use the " +
                         "server's IP address."
                 OfflineCause.TIMEOUT ->
                     "The server did not answer in time. If it is only reachable from home, " +
-                        "connect to your VPN first."
+                        "connect to your VPN first." + triedSentence(attempted)
                 else ->
                     "No connection. Check this device is online, and that the server is " +
-                        "reachable from it - Needler does not tunnel to your network for you."
+                        "reachable from it - Needler does not tunnel to your network for you." +
+                        triedSentence(attempted)
             }
     }
 
@@ -308,10 +332,19 @@ sealed interface ConnectFailure {
          * @param typedUrl what the user actually entered, so the "not a Dropped
          *   Needle" message can quote it back rather than showing a normalised
          *   form the user never typed.
+         * @param attempted the addresses the probe actually dialled, in order -
+         *   `ServerUrl.ladderFor(typedUrl)`. Empty for every failure after the
+         *   probe: a rejected password or a disabled Subsonic shim means one
+         *   address already answered, and listing a ladder there would be
+         *   describing a walk that did not happen.
          */
-        fun from(error: NeedlerError, typedUrl: String): ConnectFailure = when (error) {
-            is NeedlerError.NotADroppedNeedleServer -> BadServerAddress(typedUrl)
-            is NeedlerError.Offline -> ServerUnreachable(error.cause)
+        fun from(
+            error: NeedlerError,
+            typedUrl: String,
+            attempted: List<String> = emptyList(),
+        ): ConnectFailure = when (error) {
+            is NeedlerError.NotADroppedNeedleServer -> BadServerAddress(typedUrl, attempted)
+            is NeedlerError.Offline -> ServerUnreachable(error.cause, attempted)
             NeedlerError.InvalidCredentials -> WrongCredentials
             is NeedlerError.CertificateUntrusted -> UntrustedCertificate(error.certificate)
             is NeedlerError.CertificateChanged ->
@@ -346,6 +379,31 @@ sealed interface ConnectFailure {
                     ?.displayName,
                 credentialsSent = proxy.interception.proxyCredentialsSent,
             )
+        }
+
+        /**
+         * Names the addresses that were dialled, as a sentence to append to a failure's detail.
+         *
+         * REQUIREMENTS.md "Accepted URL forms" lets the user type a bare host, and the probe then
+         * walks `ServerUrl.ladder` - `https`, then `http` on 8688, then `http` on 80 for a domain
+         * name; the reverse for a LAN address. The user never typed any of those and cannot see
+         * them, so when none of them answers, a message that does not name them is telling someone
+         * whose server is on port 8080 that their address is wrong while hiding the single fact
+         * that would let them fix it.
+         *
+         * Returns `""` for an empty list, which is the case for every failure that happened after
+         * an address had already answered.
+         */
+        internal fun triedSentence(attempted: List<String>): String {
+            if (attempted.isEmpty()) return ""
+            val addresses: String = if (attempted.size == 1) {
+                attempted.single()
+            } else {
+                attempted.dropLast(1).joinToString(", ") + " and " + attempted.last()
+            }
+            return " Needler tried " + addresses +
+                ". If your server listens on another port, type it with the address, " +
+                "as in 192.168.1.50:8080."
         }
 
         private fun rateLimitDetail(retryAfter: Duration?): String = when (retryAfter) {

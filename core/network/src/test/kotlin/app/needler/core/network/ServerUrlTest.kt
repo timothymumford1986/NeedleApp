@@ -282,4 +282,23 @@ class ServerUrlTest {
             ladder("home.net/music"),
         )
     }
+
+    /**
+     * The Connect screen names the addresses it dialled when none of them answered, and it must
+     * name the ones the probe actually walked. [ServerUrl.ladderFor] is the single place both read,
+     * so this pins it to [ServerUrl.ladder] rather than re-stating the order a third time.
+     */
+    @Test
+    fun `ladderFor is the parsed address's own ladder`() {
+        for (raw in listOf("music.mumfordhome.com", "192.168.1.50", "https://home.net/music", "nas:9000")) {
+            assertEquals(raw, ladder(raw), ServerUrl.ladderFor(raw).map { it.baseUrl })
+        }
+    }
+
+    @Test
+    fun `ladderFor has nothing to offer for an address that does not parse`() {
+        assertEquals(emptyList<ServerUrl>(), ServerUrl.ladderFor("ftp://nas.local"))
+        assertEquals(emptyList<ServerUrl>(), ServerUrl.ladderFor("   "))
+        assertEquals(emptyList<ServerUrl>(), ServerUrl.ladderFor(null))
+    }
 }

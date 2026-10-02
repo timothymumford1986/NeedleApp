@@ -15,6 +15,7 @@ import app.needler.core.data.local.entity.PullStatusDb
 import app.needler.core.data.local.entity.WriteOperationTypeDb
 import app.needler.core.data.writequeue.WriteQueue
 import app.needler.core.domain.model.AlbumRequest
+import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.Pull
 import app.needler.core.domain.model.PullBucket
@@ -43,6 +44,10 @@ import org.junit.Test
  * accepted status is 202 rather than 200, a refused *request* answers 200 with `success=false` while
  * a refused *download task* uses real statuses, and `retryDownload` returns a **new** task id that
  * the local row must adopt.
+ *
+ * The *status codes* themselves are not testable from here - [FakeV1Api] answers in DTOs and never
+ * builds a response - so `PullLaneConventionsTest` in `:core:network` asserts them over real HTTP.
+ * What this file is for is what the repository does with the answers.
  */
 public class PullRepositoryTest {
 
@@ -104,6 +109,28 @@ public class PullRepositoryTest {
         assertEquals(RequestStatus.ACCEPTED, RequestStatus.fromServerToken("queued"))
         assertEquals(AlbumStateDb.ACQUIRING, albumDao.rows[RG]?.state)
         assertFalse(albumDao.rows[RG]?.inLibrary ?: true)
+    }
+
+    /**
+     * An accepted 202 whose body says nothing about `success` must not land as a failure.
+     *
+     * REQUIREMENTS.md "Placing a request", item 1. The server's structs emit every field including
+     * nulls, the decoder coerces an unexpected null onto the field's default, and a default of
+     * `false` turned every such acceptance into [RequestStatus.REJECTED] - which wrote the `pull` row
+     * `FAILED` and the mirror's album `FAILED` too. The regression is asserted on the two rows rather
+     * than only on the receipt, because the rows are what the user sees afterwards.
+     */
+    @Test
+    public fun `an accepted request with no success flag is not stored as a failure`(): Unit = runTest {
+        v1.requestAlbumResponse = { RequestAcceptedDto(musicbrainzId = RG, status = "queued") }
+
+        val receipt: RequestReceipt =
+            (repository.requestAlbum(request) as Outcome.Success).value
+
+        assertEquals(RequestStatus.ACCEPTED, receipt.status)
+        assertEquals(PullStatusDb.SEARCHING, pullDao.rows[RG]?.status)
+        assertEquals(AlbumStateDb.ACQUIRING, albumDao.rows[RG]?.state)
+        assertNull(pullDao.rows[RG]?.error)
     }
 
     @Test
@@ -264,6 +291,52 @@ public class PullRepositoryTest {
 
         assertEquals(PullStatusDb.CANCELLED, pullDao.rows[RG]?.status)
     }
+
+    /**
+     * The download pair's refusals are statuses, and they must not go through the request pair's
+     * in-band check.
+     *
+     * REQUIREMENTS.md "Placing a request", item 3: the two pairs of endpoints use opposite
+     * conventions, "so their error handling cannot be shared". [DefaultPullRepository.cancelRequest]
+     * unpacks `success=false` on a `200`; [DefaultPullRepository.cancelTask] must not look for one,
+     * because on this lane a `200` is a cancellation and a refusal arrives as `403`, `404` or `400`.
+     * The row is left alone on a refusal: the server still owns that task.
+     */
+    @Test
+    public fun `a refused download cancel is a status, and leaves the row as it was`(): Unit = runTest {
+        pullDao.rows[RG] = pullRow(taskId = "task-1", status = PullStatusDb.DOWNLOADING)
+        v1.failWith = {
+            app.needler.core.network.NetworkError.Forbidden(
+                lane = app.needler.core.network.ApiLane.V1,
+                serverMessage = "not your task",
+            )
+        }
+
+        val result = repository.cancelTask(PullTaskId("task-1"))
+
+        assertTrue(result is Outcome.Failure)
+        assertTrue((result as Outcome.Failure).error is NeedlerError.PermissionDenied)
+        assertEquals(PullStatusDb.DOWNLOADING, pullDao.rows[RG]?.status)
+    }
+
+    /**
+     * And the reverse: a `200` on the download lane is a cancellation whatever its body says.
+     *
+     * `CancelDownloadResponse` carries a `success` field, so the temptation is to read it the way
+     * `CancelRequestResponse`'s is read. That would import the request lane's convention onto the
+     * endpoint REQUIREMENTS.md explicitly contrasts with it, and a client that did so would report a
+     * cancellation the server performed as a failure.
+     */
+    @Test
+    public fun `a download cancel that answered 200 is a cancellation, not an in-band refusal`(): Unit =
+        runTest {
+            pullDao.rows[RG] = pullRow(taskId = "task-1", status = PullStatusDb.DOWNLOADING)
+
+            val result = repository.cancelTask(PullTaskId("task-1"))
+
+            assertTrue(result is Outcome.Success)
+            assertEquals(PullStatusDb.CANCELLED, pullDao.rows[RG]?.status)
+        }
 
     // ------------------------------------------------------------------ refresh
 

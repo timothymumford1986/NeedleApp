@@ -64,11 +64,15 @@ public class NeedlerAudioDataSource(
     /**
      * Where a decision not to retain a stream is written down.
      *
-     * `AudioCacheStoreWriter` already reports every refusal it makes, and that was thought to be the
-     * whole of the path. It is not: the two guards below return before `openWrite` is ever called, so
-     * a stream the store never hears about produced no line anywhere - not a refusal, not a success.
-     * A device played two tracks to completion, `format=raw`, full `Content-Length`, and the log held
-     * nothing from this path at all, which is the same silence the store's logging was added to end.
+     * Three rounds of instrumentation live here and the third one is the lesson. `AudioCacheStoreWriter`
+     * reports every refusal it makes; the two guards below return before `openWrite` is ever called, so
+     * a stream the store never hears about produced no line anywhere either. Both are now covered, and
+     * a device on that build still produced nothing: `format=raw`, a full `Content-Length`, a track
+     * played to the end, and ten log points silent. What none of them covered was the ending of a write
+     * that *was* opened - the reader stopping short of the declared length, and [WriteThroughSink]
+     * abandoning the handle over it without a word. A log that covers every refusal still says nothing
+     * about the writes that were granted, so the sink is given this sink too and the store is left to
+     * report the outcome of the commit.
      */
     private val diagnostics: DiagnosticsSink = DiagnosticsSink.None,
     private val retryPolicy: StreamRetryPolicy = StreamRetryPolicy(),
@@ -161,12 +165,32 @@ public class NeedlerAudioDataSource(
 
     override fun getUri(): Uri? = openedUri
 
+    /**
+     * Ends the transfer, and the retention write with it.
+     *
+     * The order is the whole of it. The tail is taken first, while the response is still open; the sink
+     * is finished second, so the commit sees the final byte count; the delegate is closed third. Closing
+     * the delegate first would make the tail unreachable, and finishing the sink first would hand the
+     * store a count the reader was about to add to.
+     */
     override fun close() {
         val currentSink: WriteThroughSink? = sink
         sink = null
-        // The sink is finished before the delegate is closed, so a commit sees the final byte count.
-        currentSink?.finish(readToEnd)
         val source: DataSource? = delegate
+        if (currentSink != null && source != null && !readToEnd) {
+            // The reader stopped before the end of the body. Usually that is Media3's extractor
+            // declining to read a trailing tag it has no use for, which is a handful of bytes on a
+            // track that played in full - and the only honest way to hold the write to the length
+            // the response declared is to take them. WriteThroughSink.fillTail decides whether the
+            // shortfall is small enough to be worth a read and writes down what it did.
+            currentSink.fillTail { buffer, offset, length ->
+                val read: Int = source.read(buffer, offset, length)
+                // Real bytes off the network, reported to the bandwidth meter like every other read.
+                if (read > 0) bytesTransferred(read)
+                read
+            }
+        }
+        currentSink?.finish(readToEnd)
         delegate = null
         openedUri = null
         try {
@@ -365,7 +389,7 @@ public class NeedlerAudioDataSource(
             )
             return null
         }
-        return WriteThroughSink(handle)
+        return WriteThroughSink(handle, diagnostics)
     }
 
     // ----------------------------------------------------------------------- plumbing

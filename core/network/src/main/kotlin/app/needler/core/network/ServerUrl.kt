@@ -291,6 +291,24 @@ public class ServerUrl internal constructor(
         /** Convenience for call sites that already know the input is good (tests, restored state). */
         public fun parseOrNull(raw: String?): ServerUrl? = (parse(raw) as? ServerUrlResult.Valid)?.url
 
+        /**
+         * Every address that would be tried for [raw], in order, or an empty list if [raw] does
+         * not parse at all.
+         *
+         * Exists so that the screen reporting a failed connection and the repository that walked
+         * the ladder derive the list from the same place. REQUIREMENTS.md "Accepted URL forms"
+         * requires the attempt to be named back to the user - a server on a non-standard port is
+         * otherwise a flat "could not connect" with nothing in it to act on - and the one way that
+         * message can lie is by being computed separately from [ladder]. A second
+         * `parse`-then-`ladder` written at the call site is exactly that second computation, so
+         * there is one here instead.
+         *
+         * Empty rather than throwing or defaulting, because an unparseable address was never tried:
+         * the caller's own "that is not a valid address" message is the right one and this must not
+         * invent rungs to pad it.
+         */
+        public fun ladderFor(raw: String?): List<ServerUrl> = parseOrNull(raw)?.ladder().orEmpty()
+
         private fun isDefaultPort(scheme: String, port: Int): Boolean =
             (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
 

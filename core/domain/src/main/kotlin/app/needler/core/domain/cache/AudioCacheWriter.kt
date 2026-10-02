@@ -71,7 +71,8 @@ public interface AudioCacheWriter {
      * silent, diagnosing it took a full source trace - a correct refusal and a broken one are the same
      * `null`. So an implementation writes one line per outcome to the diagnostics log REQUIREMENTS.md
      * "Observability" already requires, through a sink it is given: see [AudioRetentionEvent] for the
-     * seven lines and why each one earns its place.
+     * nine lines and why each one earns its place - including the endings that come *after* this
+     * function has handed a handle out, which is the half the first round of instrumentation missed.
      *
      * Widening this return type to carry the reason was considered and rejected. A caller handed a
      * reason will eventually act on one, and then retention policy is being decided at the call site

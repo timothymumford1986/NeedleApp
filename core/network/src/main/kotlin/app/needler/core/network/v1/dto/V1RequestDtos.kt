@@ -34,7 +34,29 @@ public data class AlbumRequestDto(
  */
 @Serializable
 public data class RequestAcceptedDto(
-    @SerialName("success") val success: Boolean = false,
+    /**
+     * Whether the server is telling us it refused, and **nullable because absent is not `false`**.
+     *
+     * REQUIREMENTS.md "Placing a request" reserves the in-band refusal — HTTP 200 with
+     * `success=false` — for cancel and retry of a *request*. This endpoint is the other
+     * convention: it answers **202**, and 202 means accepted. The first item of that same section
+     * names the consequence of getting this wrong, that "a client that treats anything other than
+     * 200 as failure reports every successful pull as an error", and a non-null default of `false`
+     * is that bug wearing a different hat — the same false negative reached through the body
+     * instead of the status line.
+     *
+     * It is reachable rather than theoretical. The server's msgspec structs emit every field
+     * including nulls (see `NeedlerJson`), and `coerceInputValues` turns an explicit `null` on a
+     * field with a default into that default, so `"success": null` on an accepted 202 used to read
+     * as a rejection: `RequestStatus.REJECTED`, a `pull` row stored `FAILED`, and the album marked
+     * `FAILED` in the mirror.
+     *
+     * So the field carries three answers rather than two, and `CatalogueMappers.receipt` rejects
+     * only on an explicit `false`. Dropping the field altogether was rejected: a server that does
+     * say `false` on a 202 is reporting something, and silently discarding it would trade a false
+     * negative for a false positive.
+     */
+    @SerialName("success") val success: Boolean? = null,
     @SerialName("message") val message: String = "",
     @SerialName("musicbrainz_id") val musicbrainzId: String = "",
     @SerialName("status") val status: String = "pending",

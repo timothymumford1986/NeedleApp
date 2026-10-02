@@ -5,6 +5,13 @@ package app.needler.feature.pulls.common
 import app.needler.core.domain.model.PullFailureReason
 import app.needler.core.domain.model.PullProgress
 import app.needler.core.domain.model.PullStatus
+import app.needler.core.domain.model.RequestHistoryEntry
+import app.needler.core.domain.model.RequestOutcome
+import app.needler.core.domain.model.RequestTarget
+import app.needler.core.domain.model.WantedGap
+import app.needler.core.domain.model.WantedRetry
+import app.needler.core.domain.model.WantedWatch
+import app.needler.core.domain.model.WantedWatchState
 import app.needler.feature.pulls.SamplePulls
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
@@ -301,4 +308,93 @@ class PullsFormatTest {
             PullsFormat.subtitle(SamplePulls.titleAllSpaces, now),
         )
     }
+
+    // ---- the same guard on the two lanes that are not a Pull ----------------
+    //
+    // `GET /api/v1/requests/history` and `GET /api/v1/requests/wanted` carry
+    // `album_title` with the same nullability and the same habit of being blank,
+    // and their formatters were added after the ones above — so they had none of
+    // the coverage that proved the queue's guard works. These are the three
+    // shapes the device report produced: absent, whitespace-only, and a row with
+    // neither a title nor an artist.
+
+    @Test
+    fun `a history row with no title still names something`() {
+        assertEquals("Untitled album", PullsFormat.historyTitle(historyEntry(albumTitle = "")))
+        assertEquals("Untitled album", PullsFormat.historyTitle(historyEntry(albumTitle = "   ")))
+        assertEquals("this album", PullsFormat.historyPhrase(historyEntry(albumTitle = "")))
+        assertEquals("this album", PullsFormat.historyPhrase(historyEntry(albumTitle = "  ")))
+        assertEquals("Spiderland", PullsFormat.historyTitle(historyEntry(albumTitle = "Spiderland")))
+    }
+
+    @Test
+    fun `a history row with neither a title nor an artist still reads as a sentence`() {
+        val entry = historyEntry(albumTitle = "", artistName = "")
+
+        assertEquals("arrived · today", PullsFormat.historySubtitle(entry, now))
+        assertEquals("Untitled album, arrived, today", PullsFormat.spokenHistoryRow(entry, now))
+    }
+
+    @Test
+    fun `a track request with a blank album does not say 'from' and stop`() {
+        // The dangling-label shape, one lane over: the subtitle's "from …" is
+        // built by concatenation exactly as "Cancel the pull of …" was.
+        val entry = historyEntry(
+            albumTitle = "   ",
+            trackTitle = "Nightswimming",
+            target = RequestTarget.TRACK,
+        )
+
+        assertEquals("Nightswimming", PullsFormat.historyTitle(entry))
+        assertFalse(PullsFormat.historySubtitle(entry, now).contains("from"))
+    }
+
+    @Test
+    fun `a wanted row and a retrying row both name something`() {
+        assertEquals(
+            "Untitled album, not found yet, checks again in 4 hours",
+            PullsFormat.spokenWantedRow(wantedWatch(albumTitle = ""), now),
+        )
+        assertEquals(
+            "Untitled album, being retried",
+            PullsFormat.spokenWantedRetryRow(wantedRetry(albumTitle = "  "), now),
+        )
+    }
+
+    // ---- fixtures for the two read-through lanes ----------------------------
+
+    private fun historyEntry(
+        albumTitle: String,
+        artistName: String = "Slint",
+        trackTitle: String? = null,
+        target: RequestTarget = RequestTarget.ALBUM,
+    ): RequestHistoryEntry = RequestHistoryEntry(
+        releaseGroupMbid = SamplePulls.mbid("history"),
+        albumTitle = albumTitle,
+        artistName = artistName,
+        status = RequestOutcome.COMPLETED,
+        statusToken = "completed",
+        target = target,
+        trackTitle = trackTitle,
+        requestedAt = now - Duration.parse("2h"),
+        completedAt = now - Duration.parse("1h"),
+    )
+
+    /** A live watch: the gap refines the state, and the next check is a countdown rather than an age. */
+    private fun wantedWatch(albumTitle: String): WantedWatch = WantedWatch(
+        releaseGroupMbid = SamplePulls.mbid("wanted"),
+        albumTitle = albumTitle,
+        artistName = "",
+        gap = WantedGap.MISSING,
+        state = WantedWatchState.WATCHING,
+        stateToken = "watching",
+        checkCount = 3,
+        nextCheckAt = now + Duration.parse("4h"),
+    )
+
+    private fun wantedRetry(albumTitle: String): WantedRetry = WantedRetry(
+        releaseGroupMbid = SamplePulls.mbid("retrying"),
+        albumTitle = albumTitle,
+        artistName = "",
+    )
 }
