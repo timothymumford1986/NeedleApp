@@ -84,7 +84,11 @@ public class SecureCredentialStoreKeystoreTest {
         assertTrue(written.saveServerUrl(ServerUrl.parseOrNull("https://music.example.net")!!))
         assertTrue(written.saveCompanionBearer("bearer-token", issuedAtMillis = 1_700_000_000_000L))
         assertTrue(written.saveAppPassword("app-password-secret"))
-        assertTrue(written.pinCertificate("AA:BB:CC:DD"))
+        // The host goes down with the fingerprint: a pin is an exception for one host, and one
+        // that cannot name its host cannot be scoped to it.
+        assertTrue(
+            written.pinCertificate(host = "music.example.net", sha256Fingerprint = "AA:BB:CC:DD"),
+        )
 
         // A second store decrypts every value again, through the same master key, rather than
         // reading the first one's in-memory cache. That round trip is the thing under test: it is
@@ -94,7 +98,10 @@ public class SecureCredentialStoreKeystoreTest {
         assertEquals("https://music.example.net", reopened.serverUrl()?.baseUrl)
         assertEquals("bearer-token", reopened.bearerToken())
         assertEquals("app-password-secret", reopened.appPassword())
-        assertEquals("AA:BB:CC:DD", reopened.pinnedCertificateSha256())
+        assertEquals("AA:BB:CC:DD", reopened.pinnedCertificateFor("music.example.net"))
+        // And only for that host. Another server inheriting it is the global exception
+        // REQUIREMENTS.md "Self-signed certificates" forbids.
+        assertNull(reopened.pinnedCertificateFor("music.elsewhere.net"))
         assertEquals(1_700_000_000_000L, reopened.companionBearerIssuedAt())
         assertTrue(reopened.isFullyProvisioned())
     }
@@ -129,7 +136,7 @@ public class SecureCredentialStoreKeystoreTest {
         assertNull(reopened.serverUrl())
         assertNull(reopened.bearerToken())
         assertNull(reopened.appPassword())
-        assertNull(reopened.pinnedCertificateSha256())
+        assertNull(reopened.pinnedCertificateHost())
         assertFalse(reopened.isFullyProvisioned())
         // Sign-out, not a prompt to sign in again: with no server saved there is nothing to
         // re-onboard against, which is the Connect screen's job rather than a credential state.

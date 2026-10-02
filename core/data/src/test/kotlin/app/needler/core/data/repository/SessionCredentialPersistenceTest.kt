@@ -12,6 +12,7 @@ import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.network.capability.CapabilityProbe
+import app.needler.core.network.tls.MutableCertificatePinStore
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -79,6 +80,7 @@ public class SessionCredentialPersistenceTest {
             capabilityProbe = CapabilityProbe(v1 = v1, subsonic = subsonic),
             networkMonitor = FakeNetworkMonitor(),
             nowMillis = { NOW },
+            pins = MutableCertificatePinStore(),
         )
 
     private suspend fun SessionRepository.signIn(): Outcome<SessionState> = connect(

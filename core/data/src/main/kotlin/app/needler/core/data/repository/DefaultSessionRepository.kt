@@ -26,6 +26,7 @@ import app.needler.core.network.capability.CapabilityProbe
 import app.needler.core.network.capability.CapabilityProbeResult
 import app.needler.core.network.capability.ServerCapabilitiesDto
 import app.needler.core.network.tls.CertificateDetails
+import app.needler.core.network.tls.MutableCertificatePinStore
 import app.needler.core.network.tls.TlsCertificateProbe
 import app.needler.core.network.v1.V1Api
 import app.needler.core.network.v1.dto.AppPasswordCreateResponseDto
@@ -80,6 +81,15 @@ public class DefaultSessionRepository(
      * nothing. A parameter at all only so a test can answer for it without a server.
      */
     private val certificates: TlsCertificateProbe = TlsCertificateProbe(),
+    /**
+     * The live pin set the TLS trust manager consults on every handshake.
+     *
+     * **Not defaulted**, unlike [certificates], and that is the point: a repository holding its own
+     * store would pin into an object the HTTP client has never seen, which is how "Trust this
+     * certificate" came to do nothing at all. There is one instance in the graph, shared with
+     * `NeedlerHttpClient`, and a caller that cannot supply it has nothing to pin into.
+     */
+    private val pins: MutableCertificatePinStore,
 ) : SessionRepository {
 
     private val sessionState: MutableStateFlow<SessionState> = MutableStateFlow(initialState())
@@ -132,7 +142,7 @@ public class DefaultSessionRepository(
         var bestFailure: NeedlerError? = null
         for (candidate in url.ladder()) {
             currentCoroutineContext().ensureActive()
-            credentials.saveServerUrl(candidate)
+            saveServer(candidate)
             when (val call = probeRung(candidate)) {
                 is Outcome.Success -> return Outcome.Success(
                     ServerProbe(
@@ -158,7 +168,7 @@ public class DefaultSessionRepository(
 
         // Nothing answered. Leave the address the user typed saved rather than whichever rung was
         // tried last, so Settings and a retry both show what they entered.
-        credentials.saveServerUrl(url)
+        saveServer(url)
         return Outcome.Failure(bestFailure ?: NeedlerError.NotADroppedNeedleServer(url.baseUrl))
     }
 
@@ -258,7 +268,7 @@ public class DefaultSessionRepository(
             issuer = details.issuer,
             notAfter = Instant.fromEpochMilliseconds(details.notAfter.time),
         )
-        val pinned: String? = credentials.pinnedCertificateSha256()
+        val pinned: String? = credentials.pinnedCertificateFor(details.host)
         return if (pinned != null && pinned != presented.sha256Fingerprint) {
             NeedlerError.CertificateChanged(expectedFingerprint = pinned, presented = presented)
         } else {
@@ -281,13 +291,71 @@ public class DefaultSessionRepository(
         else -> false
     }
 
+    /**
+     * The user has looked at the fingerprint and tapped Trust.
+     *
+     * Two stores have to hear about it, and both halves were missing. [SecureCredentialStore] keeps
+     * the pin across launches; [MutableCertificatePinStore] is what `PinnedHostTrustManager`
+     * actually consults during a handshake. Writing only the first is a pin that never takes
+     * effect; writing only the second is a pin that is gone on the next launch. The user's decision
+     * has to outlive both the request and the process.
+     *
+     * ## The host, and why there has to be one
+     *
+     * REQUIREMENTS.md "Self-signed certificates": "Pin the leaf certificate for the one host, never
+     * disable validation globally." [CertificateInfo] carries no host - it is what the UI renders -
+     * so the host comes from the **saved server address**, which is the right answer rather than a
+     * convenient one: [probeServer] saves each rung before dialling it and an untrusted certificate
+     * ends the walk immediately, so the address saved at this moment is the exact rung that
+     * presented this certificate. With no saved address there is no host, and a pin with no host is
+     * the global exception the doc forbids - so this fails instead of guessing.
+     *
+     * ## Disk first, then memory
+     *
+     * A failed persist returns a failure and grants nothing. The alternative ordering - trust now,
+     * persist if it works - produces the worst outcome available: a connection that works until the
+     * process dies and then fails with the user certain they already confirmed it.
+     *
+     * The in-memory pin **replaces** the host's previous one rather than joining it. It is not a
+     * silent replacement: nothing reaches this method except the user tapping Trust on a prompt
+     * raised by [NeedlerError.CertificateUntrusted] or the loud
+     * [NeedlerError.CertificateChanged], which is the re-confirmation the doc demands.
+     */
     override suspend fun trustCertificate(certificate: CertificateInfo): Outcome<Unit> {
-        val saved: Boolean = credentials.pinCertificate(certificate.sha256Fingerprint)
-        return if (saved) {
-            Outcome.Ok
-        } else {
-            Outcome.Failure(NeedlerError.Unexpected("could not persist the certificate pin"))
+        val host: String = credentials.serverUrl()?.host
+            ?: return Outcome.Failure(
+                NeedlerError.Unexpected("no saved server to scope the certificate pin to"),
+            )
+        val persisted: Boolean = credentials.pinCertificate(
+            host = host,
+            sha256Fingerprint = certificate.sha256Fingerprint,
+        )
+        if (!persisted) {
+            return Outcome.Failure(NeedlerError.Unexpected("could not persist the certificate pin"))
         }
+        // Live, so the retry the Connect screen makes next uses it: the store is read on every
+        // handshake and `NeedlerHttpClient` evicts pooled connections when it changes.
+        pins.pin(host, certificate.sha256Fingerprint)
+        return Outcome.Ok
+    }
+
+    /**
+     * Saves the server address, and keeps the live pin set in step with what that did to the pin.
+     *
+     * [SecureCredentialStore.saveServerUrl] drops a pinned certificate whose host is not the one
+     * being saved - REQUIREMENTS.md "Secrets and migrations" drops the mirror and the cache on a
+     * server change, and a pin left behind is worse than stale data because the new host would
+     * inherit an exception the user never granted it. This mirrors that into the in-memory store,
+     * by asking what the credential store decided rather than deciding again: two copies of the
+     * same rule is how the two halves came to disagree in the first place.
+     */
+    private fun saveServer(url: ServerUrl): Boolean {
+        val pinnedHost: String? = credentials.pinnedCertificateHost()
+        val saved: Boolean = credentials.saveServerUrl(url)
+        if (pinnedHost != null && credentials.pinnedCertificateFor(pinnedHost) == null) {
+            pins.clear(pinnedHost)
+        }
+        return saved
     }
 
     /**
@@ -314,7 +382,7 @@ public class DefaultSessionRepository(
                 return Outcome.Failure(NeedlerError.NotADroppedNeedleServer(serverUrl))
             is ServerUrlResult.Valid -> parsed.url
         }
-        credentials.saveServerUrl(url)
+        saveServer(url)
 
         val login: Outcome<AuthResponseDto> = networkCall { v1.login(username, password) }
         val loginBearer: String = when (login) {
@@ -501,6 +569,9 @@ public class DefaultSessionRepository(
             }
         }
         credentials.clear()
+        // `clear` wipes the pinned fingerprint with the secrets, so the live store has to go too,
+        // or this process would keep trusting a certificate the disk no longer records.
+        pins.replaceAll(emptyMap())
         capabilitiesState.value = null
         sessionState.value = SessionState.ReonboardingRequired(
             server = null,

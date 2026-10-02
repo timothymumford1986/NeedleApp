@@ -16,6 +16,7 @@ import app.needler.core.network.ProxyVendor
 import app.needler.core.network.ServerUrl
 import app.needler.core.network.capability.CapabilityProbe
 import app.needler.core.network.tls.CertificateDetails
+import app.needler.core.network.tls.MutableCertificatePinStore
 import app.needler.core.network.tls.TlsCertificateProbe
 import app.needler.core.network.v1.V1Api
 import app.needler.core.network.v1.dto.AuthProvidersDto
@@ -72,7 +73,12 @@ class SessionProbeLadderTest {
             saved = firstArg()
             true
         }
-        every { pinnedCertificateSha256() } answers { pinned }
+        every { pinnedCertificateHost() } answers { if (pinned == null) null else PINNED_HOST }
+        every { pinnedCertificateFor(any()) } answers {
+            // Host-scoped, as the real store is: a pin is an exception for one host and must not
+            // be compared against a certificate presented by any other.
+            if (firstArg<String>() == PINNED_HOST) pinned else null
+        }
     }
 
     private val v1: V1Api = mockk(relaxed = true)
@@ -104,6 +110,7 @@ class SessionProbeLadderTest {
             capabilityProbe = mockk<CapabilityProbe>(relaxed = true),
             networkMonitor = monitor,
             certificates = certificates,
+            pins = MutableCertificatePinStore(),
         )
     }
 
@@ -300,10 +307,11 @@ class SessionProbeLadderTest {
             ApiLane.V1,
         )
 
+        const val PINNED_HOST: String = "music.yourhome.net"
+
         val SELF_SIGNED = CertificateDetails(
             host = "music.yourhome.net",
             sha256Hex = "AA:BB:CC:DD",
-            sha256Base64 = "qrvM3Q==",
             subject = "CN=music.yourhome.net",
             issuer = "CN=music.yourhome.net",
             notBefore = Date(0),

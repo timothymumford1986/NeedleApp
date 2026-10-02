@@ -8,6 +8,7 @@ import app.needler.core.network.CredentialProvider
 import app.needler.core.network.ProxyCredentialStore
 import app.needler.core.network.ProxyCredentials
 import app.needler.core.network.ServerUrl
+import app.needler.core.network.tls.CertificatePinStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -110,6 +111,17 @@ public class SecureCredentialStore private constructor(
     @Volatile
     private var cachedFingerprint: String? = null
 
+    /**
+     * The host the pinned fingerprint belongs to, normalised.
+     *
+     * Written beside the fingerprint by [pinCertificate] rather than re-derived from the saved
+     * address on every read, so that changing the address afterwards cannot silently re-point an
+     * exception the user granted to one server at a different one. See [pinnedCertificateHost] for
+     * what an install pinned before this key existed is taken to mean.
+     */
+    @Volatile
+    private var cachedFingerprintHost: String? = null
+
     @Volatile
     private var parsedServerUrl: ServerUrl? = null
 
@@ -164,6 +176,7 @@ public class SecureCredentialStore private constructor(
         cachedBearer = preferences.getString(KEY_COMPANION_BEARER, null)
         cachedAppPassword = preferences.getString(KEY_APP_PASSWORD, null)
         cachedFingerprint = preferences.getString(KEY_CERT_FINGERPRINT, null)
+        cachedFingerprintHost = preferences.getString(KEY_CERT_HOST, null)
         cachedProxyCredentials = ProxyCredentials.decode(preferences.getString(KEY_PROXY_HEADERS, null))
         parsedServerUrl = ServerUrl.parseOrNull(cachedServerUrl)
         sessionStaleState.value = cachedBearer == null && cachedAppPassword != null
@@ -303,9 +316,37 @@ public class SecureCredentialStore private constructor(
      * `android:allowBackup="false"` keeps on the device is the same as for the Room mirror next to
      * it, which already holds every album title the user owns - and it would fail for the same
      * reason the first file did.
+     *
+     * ## A pin does not follow the address
+     *
+     * Changing the **host** drops the pinned certificate. REQUIREMENTS.md "Secrets and migrations"
+     * already drops the mirror and the audio cache when the server identity changes, and the pin
+     * belongs in that list for a stronger reason than either: the mirror and the cache are only
+     * stale data, while a fingerprint confirmed for one host, left behind, is an exception the
+     * **next** host inherits without the user ever seeing it. REQUIREMENTS.md "Self-signed
+     * certificates" scopes a pin to "the one host", so a pin whose host is gone has nothing left
+     * to be scoped to.
+     *
+     * Only the host is compared, not the whole address. A scheme or port change is the same server
+     * - `probeServer` walks several rungs of one host before anything has failed, and dropping the
+     * pin on each of them would revoke the user's decision mid-walk.
+     *
+     * A fingerprint whose host cannot be worked out at all goes too. [pinnedCertificateHost]
+     * answers null for it, and the alternative - leaving it to be adopted by whatever address is
+     * saved next - is the one failure mode this whole class is arranged to prevent: a host
+     * inheriting an exception the user granted to a different one.
+     *
+     * The caller is told whether the *address* was committed, as it always was. A failure to remove
+     * the pin cannot be reported here, and does not need to be: the pin is host-scoped on the way
+     * out as well, so a stale one grants nothing to the new host even if it survives on disk.
      */
     public fun saveServerUrl(serverUrl: ServerUrl): Boolean {
         val rendered: String = serverUrl.baseUrl
+        if (cachedFingerprint != null &&
+            pinnedCertificateHost() != CertificatePinStore.normaliseHost(serverUrl.host)
+        ) {
+            clearPinnedCertificate()
+        }
         runCatching { serverMirror?.edit()?.putString(KEY_SERVER_URL, rendered)?.apply() }
         val committed: Boolean = commit(KEY_SERVER_URL + " (and the unencrypted mirror)") {
             it.putString(KEY_SERVER_URL, rendered)
@@ -353,33 +394,113 @@ public class SecureCredentialStore private constructor(
     }
 
     /**
-     * Pins one leaf certificate for the saved host, by SHA-256 fingerprint.
+     * Pins one leaf certificate for one host, by SHA-256 fingerprint.
      *
      * Scoped to the single host the user pinned - never a global disabling of validation. A changed
      * fingerprint must fail loudly and require re-confirmation, which is why replacing a pin is an
      * explicit call and not a side effect of a TLS failure.
+     *
+     * ## Why the host is a parameter and not read off the saved address
+     *
+     * [pinsFor][app.needler.core.network.tls.CertificatePinStore.pinsFor] is keyed on a host, and
+     * this file used to hold a bare fingerprint with nothing beside it. The host a restored pin
+     * belongs to is the host of the **saved server URL** - `DefaultSessionRepository.probeServer`
+     * saves each rung before dialling it, so the address saved when a rung fails TLS is exactly the
+     * one that presented the certificate, and `trustCertificate` reads the host from there.
+     *
+     * It is then written down rather than re-derived, because the saved address can change later.
+     * A fingerprint attributed to whatever server happens to be configured at read time is a pin
+     * the user granted to one host being handed to another, which REQUIREMENTS.md "Self-signed
+     * certificates" forbids outright: "pin the leaf certificate for the one host".
+     *
+     * Both keys go down in one commit. Half a pin is worse than none: a fingerprint with no host
+     * cannot be scoped, and a host with no fingerprint matches nothing.
+     *
+     * The fingerprint is stored in the canonical hex of
+     * [sha256Hex][app.needler.core.network.tls.CertificatePinStore.sha256Hex] so that this file and
+     * the in-memory store the handshake consults hold the identical string. That is the one place
+     * the spelling is settled; nothing downstream converts.
      */
-    public fun pinCertificate(sha256Fingerprint: String?): Boolean {
-        val committed: Boolean = commit(KEY_CERT_FINGERPRINT) {
-            if (sha256Fingerprint == null) {
-                it.remove(KEY_CERT_FINGERPRINT)
-            } else {
-                it.putString(KEY_CERT_FINGERPRINT, sha256Fingerprint)
-            }
+    public fun pinCertificate(host: String, sha256Fingerprint: String): Boolean {
+        val normalisedHost: String = CertificatePinStore.normaliseHost(host)
+        val normalisedPin: String = CertificatePinStore.normalisePin(sha256Fingerprint)
+        val committed: Boolean = commit(KEY_CERT_FINGERPRINT + " + " + KEY_CERT_HOST) {
+            it.putString(KEY_CERT_FINGERPRINT, normalisedPin)
+            it.putString(KEY_CERT_HOST, normalisedHost)
         }
-        if (committed) cachedFingerprint = sha256Fingerprint
+        if (committed) {
+            cachedFingerprint = normalisedPin
+            cachedFingerprintHost = normalisedHost
+        }
         return committed
     }
 
     /**
-     * The pinned leaf-certificate fingerprint for the saved server, or null when the server's
-     * certificate validates normally.
-     *
-     * Not part of [CredentialProvider] as `:core:network` currently declares it - see the note in
-     * this module's report. The TLS layer reads it from here directly until the interface grows a
-     * member for it.
+     * Drops the pin, whichever host it belonged to: the server's certificate validates normally
+     * now, or the saved server has been replaced by one this pin says nothing about.
      */
-    public fun pinnedCertificateSha256(): String? = cachedFingerprint
+    public fun clearPinnedCertificate(): Boolean {
+        if (cachedFingerprint == null && cachedFingerprintHost == null) return true
+        val committed: Boolean = commit(KEY_CERT_FINGERPRINT + " + " + KEY_CERT_HOST) {
+            it.remove(KEY_CERT_FINGERPRINT)
+            it.remove(KEY_CERT_HOST)
+        }
+        if (committed) {
+            cachedFingerprint = null
+            cachedFingerprintHost = null
+        }
+        return committed
+    }
+
+    /**
+     * The host the pinned certificate belongs to, or null when nothing is pinned.
+     *
+     * An install that pinned a certificate before the host was recorded beside it has a fingerprint
+     * and no host. Its pin is attributed to the saved server's host, which is the only server that
+     * install ever had an address for and therefore the only one the fingerprint can have come
+     * from. The alternative - discarding a pin that cannot name its host - would send a user who
+     * had already confirmed their certificate back through the prompt for no reason.
+     */
+    public fun pinnedCertificateHost(): String? {
+        if (cachedFingerprint == null) return null
+        val recorded: String? = cachedFingerprintHost
+        if (recorded != null) return recorded
+        return parsedServerUrl?.host?.let(CertificatePinStore::normaliseHost)
+    }
+
+    /**
+     * The pinned leaf-certificate fingerprint **for [host]**, or null when the user has pinned
+     * nothing for it.
+     *
+     * Host-scoped rather than a bare read, because the one caller is the decision between
+     * `CertificateUntrusted` and `CertificateChanged`. An unscoped read would compare the
+     * fingerprint of a server the user pinned against the certificate of one they did not, and
+     * announce that their certificate had changed on a host that was never pinned - the loud
+     * failure REQUIREMENTS.md asks for, fired at the wrong server.
+     *
+     * Not part of [CredentialProvider] as `:core:network` declares it: a pin is not a credential,
+     * it is never sent on a request, and folding it in would hand every interceptor a handle to it.
+     */
+    public fun pinnedCertificateFor(host: String): String? {
+        val pinnedHost: String = pinnedCertificateHost() ?: return null
+        if (pinnedHost != CertificatePinStore.normaliseHost(host)) return null
+        return cachedFingerprint
+    }
+
+    /**
+     * Every pin on this device, in the shape
+     * [MutableCertificatePinStore][app.needler.core.network.tls.MutableCertificatePinStore] is
+     * seeded with at startup.
+     *
+     * At most one entry, because one server is configured at a time. It is a map rather than a pair
+     * so that the TLS layer's host scoping stays the only model of this: a pin is something a host
+     * has, not something the app has.
+     */
+    public fun pinnedCertificates(): Map<String, Set<String>> {
+        val host: String = pinnedCertificateHost() ?: return emptyMap()
+        val fingerprint: String = cachedFingerprint ?: return emptyMap()
+        return mapOf(host to setOf(fingerprint))
+    }
 
     // ------------------------------------------------------------------ session state
 
@@ -436,6 +557,7 @@ public class SecureCredentialStore private constructor(
             cachedBearer = null
             cachedAppPassword = null
             cachedFingerprint = null
+            cachedFingerprintHost = null
             cachedProxyCredentials = ProxyCredentials.None
             parsedServerUrl = null
             sessionStaleState.value = false
@@ -550,6 +672,12 @@ public class SecureCredentialStore private constructor(
         private const val KEY_BEARER_ISSUED_AT: String = "companion_bearer_issued_at"
         private const val KEY_APP_PASSWORD: String = "app_password"
         private const val KEY_CERT_FINGERPRINT: String = "pinned_certificate_sha256"
+
+        /**
+         * The host [KEY_CERT_FINGERPRINT] was confirmed for. Added after the pin itself, so a
+         * fingerprint with no host beside it is an older install's - see `pinnedCertificateHost`.
+         */
+        private const val KEY_CERT_HOST: String = "pinned_certificate_host"
         private const val KEY_PROXY_HEADERS: String = "proxy_headers"
 
         /**

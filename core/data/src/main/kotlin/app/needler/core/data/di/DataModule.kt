@@ -261,7 +261,19 @@ public object DataModule {
     public fun provideProxyCredentialStore(store: SecureCredentialStore): ProxyCredentialStore = store
 
     /**
-     * The certificate pin store.
+     * The certificate pin store, **seeded from the disk**.
+     *
+     * The seed is the fix for the second of the three ways a trusted certificate used to be
+     * forgotten. This provider returned a bare `MutableCertificatePinStore()`, so a pin the user
+     * confirmed in one session was gone from the TLS layer on the next launch however faithfully it
+     * had been persisted - the user re-confirmed the same fingerprint every time they opened the
+     * app. REQUIREMENTS.md "Self-signed certificates" lets the user "pin that exact certificate for
+     * this server", which is a decision about the server and not about this process.
+     *
+     * One instance, two injection points: the store is read by `PinnedHostTrustManager` on every
+     * handshake and written by `SessionRepository.trustCertificate`. Both must be the same object,
+     * which is what `@Singleton` on the concrete type plus a binding for the read-only interface
+     * guarantees - a second `@Provides` returning a new store is precisely the bug being fixed.
      *
      * Deliberately **not** part of `CredentialProvider`: a pinned fingerprint is not a credential. It
      * is never sent on a request, it is consulted by the TLS trust manager during the handshake, and
@@ -270,7 +282,15 @@ public object DataModule {
      */
     @Provides
     @Singleton
-    public fun provideCertificatePinStore(): CertificatePinStore = MutableCertificatePinStore()
+    public fun provideMutableCertificatePinStore(
+        credentials: SecureCredentialStore,
+    ): MutableCertificatePinStore = MutableCertificatePinStore(credentials.pinnedCertificates())
+
+    /** The same store, read-only, for everything that only consults pins during a handshake. */
+    @Provides
+    @Singleton
+    public fun provideCertificatePinStore(store: MutableCertificatePinStore): CertificatePinStore =
+        store
 
     @Provides
     @Singleton
@@ -502,11 +522,15 @@ public object DataModule {
         v1: V1Api,
         capabilityProbe: CapabilityProbe,
         networkMonitor: NetworkMonitor,
+        pins: MutableCertificatePinStore,
     ): SessionRepository = DefaultSessionRepository(
         credentials = credentials,
         v1 = v1,
         capabilityProbe = capabilityProbe,
         networkMonitor = networkMonitor,
+        // The same instance `provideHttpClient` hands to the trust manager. Anything else is a pin
+        // written where no handshake will read it.
+        pins = pins,
     )
 
     @Provides
