@@ -85,9 +85,9 @@ data class PlayerUiState(
     /**
      * The quality of the copy on this device, or null when there is not one.
      *
-     * **Non-null means downloaded**, never merely cached while listening. A cached copy is evictable
-     * under disk pressure, so showing it as `Pulled:` would promise offline availability the app
-     * cannot keep; `CachedAudio.pinned` carries that distinction and the ViewModel applies it. It also
+     * **Non-null means the Device tier**, never merely the Temporary one. A temporarily cached copy is
+     * evictable under disk pressure, so showing it as `Device:` would promise offline availability the
+     * app cannot keep; `CachedAudio.pinned` carries that distinction and the ViewModel applies it. It also
      * goes null when the bytes are stale - the server replaced the file on a quality upgrade - because
      * the resolver will discard them on the next play, and a tag that outlived the copy it describes
      * would be worse than no tag.
@@ -109,17 +109,36 @@ data class PlayerUiState(
 
     // ---- the quality tag pair ------------------------------------------------------------------
     // Two tags rather than one badge, because there are two facts and they are not always the same
-    // one. `Server:` is what pressing play would fetch; `Pulled:` is what is already here. A local
+    // one. `Server:` is what pressing play would fetch; `Device:` is what is already here. A local
     // copy always wins, so when both exist only one of them is what you are hearing - and drawing
     // them as equals would imply the server rate is, which it is not.
+    //
+    // Which one applies is carried by the chip and the weight, never by the hue: the hue names the
+    // state, so `Server:` is always accent and `Device:` always positive. See `NeedlerAlbumSource`.
 
     /** True when a downloaded copy exists, which is therefore what plays. */
     val isPulled: Boolean get() = pulledQuality != null
 
+    /**
+     * True when what would play right now is a server-side re-encode.
+     *
+     * The one state in which REQUIREMENTS.md "Why transcoded bytes are never cached" is a fact about
+     * *this* track: a transcode's bytes are played and discarded, so nothing accumulates on the
+     * device however often it is played. [app.needler.feature.player.ui.QualityTags] draws the caveat
+     * on this and on nothing else, which is what keeps it off the screen in the common case - the
+     * default Wi-Fi rung is `Original`.
+     *
+     * False while a download exists, even on a transcoding rung. The local copy is what plays, so the
+     * server rung is dormant and a line about bytes not being kept would describe bytes nobody is
+     * fetching - and the copy that *is* on the device is being kept.
+     */
+    val isStreamingTranscoded: Boolean
+        get() = !isPulled && serverFormat is StreamFormat.Transcoded
+
     /** `MP3 192`, `FLAC` - what the server would send now, or null when it is not known yet. */
     val serverTagValue: String? get() = PlayerFormat.serverBadge(format = serverFormat, source = quality)
 
-    /** `FLAC` - the downloaded copy's own quality, or null when there is no download. */
+    /** `FLAC` - the on-device copy's own quality, or null when there is no download. */
     val pulledTagValue: String? get() = PlayerFormat.pulledBadge(pulledQuality)
 
     /** The Server tag's spoken form, which says whether it is in use. */
@@ -130,7 +149,7 @@ data class PlayerUiState(
             inUse = !isPulled,
         )
 
-    /** The Pulled tag's spoken form. */
+    /** The Device tag's spoken form. */
     val pulledTagDescription: String? get() = PlayerFormat.spokenPulledBadge(pulledQuality)
 
     /** The current item's audio quality, or null when nothing is loaded. */

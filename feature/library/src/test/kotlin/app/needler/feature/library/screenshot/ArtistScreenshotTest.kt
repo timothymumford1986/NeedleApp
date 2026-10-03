@@ -233,6 +233,8 @@ class ArtistScreenshotTest {
             onPull = {},
             onPullArtist = {},
             onRetryDiscography = {},
+            onFindInCatalogue = {},
+            onOpenArtist = {},
             onPlay = {},
             onShuffle = {},
             onPlayAlbum = {},

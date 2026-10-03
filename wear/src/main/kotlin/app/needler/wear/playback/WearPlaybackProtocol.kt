@@ -434,12 +434,12 @@ object WearPlaybackProtocol {
      * item is right for the same reason it is right for the transport - the watch's picker draws on
      * its first frame from the copy Google Play services already holds.
      *
-     * ## Why the offer is the Downloaded tier and nothing else
+     * ## Why the offer is the Device tier and nothing else
      *
-     * REQUIREMENTS.md "Vocabulary" separates "Downloaded" - "kept on device because the user asked
-     * for it; never evicted automatically" - from "Cached while listening", which is "kept as a side
-     * effect of streaming". Only the first is ever offered to the watch, and that is the whole sync
-     * policy in one sentence.
+     * REQUIREMENTS.md "Vocabulary" separates the **Device** tier - "kept because the user asked for
+     * it; never evicted automatically" - from **Temporary**, which is "kept as a side effect of
+     * streaming; evicted to hold the device's free-space floor". Only the first is ever offered to the
+     * watch, and that is the whole sync policy in one sentence.
      *
      * Three reasons, and the second is the one that decides it:
      *
@@ -451,7 +451,7 @@ object WearPlaybackProtocol {
      *    re-fetch costs 800 ms over Wi-Fi. A re-fetch to the watch costs minutes and may be
      *    impossible - the phone may be out of range, off, or no longer holding the album. Eviction is
      *    therefore close to permanent, which means it must never happen behind the user's back. So
-     *    the watch tier is Downloaded-only by construction, and the free-space bound *refuses* an
+     *    the watch tier is Device-only by construction, and the free-space bound *refuses* an
      *    incoming album instead of evicting one. REQUIREMENTS.md already takes that exact decision
      *    for the phone when the floor cannot be met: "the incoming bytes are **skipped, not forced
      *    in**, and nothing extra is evicted for them".
@@ -461,7 +461,7 @@ object WearPlaybackProtocol {
      * The transcode rule comes free from the same choice, and REQUIREMENTS.md "Why transcoded bytes
      * are never cached" applies here with more force, not less: a lossy copy that became the watch's
      * permanent version of a track is the same silent, permanent downgrade, and harder to notice. The
-     * Downloaded tier is fetched with `download?id=`, which serves original bytes only, so an offered
+     * Device tier is fetched with `download?id=`, which serves original bytes only, so an offered
      * album cannot be a transcode. The phone checks the flag anyway - see `WearSyncPlan`.
      */
     const val PATH_SYNC_OFFER: String = "/needler/sync/offer"

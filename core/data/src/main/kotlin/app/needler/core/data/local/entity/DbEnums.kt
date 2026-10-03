@@ -88,6 +88,29 @@ public enum class DownloadStateDb(public val dbValue: String) {
         /** States in which the downloader still has work to do for this pin. */
         public val UNFINISHED_DB_VALUES: List<String> =
             listOf(QUEUED.dbValue, DOWNLOADING.dbValue, WAITING_FOR_UNMETERED.dbValue, PARTIAL.dbValue)
+
+        /**
+         * States a start-up sweep re-enqueues, which is a narrower set than [UNFINISHED_DB_VALUES].
+         *
+         * `DownloadResumeCoordinator` exists because a job can disappear - process death, a reboot,
+         * `WorkManager` giving up after its backoff ceiling - leaving a row claiming to be downloading
+         * with nothing left to advance it. The sweep is blanket and `ExistingWorkPolicy.KEEP` supplies
+         * the idempotence, so this list decides the whole of what gets retried.
+         *
+         * [PARTIAL] and [FAILED] are excluded because they are what the downloader *leaves behind*
+         * when it stops, not work in flight - the same reason
+         * [app.needler.core.domain.model.OfflineDownloadState.isInFlight] omits them. An album whose
+         * server has no file for some tracks rests at [PARTIAL] permanently **by decision**
+         * (`AlbumDownloadTest` pins it), so a sweep that included it would re-fetch that album's whole
+         * track list on every app start, for ever, and still never reach [COMPLETE].
+         *
+         * [WAITING_FOR_UNMETERED] is excluded too, and that one is a judgement rather than a rule:
+         * such a row is waiting on a constraint `WorkManager` persists across reboots, so its job is
+         * usually alive. If a dropped job is ever observed in that state it belongs here, since
+         * `scheduleAlbumDownload` re-applies the Wi-Fi constraint and the row would simply wait again.
+         */
+        public val RESUMABLE_DB_VALUES: List<String> =
+            listOf(QUEUED.dbValue, DOWNLOADING.dbValue)
     }
 }
 

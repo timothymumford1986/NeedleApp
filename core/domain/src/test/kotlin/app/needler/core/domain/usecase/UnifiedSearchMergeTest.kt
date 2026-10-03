@@ -8,6 +8,8 @@ import app.needler.core.domain.model.CatalogueLaneState
 import app.needler.core.domain.model.CatalogueSearchPage
 import app.needler.core.domain.model.CatalogueSearchResults
 import app.needler.core.domain.model.LocalSearchResults
+import app.needler.core.domain.model.OfflineDownloadState
+import app.needler.core.domain.model.PullProgress
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.ServiceStatus
@@ -205,6 +207,155 @@ public class UnifiedSearchMergeTest {
         assertEquals(2, merged.size)
     }
 
+    /**
+     * The device regression, v0.0.12: a library with four Dido albums, searched for `dido`, offered
+     * to pull all four of them.
+     *
+     * Every owned album appeared a second time under "Albums to pull - from MusicBrainz" with a Pull
+     * button on it. The two lanes had returned **different ids** for one record, so the MBID join
+     * matched nothing; the same screen showed the server itself reporting `in_library: false` for
+     * ids its library demonstrably held. The second rule is what catches it: a record the server
+     * already has, matched on title and artist.
+     *
+     * The assertion that matters is the third one. It is not enough that the counts come out right -
+     * the un-owned block must contain *only* albums that are genuinely un-owned, which is the
+     * sentence REQUIREMENTS.md rule 3 is making.
+     */
+    @Test
+    public fun `a catalogue copy of an owned album is dropped even under a different MBID`() {
+        val merged: List<Album> = UnifiedSearchUseCase.mergeAlbums(
+            local = listOf(
+                album("rg-still", "Still on My Mind", AlbumState.Owned, artist = "Dido"),
+                album("rg-life", "Life for Rent", AlbumState.Owned, artist = "Dido"),
+                album("rg-angel", "No Angel", AlbumState.Pinned(OfflineDownloadState.Complete), artist = "Dido"),
+                // The mirror's row for this one carries no artist and no year, which is why the
+                // device drew it with an empty subtitle - and why neither can be part of the key.
+                album("rg-safe", "Safe Trip Home", AlbumState.Owned, artist = ""),
+            ),
+            catalogue = listOf(
+                // The same four records under the ids MusicBrainz search returned.
+                album("mb-life", "Life for Rent", AlbumState.NotOwned, artist = "Dido", year = 2003),
+                album("mb-angel", "No Angel", AlbumState.NotOwned, artist = "Dido", year = 1999),
+                album("mb-safe", "Safe Trip Home", AlbumState.NotOwned, artist = "Dido", year = 2008),
+                album("mb-still", "Still on My Mind", AlbumState.NotOwned, artist = "Dido", year = 2019),
+                // Two unrelated records that merely share the query's spelling. These are the whole
+                // point of the catalogue block and must survive.
+                album("mb-aria", "Dido", AlbumState.NotOwned, artist = "Aria", year = 2000),
+                album("mb-durak", "Dido", AlbumState.NotOwned, artist = "Fırat Durak", year = 2023),
+            ),
+        )
+
+        assertEquals(
+            listOf("Still on My Mind", "Life for Rent", "No Angel", "Safe Trip Home", "Dido", "Dido"),
+            merged.map { it.title },
+        )
+        // The local record survived, states and all; no catalogue copy replaced one.
+        assertEquals(
+            listOf("rg-still", "rg-life", "rg-angel", "rg-safe"),
+            merged.take(4).map { it.releaseGroupMbid.value },
+        )
+        // And the un-owned half holds only albums the server genuinely does not have.
+        assertEquals(
+            listOf("Aria", "Fırat Durak"),
+            merged.filter { it.state == AlbumState.NotOwned }.map { it.artistName },
+        )
+    }
+
+    /**
+     * A record the server is still acquiring is not offered for acquisition either.
+     *
+     * The same question the owned block asks - `SearchUiState.libraryAlbums` is every state except
+     * [AlbumState.NotOwned] - because a Pull button on an album that is 41% downloaded is as wrong as
+     * one on an album that has landed.
+     */
+    @Test
+    public fun `an album already being acquired is not offered for pull under another MBID`() {
+        val merged: List<Album> = UnifiedSearchUseCase.mergeAlbums(
+            local = listOf(
+                album(
+                    "rg-girl",
+                    "Girl Who Got Away",
+                    AlbumState.Acquiring(PullProgress(percent = 41)),
+                    artist = "Dido",
+                ),
+            ),
+            catalogue = listOf(
+                album("mb-girl", "Girl Who Got Away", AlbumState.NotOwned, artist = "Dido", year = 2013),
+            ),
+        )
+
+        assertEquals(1, merged.size)
+        assertTrue(merged.single().state is AlbumState.Acquiring)
+    }
+
+    /**
+     * Two catalogue records that share a title and an artist are both kept.
+     *
+     * The rule is about music the server **already has**, and neither of these is. A reissue, a live
+     * record and a remaster are different records a listener may want either of, and the catalogue
+     * block is where they are offered; collapsing them would be the title matching this fix exists to
+     * avoid.
+     */
+    @Test
+    public fun `two un-owned records sharing a title and an artist are both kept`() {
+        val merged: List<Album> = UnifiedSearchUseCase.mergeAlbums(
+            local = emptyList(),
+            catalogue = listOf(
+                album("mb-live-1", "Wonder", AlbumState.NotOwned, artist = "Oh Wonder"),
+                album("mb-live-2", "Wonder", AlbumState.NotOwned, artist = "Oh Wonder"),
+            ),
+        )
+
+        assertEquals(2, merged.size)
+    }
+
+    /** An un-owned record by a different artist with the same title survives. */
+    @Test
+    public fun `a same-titled record by another artist is not mistaken for the one you own`() {
+        val merged: List<Album> = UnifiedSearchUseCase.mergeAlbums(
+            local = listOf(album("rg-wonder", "Wonder", AlbumState.Owned, artist = "Oh Wonder")),
+            catalogue = listOf(
+                album("mb-wonder", "Wonder", AlbumState.NotOwned, artist = "Shawn Mendes", year = 2020),
+            ),
+        )
+
+        assertEquals(2, merged.size)
+        assertEquals("Shawn Mendes", merged.last().artistName)
+    }
+
+    /**
+     * A later page of the albums bucket obeys the same rule.
+     *
+     * The bucket endpoint answers the same query against the same catalogue, so page two carries the
+     * same mismatched ids page one did. `expand` applying only the MBID rule would have put the
+     * duplicates back the moment the user tapped "Show all".
+     */
+    @Test
+    public fun `a page of albums drops a catalogue copy of something already owned`() {
+        val base: UnifiedSearchResults = UnifiedSearchResults(
+            query = "dido",
+            albums = listOf(album("rg-life", "Life for Rent", AlbumState.Owned, artist = "Dido")),
+            catalogue = CatalogueLaneState.Ready(),
+        )
+
+        val expanded: UnifiedSearchResults = UnifiedSearchUseCase.expand(
+            base = base,
+            page = CatalogueSearchPage(
+                bucket = SearchBucket.ALBUMS,
+                query = "dido",
+                offset = 0,
+                albums = listOf(
+                    album("mb-life", "Life for Rent", AlbumState.NotOwned, artist = "Dido", year = 2003),
+                    album("mb-aria", "Dido", AlbumState.NotOwned, artist = "Aria", year = 2000),
+                ),
+                hasMore = false,
+            ),
+        )
+
+        assertEquals(listOf("Life for Rent", "Dido"), expanded.albums.map { it.title })
+        assertEquals(AlbumState.Owned, expanded.albums.first().state)
+    }
+
     @Test
     public fun `owned albums lead the merged list`() {
         val merged: List<Album> = UnifiedSearchUseCase.mergeAlbums(
@@ -367,11 +518,25 @@ public class UnifiedSearchMergeTest {
         ownedAlbumCount = owned,
     )
 
-    private fun album(slug: String, title: String, state: AlbumState): Album = Album(
+    /**
+     * One album row.
+     *
+     * [artist] and [year] are parameters because the Dido regression turns on both: the merge's
+     * second rule keys on the artist, and the mirror's row for one of those albums carried no artist
+     * and no year at all. A fixture that could not express that could not reproduce the bug.
+     */
+    private fun album(
+        slug: String,
+        title: String,
+        state: AlbumState,
+        artist: String = "Oh Wonder",
+        year: Int? = null,
+    ): Album = Album(
         releaseGroupMbid = ReleaseGroupMbid(slug),
         title = title,
-        artistName = "Oh Wonder",
-        artistMbid = ArtistMbid("oh-wonder"),
+        artistName = artist,
+        artistMbid = if (artist.isBlank()) null else ArtistMbid("oh-wonder"),
         state = state,
+        year = year,
     )
 }

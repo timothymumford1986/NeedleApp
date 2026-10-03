@@ -11,12 +11,15 @@ import app.needler.core.domain.model.PullActivitySummary
 import app.needler.core.domain.model.PullBucket
 import app.needler.core.domain.model.PullTaskId
 import app.needler.core.domain.model.ReleaseGroupMbid
+import app.needler.core.domain.model.RequestHistoryPage
+import app.needler.core.domain.model.RequestOutcome
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.ServerCapabilities
 import app.needler.core.domain.model.ServerProbe
 import app.needler.core.domain.model.SessionState
 import app.needler.core.domain.model.TrackRequest
 import app.needler.core.domain.model.User
+import app.needler.core.domain.model.WantedList
 import app.needler.core.domain.repository.PullRepository
 import app.needler.core.domain.repository.SessionRepository
 import kotlinx.coroutines.flow.Flow
@@ -132,6 +135,112 @@ internal class FakePullRepository(
     override suspend fun markCompletionsSeen(mbids: Set<ReleaseGroupMbid>) {
         markedSeen += mbids
     }
+
+    // ---- the two read-through lanes -----------------------------------------
+    //
+    // These two are functions rather than fields of canned data, because what the tests need to
+    // assert is a *sequence*: page one then page two, or a failure then a success after a retry.
+    // A single `Outcome` field could not express either, and the thing most worth testing about
+    // this lane is that the ViewModel asks for the right page each time.
+
+    /** Every `page` argument `requestHistory` was called with, in order. */
+    val historyRequests: MutableList<Int> = mutableListOf()
+
+    /** Every `page_size` argument, so a test can pin that the endpoint's own default is used. */
+    val historyPageSizes: MutableList<Int> = mutableListOf()
+
+    /** How many times `wantedList` was called. The lane has no paging, so a page number is not it. */
+    var wantedCalls: Int = 0
+
+    /** What the server answers for a given page. Keyed on the page so a walk can be staged. */
+    var historyAnswer: (Int) -> Outcome<RequestHistoryPage> = { page ->
+        Outcome.Success(RequestHistoryPage.Empty.copy(page = page))
+    }
+
+    var wantedAnswer: () -> Outcome<WantedList> = { Outcome.Success(WantedList.Empty) }
+
+    override suspend fun requestHistory(
+        page: Int,
+        pageSize: Int,
+        status: RequestOutcome?,
+        newestFirst: Boolean,
+    ): Outcome<RequestHistoryPage> {
+        historyRequests += page
+        historyPageSizes += pageSize
+        return historyAnswer(page)
+    }
+
+    override suspend fun wantedList(): Outcome<WantedList> {
+        wantedCalls++
+        return wantedAnswer()
+    }
+}
+
+/**
+ * A repository from before the two read-through lanes existed.
+ *
+ * Every abstract member of `PullRepository` is forwarded to [FakePullRepository]; `requestHistory`
+ * and `wantedList` are **deliberately not overridden**, so calls to them take the interface's own
+ * bodies — which answer `NeedlerError.CapabilityUnavailable`. That failure, rather than an empty
+ * answer, is what the interface's KDoc says it is for: "a screen must never mistake 'nobody
+ * implemented this' for 'you have never asked for anything'". This class is how a test can check
+ * that the screen does not make that mistake.
+ *
+ * Written out by hand rather than with `by`. Kotlin's delegation generates an override for *every*
+ * member the delegate provides, including the two with defaults, so a delegating class would quietly
+ * take the fake's answers and the branch under test would never run.
+ *
+ * It is also a standing check on the additivity argument. The KDoc on those two members says making
+ * them abstract "is the better end state, and turning these two abstract once the fakes have caught
+ * up is a one-line change per file" — on the day that happens, this class stops compiling, which is
+ * exactly the reminder that is wanted.
+ */
+internal class NoLanesRepository(
+    private val delegate: FakePullRepository = FakePullRepository(),
+) : PullRepository {
+
+    override fun observePulls(): Flow<List<Pull>> = delegate.observePulls()
+
+    override fun observePullsLive(): Flow<List<Pull>> = delegate.observePullsLive()
+
+    override fun observePulls(bucket: PullBucket): Flow<List<Pull>> = delegate.observePulls(bucket)
+
+    override fun observePull(mbid: ReleaseGroupMbid): Flow<Pull?> = delegate.observePull(mbid)
+
+    override fun observePendingApprovals(): Flow<List<Pull>> = delegate.observePendingApprovals()
+
+    override fun observeActivitySummary(): Flow<PullActivitySummary?> =
+        delegate.observeActivitySummary()
+
+    override fun observePullBadgeCount(): Flow<Int> = delegate.observePullBadgeCount()
+
+    override suspend fun requestAlbum(request: AlbumRequest): Outcome<RequestReceipt> =
+        delegate.requestAlbum(request)
+
+    override suspend fun requestTrack(request: TrackRequest): Outcome<RequestReceipt> =
+        delegate.requestTrack(request)
+
+    override suspend fun requestAlbums(
+        requests: List<AlbumRequest>,
+    ): Outcome<BatchRequestReceipt> = delegate.requestAlbums(requests)
+
+    override suspend fun cancelRequest(mbid: ReleaseGroupMbid): Outcome<Unit> =
+        delegate.cancelRequest(mbid)
+
+    override suspend fun retryRequest(mbid: ReleaseGroupMbid): Outcome<Unit> =
+        delegate.retryRequest(mbid)
+
+    override suspend fun cancelTask(taskId: PullTaskId): Outcome<Unit> = delegate.cancelTask(taskId)
+
+    override suspend fun retryTask(taskId: PullTaskId): Outcome<Unit> = delegate.retryTask(taskId)
+
+    override suspend fun refreshPulls(): Outcome<Unit> = delegate.refreshPulls()
+
+    override suspend fun refreshActivitySummary(): Outcome<PullActivitySummary> =
+        delegate.refreshActivitySummary()
+
+    override suspend fun markCompletionsSeen(mbids: Set<ReleaseGroupMbid>) =
+        delegate.markCompletionsSeen(mbids)
 }
 
 /**

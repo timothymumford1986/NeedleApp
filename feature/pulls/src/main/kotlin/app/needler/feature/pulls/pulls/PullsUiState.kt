@@ -46,6 +46,21 @@ import kotlin.time.Instant
  * task id, so the row the user tapped is not the row that comes back. One flag
  * that disables the actions for the moment an action is in flight is both
  * simpler and correct.
+ *
+ * ## Three lanes on one state, not three states
+ *
+ * [lane] chooses which of the API's three request lists is on screen, and
+ * [history] and [wanted] carry the other two — see [PullsLane] for why they are
+ * tabs of this screen rather than destinations of their own. They are fields on
+ * this one state rather than separate ViewModels because the screen is one
+ * screen: the title, the tab row and the offline fact are shared, and a
+ * screenshot of "the history lane with no connection" has to be constructible
+ * from a single literal or it cannot be a test.
+ *
+ * The three are **not** interchangeable and this type does not pretend they are.
+ * [pulls] comes from Room and is therefore true offline; [history] and [wanted]
+ * are read-through views of the server with nothing mirrored behind them, which
+ * is why they carry a [LaneStatus] and the queue carries a plain [loading].
  */
 data class PullsUiState(
 
@@ -87,6 +102,15 @@ data class PullsUiState(
 
     /** When the state was assembled, so "today" and "3d ago" are computed from a fixed instant. */
     val renderedAt: Instant = Instant.fromEpochSeconds(0L),
+
+    /** Which of the three request lists is on screen. Defaults to the pack's own list. */
+    val lane: PullsLane = PullsLane.QUEUE,
+
+    /** `GET /api/v1/requests/history`, fetched only once this lane has been opened. */
+    val history: HistoryLaneState = HistoryLaneState(),
+
+    /** `GET /api/v1/requests/wanted`, likewise. */
+    val wanted: WantedLaneState = WantedLaneState(),
 ) {
 
     /** The `NOW` block: everything the server is still working on. */
@@ -126,6 +150,82 @@ data class PullsUiState(
 
     /** `2 in progress`, the line under the title on screen 06. */
     val headerLine: String get() = PullsFormat.headerLine(activeCount, pulls.size)
+
+    /**
+     * The line under the title, for whichever lane is showing.
+     *
+     * One slot, three sentences, because the figure a user wants is different on each: how much is
+     * in flight, how much has ever been asked for, how much is still being looked for. All three are
+     * built by `PullsFormat` rather than here, so the register is the same across the tabs.
+     */
+    val laneHeaderLine: String
+        get() = when (lane) {
+            PullsLane.QUEUE -> headerLine
+            PullsLane.HISTORY -> history.headerLine
+            PullsLane.WANTED -> wanted.headerLine
+        }
+
+    /**
+     * Whether **Clear done** belongs in the header right now.
+     *
+     * Queue only. It hides finished rows from this list and clears them from the tab badge, and
+     * neither has any meaning on a server-side record: nothing in `/api/v1` deletes a history entry
+     * or a watch, so the control would be inert on two of the three tabs. A control that is present
+     * and usually inert is the thing [canClearDone] already exists to avoid.
+     */
+    val showClearDone: Boolean get() = lane == PullsLane.QUEUE && canClearDone
+
+    /**
+     * Whether the header offers **Refresh**.
+     *
+     * Only on the two read-through lanes, and the argument is in [PullsLane.isReadThrough]: the
+     * queue is already repainting on its own poll, so a refresh control there would be a button that
+     * does what is happening anyway, while these two are fetched once on opening and would otherwise
+     * have no way to be asked again. Disabled while a fetch is in flight so a second tap cannot
+     * start a second one.
+     */
+    val showRefresh: Boolean get() = lane.isReadThrough
+
+    /** True while the showing lane is fetching for the first time and has nothing to draw yet. */
+    val laneLoading: Boolean
+        get() = when (lane) {
+            PullsLane.QUEUE -> loading
+            PullsLane.HISTORY -> history.status == LaneStatus.LOADING && history.entries.isEmpty()
+            PullsLane.WANTED -> wanted.status == LaneStatus.LOADING && wanted.isEmpty
+        }
+
+    /**
+     * True while *any* call for the showing lane is in flight, rows on screen or not.
+     *
+     * Distinct from [laneLoading], which is only about whether there is anything to draw yet. This
+     * is what disables **Refresh**: a refresh over a list that is already drawn shows no skeleton,
+     * and a control that stayed tappable would let a user start a second call against a lane that
+     * answers in one.
+     */
+    val laneFetching: Boolean
+        get() = when (lane) {
+            PullsLane.QUEUE -> false
+            PullsLane.HISTORY ->
+                history.status == LaneStatus.LOADING || history.appending
+
+            PullsLane.WANTED -> wanted.status == LaneStatus.LOADING
+        }
+
+    /**
+     * True when the showing lane is drawing rows the server can no longer be asked about.
+     *
+     * Only ever true on a read-through lane that was fetched while connected and is now being looked
+     * at offline. REQUIREMENTS.md: "Offline is a first-class state, not an error" — so the rows stay
+     * and the screen says how old they are, rather than blanking a list the user was reading. The
+     * queue has its own, different offline line: its rows come from the mirror, which is the last
+     * thing the server said rather than a page this session happened to fetch.
+     */
+    val laneIsStale: Boolean
+        get() = offline && lane.isReadThrough && when (lane) {
+            PullsLane.QUEUE -> false
+            PullsLane.HISTORY -> history.entries.isNotEmpty()
+            PullsLane.WANTED -> !wanted.isEmpty
+        }
 }
 
 /**

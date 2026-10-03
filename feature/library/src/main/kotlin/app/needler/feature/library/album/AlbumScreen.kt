@@ -786,6 +786,25 @@ private fun AlbumQualityTags(
  *
  * The shuffle control is relabelled from the same value rather than disabled. Why, and the two
  * alternatives rejected, are recorded on [AlbumTransport].
+ *
+ * ## Where the overflow sits
+ *
+ * The `PLAY` row reads Play, Shuffle, Pull local, then the crate menu. The menu was third, between
+ * Shuffle and Pull local, and moving it to the end is deliberate: an overflow is not a peer of the
+ * controls beside it. It is the place things go when they have nowhere else, so it belongs where
+ * the eye stops rather than interrupting the run of named actions. Third, it also pushed Pull local
+ * — a real, named action that downloads a whole record onto the device — out past the dots, where
+ * a named action reads as an afterthought. Last, the row is three actions and then the place the
+ * rest of them are kept.
+ *
+ * Composition order is the only order. [FlowRow] places its children in the order they are
+ * declared, and nothing in this row sets a `traversalIndex`, so a screen reader walks Play,
+ * Shuffle, Pull local, the menu — exactly the drawn sequence REQUIREMENTS.md "Accessibility"
+ * requires it to match. The alternative, leaving the declarations alone and giving each control an
+ * explicit traversal index, was rejected for making the spoken order and the drawn order two
+ * separate facts that can drift: the next control added to the row would have to remember to
+ * renumber the other four. `AlbumActionOrderTest` asserts the drawn order so that a later edit
+ * cannot quietly put the dots back in the middle.
  */
 @Composable
 private fun AlbumActions(
@@ -852,31 +871,6 @@ private fun AlbumActions(
                         enabled = !state.busy && state.hasPlayableTracks,
                         contentDescription = transport.shuffleDescription(label),
                     )
-                    // The crate menu, as the fourth control rather than as two more buttons.
-                    //
-                    // REQUIREMENTS.md "Queue" gives the crate a count and a total duration and has
-                    // it persist across restarts, and nothing on this screen could put a record
-                    // into it: Play, Shuffle and every track row replace it. The two actions that
-                    // can - append, and play next - live behind one 48dp target here, beside the
-                    // controls that start playback, because that is where a user reaching for
-                    // "queue this record" looks first and the pack draws nothing for them at all.
-                    //
-                    // Not reinstated as a top-bar overflow. The one that was removed held a single
-                    // item duplicating the artist link a few dp below it; this holds two actions
-                    // reachable nowhere else, which is the difference between a menu and a hidden
-                    // link. Not five buttons across either: at 200% text the row already wraps
-                    // twice, and a FlowRow of five makes Play one item in a list rather than the
-                    // primary action.
-                    NeedlerCrateControl(
-                        subject = label,
-                        expanded = crateMenuOpen,
-                        onExpandedChange = { crateMenuOpen = it },
-                        onAddToCrate = { onAddToCrate(false) },
-                        onPlayNext = { onAddToCrate(true) },
-                        enabled = !state.busy && state.hasPlayableTracks,
-                        emphasised = true,
-                        visualSize = 44.dp,
-                    )
                     // REQUIREMENTS.md: hide the pin affordance entirely when the
                     // administrator has turned library download off, rather than
                     // letting it fail on a 403 after the tap.
@@ -896,6 +890,31 @@ private fun AlbumActions(
                             },
                         )
                     }
+                    // Last in the row, after every control that has a name. Why is on
+                    // [AlbumActions] under "Where the overflow sits".
+                    //
+                    // Two actions behind one 48dp target, not two more buttons.
+                    // REQUIREMENTS.md "Queue" gives the crate a count and a total duration and
+                    // has it persist across restarts, and nothing on this screen could put a
+                    // record into it: Play, Shuffle and every track row replace it. Append and
+                    // play next are reachable nowhere else on this screen.
+                    //
+                    // Not reinstated as a top-bar overflow. The one that was removed held a
+                    // single item duplicating the artist link a few dp below it; this holds two
+                    // actions reachable nowhere else, which is the difference between a menu and
+                    // a hidden link. Not five buttons across either: at 200% text the row
+                    // already wraps, and a FlowRow of five makes Play one item in a list rather
+                    // than the primary action.
+                    NeedlerCrateControl(
+                        subject = label,
+                        expanded = crateMenuOpen,
+                        onExpandedChange = { crateMenuOpen = it },
+                        onAddToCrate = { onAddToCrate(false) },
+                        onPlayNext = { onAddToCrate(true) },
+                        enabled = !state.busy && state.hasPlayableTracks,
+                        emphasised = true,
+                        visualSize = 44.dp,
+                    )
                 }
                 if (!state.downloadAllowed) {
                     Text(
@@ -1226,10 +1245,20 @@ private const val PULLED_TAG_LABEL: String = "Pulled:"
 /**
  * What the rung ladder does, said before it is used rather than discovered afterwards.
  *
- * The two facts that are not guessable from the chips: the choice follows this record onto every
- * connection, and anything the server re-encodes is thrown away rather than kept for offline -
- * REQUIREMENTS.md "Why transcoded bytes are never cached".
+ * Three facts that are not guessable from the chips, in one line: the choice follows this record,
+ * it follows it onto every connection, and it takes hold on each track's **next** play rather than
+ * the one in progress. The timing is the fact the first draft omitted and a device run caught -
+ * `resolveSource` runs inside `NeedlerAudioDataSource.open()`, so a rung is read once per load and
+ * an item the player has already prepared keeps the stream it was opened with. The quality tag
+ * moves at once, which made the control look instant while the audio did not change.
+ *
+ * ## Why the retention caveat is not repeated here
+ *
+ * It used to be a second sentence, and it said the same thing as [AlbumUiState.serverCacheNotice]
+ * two lines above - which states it *only* when a transcode is actually in force and the album is
+ * not already pulled. Saying it twice when it applies, and once when it does not, is how the block
+ * became crowded. The conditional line keeps REQUIREMENTS.md "Why transcoded bytes are never
+ * cached" said where it is true; this one no longer competes with it.
  */
 private const val OVERRIDE_EXPLANATION: String =
-    "Applies to this album on every connection. Anything the server re-encodes is not kept on this " +
-        "device."
+    "This album, every connection, from each track's next play."

@@ -202,20 +202,21 @@ object PlayerFormat {
      *
      * TalkBack reads a chip border as nothing at all, so the sentence has to carry what the chip's
      * emphasis says on screen: whether this is what you are about to hear, or a rate that a local copy
-     * is overriding.
+     * is overriding. Each sentence opens with the state's own word, so the three words a reader learns
+     * from the badges are the same three they hear here.
      */
     fun spokenServerBadge(format: StreamFormat?, source: AudioQuality?, inUse: Boolean): String? {
         val value: String = serverBadge(format = format, source = source) ?: return null
         val transcoding: Boolean = format is StreamFormat.Transcoded
         return when {
-            !inUse -> "From the server, " + value + ", not in use while this is on the device"
-            transcoding -> "Streaming " + value + ", re-encoded by the server and not kept on this device"
-            else -> "Streaming " + value + ", original quality"
+            !inUse -> "Server, " + value + ", not in use while this is on the device"
+            transcoding -> "Server, streaming " + value + ", re-encoded and not kept on this device"
+            else -> "Server, streaming " + value + ", original quality"
         }
     }
 
     /**
-     * What the **Pulled** tag shows: the quality of the copy actually on this device.
+     * What the **Device** tag shows: the quality of the copy actually on this device.
      *
      * Always the source's own quality, because a download is always original bytes - REQUIREMENTS.md
      * "Why transcoded bytes are never cached" makes a transcoded download "that track's **permanent**
@@ -223,10 +224,15 @@ object PlayerFormat {
      */
     fun pulledBadge(pulled: AudioQuality?): String? = formatBadge(pulled)
 
-    /** The Pulled tag, spoken. Names the tier, since "on device" is the fact the tag exists to state. */
+    /**
+     * The Device tag, spoken. Opens with the state's own word, which is the fact the tag exists to state.
+     *
+     * The chip and the weight say "this is the one in force" on screen and say nothing at all to a
+     * screen reader, so the sentence carries it: "playing from here" is the spoken form of the chip.
+     */
     fun spokenPulledBadge(pulled: AudioQuality?): String? {
         val value: String = pulledBadge(pulled) ?: return null
-        return "Downloaded to this device, " + value + ", playing from here"
+        return "Device, " + value + ", playing from here"
     }
 
     /** `MP3`, `Opus` - a codec the resolver names for a URL, spelled the way the project spells it. */

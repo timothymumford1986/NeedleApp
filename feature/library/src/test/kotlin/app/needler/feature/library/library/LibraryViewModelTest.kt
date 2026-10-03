@@ -168,7 +168,7 @@ class LibraryViewModelTest {
 
     @Test
     fun `every sort option maps to a songs ordering as well as an album one`() {
-        // A guard on the enum rather than on the ViewModel: a sixth option added with only an
+        // A guard on the enum rather than on the ViewModel: a fifth option added with only an
         // album mapping would not compile, and one added with the wrong songs mapping is caught
         // here rather than on a device.
         assertEquals(
@@ -176,10 +176,29 @@ class LibraryViewModelTest {
                 TrackListKind.NEWEST,
                 TrackListKind.ALPHABETICAL_BY_TITLE,
                 TrackListKind.ALPHABETICAL_BY_ARTIST,
-                TrackListKind.FREQUENT,
                 TrackListKind.STARRED,
             ),
             LibrarySort.entries.map { it.trackKind },
+        )
+    }
+
+    /**
+     * No sort option maps to an ordering the mirror cannot honour.
+     *
+     * `Played` used to, and it was the one option that reported an order it had not applied:
+     * `FREQUENT` falls through to recently-added in `DefaultLibraryRepository` for both albums and
+     * tracks, so picking it produced `Recent` under a control that then read "Played".
+     * REQUIREMENTS.md says of the Songs tab that "'Played' cannot be honoured, because play counts
+     * are computed server-side and the mirror holds no column reproducing them". The option was
+     * removed; this is what stops it coming back, in either vocabulary.
+     */
+    @Test
+    fun `no sort option offers an ordering the mirror cannot produce`() {
+        assertFalse(
+            "a sort maps to FREQUENT, which silently serves recently-added",
+            LibrarySort.entries.any {
+                it.kind == AlbumListKind.FREQUENT || it.trackKind == TrackListKind.FREQUENT
+            },
         )
     }
 

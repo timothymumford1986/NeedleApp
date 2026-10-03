@@ -148,13 +148,17 @@ class PlayerViewModel @Inject constructor(
      * What the server would send for the playing track right now, and what is already on this device.
      *
      * One flow rather than two because both halves are about the same track and the tags are drawn as a
-     * pair: emitting them separately would let the screen show `Pulled: FLAC` for one frame beside a
+     * pair: emitting them separately would let the screen show `Device: FLAC` for one frame beside a
      * `Server:` value resolved for the track before it.
      *
-     * Note what decides "pulled": `pinned`, complete, and not stale. A merely cached copy is evictable,
-     * so calling it pulled would promise offline availability the app cannot keep, and stale bytes are
-     * about to be discarded by the resolver on the next play - REQUIREMENTS.md "Invalidating upgraded
-     * files" - so a tag naming them would outlive the copy it describes.
+     * Note what decides the **Device** tag: `pinned`, complete, and not stale. A copy held only in the
+     * Temporary tier is evictable, so claiming the device state for it would promise offline
+     * availability the app cannot keep, and stale bytes are about to be discarded by the resolver on
+     * the next play - REQUIREMENTS.md "Invalidating upgraded files" - so a tag naming them would
+     * outlive the copy it describes.
+     *
+     * This is also the evidence that the single "device" state cannot conflate the two retention
+     * tiers: nothing in the app reads the Temporary tier as a reason to say "device".
      */
     private val quality: Flow<TrackQuality> = currentTrack.flatMapLatest { track ->
         if (track == null) {
@@ -329,6 +333,29 @@ class PlayerViewModel @Inject constructor(
      * downloaded: a local copy wins while it exists, so the override is dormant rather than gone, and
      * freeing disk space must not silently revoke a preference nobody withdrew. See
      * [app.needler.core.domain.model.StreamOverride].
+     *
+     * ## It takes effect on the track's next play, deliberately
+     *
+     * **Nothing is sent to the session.** The device report was that "hitting any of those buttons
+     * doesn't seem to make a difference anyway", and that is accurate for the track that is already
+     * playing: the written rung is read by `NeedlerAudioDataSource.open`, once per load, and an item
+     * Media3 has already prepared keeps the stream it was opened with. The tag above the ladder moves
+     * immediately because [serverFormatFor] re-resolves from the same inputs, so the *decision* is
+     * visibly taken; what does not change is the bytes already arriving.
+     *
+     * Re-preparing the current item at its current position was the alternative, and it was rejected
+     * on three counts. It cannot be done from here at all - [PlaybackController] has no command for
+     * it, so it would mean a new method on an interface in `:core:domain` and an implementation in
+     * `:player:service`, neither of which is this layer's to write. It re-buffers under the listener,
+     * which is audible as a gap on the one connection where it is least welcome. And on a metered
+     * connection it spends the bytes already fetched for nothing: worse, REQUIREMENTS.md "Why
+     * transcoded bytes are never cached" means re-preparing *onto* a transcoding rung abandons a
+     * part-written original the store was about to keep, so the control would cost a listener the
+     * offline copy they were accumulating.
+     *
+     * So the deferred behaviour is kept and the ladder says when it applies - "from its next play",
+     * in `QualityTags.OVERRIDE_EXPLANATION`. A control that is honest about its timing is worth more
+     * than one that is instant and throws away a download to be so.
      */
     fun overridePlayingTrackQuality(rung: StreamRung) {
         val track: Track = state.value.item?.track ?: return

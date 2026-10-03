@@ -260,7 +260,7 @@ class AlbumScreenshotTest {
     /**
      * Pause and "Shuffle again" at 200% text.
      *
-     * Both words are longer than the ones they replace, and the action block is a `FlowRow` three
+     * Both words are longer than the ones they replace, and the action block is a `FlowRow` four
      * controls wide. REQUIREMENTS.md "Accessibility" asks for 200% without clipping, so the longer
      * labels are rendered at it rather than assumed to fit.
      */
@@ -280,19 +280,31 @@ class AlbumScreenshotTest {
     // ---- the crate ----------------------------------------------------------
 
     /**
-     * The action row with its fourth control: Play, Shuffle, the crate menu, Pull local.
+     * The action row with its fourth control: Play, Shuffle, Pull local, the crate menu.
      *
      * The placement decision in one image. The pack draws three controls here and no way to
      * queue anything; the fourth is an icon button rather than two more labelled buttons,
      * because five across would stop Play being visibly the primary action. Rendering it is
      * how that claim is checked rather than asserted.
+     *
+     * The menu is drawn **last**, which it was not: it used to sit third, between Shuffle and
+     * Pull local, interrupting the run of named actions and leaving a real one out past the
+     * dots. `AlbumActions` records why under "Where the overflow sits", and
+     * `AlbumActionOrderTest` is what holds the order, because this image and an image of the
+     * old order are both 780 by 1688 pixels and [assertRendered] cannot tell them apart.
      */
     @Test
     fun `the action row carries the crate menu`() {
         capture("album-crate-control", NeedlerDevice.Phone, owned())
     }
 
-    /** The same four controls at 200% text, where the row wraps twice. */
+    /**
+     * The same four controls at 200% text, where the row wraps.
+     *
+     * The wrap point is what moving the menu changes: this is the image that says where it
+     * falls now. `album-crate-control-large-text-phone.png`, and `album-large-text-phone.png`
+     * for the same row in the same state at the same size.
+     */
     @Test
     fun `the action row with the crate menu at 200 percent text size`() {
         capture("album-crate-control-large-text", NeedlerDevice.Phone, owned(), fontScale = 2f)

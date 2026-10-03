@@ -3,12 +3,14 @@ package app.needler.feature.library.artist
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
 import app.needler.core.domain.model.AlbumState
+import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.FavouriteTarget
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.QueueItem
+import app.needler.core.domain.model.SearchBucket
 import app.needler.feature.library.FakeFavouriteRepository
 import app.needler.feature.library.FakeLibraryRepository
 import app.needler.feature.library.FakePlaybackController
@@ -41,6 +43,7 @@ class ArtistViewModelTest {
     private val favourites = FakeFavouriteRepository()
     private val playback = FakePlaybackController()
     private val sessions = FakeSessions()
+    private val catalogue = FakeArtistCatalogueSearch()
 
     private val artist = SampleLibrary.artists.first()
     private val owned = listOf(SampleLibrary.submarine)
@@ -84,6 +87,7 @@ class ArtistViewModelTest {
         library = library,
         favourites = favourites,
         playback = Optional.of(playback),
+        search = catalogue,
         pulls = pulls,
         sessions = sessions,
     )
@@ -314,6 +318,129 @@ class ArtistViewModelTest {
         )
     }
 
+    // ---- the screen is never silent about the catalogue half ----------------
+
+    /**
+     * The device regression, v0.0.12: Dido, four owned albums, and nothing whatever about the
+     * rest of her records.
+     *
+     * No discography section, no sentence, no retry, nothing in logcat. The screen could not have
+     * drawn any of them: the only empty-state line on it is gated on [ArtistUiState.hasNothing],
+     * which is false whenever anything is owned, and the retry was gated on the same thing. So an
+     * artist with a dozen un-owned records looked exactly like an artist with four records in
+     * total, and a listener had no way to tell "that is all there is" from "we could not look it
+     * up" from "we did not try".
+     *
+     * REQUIREMENTS.md "Library browse" calls this screen the place "where the two lanes meet
+     * visibly". A lane that is missing without comment is not visible.
+     */
+    @Test
+    fun `an artist with owned albums and an empty catalogue half says so and offers a retry`() =
+        runTest {
+            library.ownedByArtist.value = mapOf(artist.mbid.value to owned)
+            library.discographyByArtist.value = mapOf(artist.mbid.value to owned)
+            library.tracksByMbid.value = mapOf(
+                SampleLibrary.submarine.releaseGroupMbid.value to SampleLibrary.submarineTracks,
+            )
+
+            viewModel().state.test {
+                awaitItem()
+                var loaded = awaitItem()
+                while (!loaded.discographySettled) loaded = awaitItem()
+                assertEquals(1, loaded.ownedAlbums.size)
+                assertTrue(loaded.catalogueAlbums.isEmpty())
+                // Not the empty screen, and not a failure either - which is exactly why this
+                // state used to have no representation at all.
+                assertFalse(loaded.hasNothing)
+                assertFalse(loaded.discographyUnavailable)
+                assertTrue(loaded.discographyEmpty)
+                assertTrue(loaded.canRetryDiscography)
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    /**
+     * A failed lookup is reported with a full library half too, and is not reported as empty.
+     *
+     * The two answers are drawn as different sentences, so they have to be different facts: a
+     * warming or offline catalogue has not told us the artist is finished.
+     */
+    @Test
+    fun `a failed lookup is reported even when the library half is full`() = runTest {
+        library.refreshDiscographyOutcome =
+            Outcome.Failure(NeedlerError.CapabilityUnavailable("still warming"))
+        library.ownedByArtist.value = mapOf(artist.mbid.value to owned)
+        library.discographyByArtist.value = mapOf(artist.mbid.value to owned)
+
+        viewModel().state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.discographySettled) loaded = awaitItem()
+            assertTrue(loaded.discographyUnavailable)
+            assertNotNull(loaded.discographyError)
+            assertFalse(loaded.discographyEmpty)
+            assertTrue(loaded.canRetryDiscography)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * A discography that is on screen and failed to refresh says it may be short.
+     *
+     * The legitimate half of the sentence the empty case used to monopolise. [ArtistUiState]
+     * suppresses `discographyError` once there are un-owned rows to draw - "the discography is
+     * unavailable" printed under a discography is a contradiction - and that suppression used to
+     * take the whole message with it, so nine cached rows were indistinguishable from nine current
+     * ones. The retry has to be offered alongside it, because the line names it.
+     */
+    @Test
+    fun `a stale discography is marked as possibly short and can be refreshed`() = runTest {
+        library.refreshDiscographyOutcome = Outcome.Failure(NeedlerError.Offline())
+        library.ownedByArtist.value = mapOf(artist.mbid.value to owned)
+        library.discographyByArtist.value = mapOf(artist.mbid.value to (owned + unowned))
+
+        viewModel().state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.discographySettled) loaded = awaitItem()
+            assertEquals(2, loaded.catalogueAlbums.size)
+            // Suppressed, because its output is on screen.
+            assertNull(loaded.discographyError)
+            assertFalse(loaded.discographyUnavailable)
+            // But the fact survives, and so does the control the line points at.
+            assertTrue(loaded.discographyIncomplete)
+            assertTrue(loaded.canRetryDiscography)
+            assertFalse(loaded.discographyEmpty)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /** A current discography claims nothing: no line, and no retry competing with the Pull all. */
+    @Test
+    fun `a discography that refreshed cleanly is not marked as short`() = runTest {
+        stocked()
+
+        viewModel().state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.discographySettled) loaded = awaitItem()
+            assertEquals(2, loaded.catalogueAlbums.size)
+            assertFalse(loaded.discographyIncomplete)
+            assertFalse(loaded.canRetryDiscography)
+            assertTrue(loaded.canPullArtist)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /** Nothing is claimed about a lookup that has not answered: the sentence waits for it. */
+    @Test
+    fun `an unsettled lookup claims nothing about the catalogue`() = runTest {
+        val state = ArtistUiState(loading = false, ownedAlbums = owned)
+
+        assertFalse(state.discographyEmpty)
+        assertFalse(state.canRetryDiscography)
+    }
+
     // ---- an id the catalogue can never accept -------------------------------
 
     /**
@@ -374,6 +501,149 @@ class ArtistViewModelTest {
             assertEquals(2, loaded.pullableAlbums.size)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    // ---- the way out of a name-derived artist -------------------------------
+
+    /**
+     * The reported case, and what it now offers.
+     *
+     * Observed on a device at v0.0.12: the artist with the most records in the user's library drew
+     * four owned albums and the name-derived sentence, and nothing else. The sentence was accurate
+     * and the screen was a dead end, which is the worst combination available - there was nothing to
+     * dispute and nothing to do. The name is still a perfectly good catalogue query even when the id
+     * is useless, and this is the control that asks it.
+     */
+    @Test
+    fun `a name-derived artist is offered the catalogue, by name`() = runTest {
+        library.ownedByArtist.value = mapOf(SERVER_MINTED to owned)
+        library.discographyByArtist.value = mapOf(SERVER_MINTED to owned)
+        catalogue.returning(
+            Artist(mbid = ArtistMbid("ar-real-dido"), name = "Some Local Band", ownedAlbumCount = 0),
+        )
+
+        val model = viewModel(artistId = SERVER_MINTED, artistName = "Some Local Band")
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.artistNotInCatalogue) loaded = awaitItem()
+            // The control exists before it is pressed, which is what makes the sentence honest.
+            assertTrue(loaded.canFindInCatalogue)
+            assertFalse(loaded.canRetryDiscography)
+
+            model.onFindInCatalogue()
+            advanceUntilIdle()
+            var found = awaitItem()
+            while (found.catalogueNamesakes.isEmpty() && !found.namesakeSearchDone) {
+                found = awaitItem()
+            }
+            assertEquals(listOf("Some Local Band"), found.catalogueNamesakes.map { it.name })
+            cancelAndIgnoreRemainingEvents()
+        }
+        // The artists bucket, asked for by name. Not rule 2's combined search, which would have
+        // fetched a screenful of albums for a question entirely about artists.
+        assertEquals(
+            listOf(SearchBucket.ARTISTS to "Some Local Band"),
+            catalogue.bucketQueries.map { it.first to it.second },
+        )
+    }
+
+    /**
+     * Three kinds of candidate are dropped, each because tapping it would lead nowhere.
+     *
+     * A candidate whose own id is name-derived cannot fetch a discography either, so it is the same
+     * dead end one screen further on. A candidate whose name does not answer the query is not the
+     * artist being looked at - the catalogue ranks on aliases and credits, which is how a search for
+     * "wonder" put "Jr. Wonder" first. And the artist's own id would be a tap back to this screen.
+     */
+    @Test
+    fun `candidates that lead nowhere are dropped`() = runTest {
+        library.ownedByArtist.value = mapOf(SERVER_MINTED to owned)
+        library.discographyByArtist.value = mapOf(SERVER_MINTED to owned)
+        catalogue.returning(
+            Artist(mbid = ArtistMbid(SERVER_MINTED), name = "Dido"),
+            Artist(mbid = SampleLibrary.nameDerivedArtist.mbid, name = "Dido"),
+            Artist(mbid = ArtistMbid("ar-unrelated"), name = "Hamilton Mixtape"),
+            Artist(mbid = ArtistMbid("ar-dido"), name = "Dido"),
+            Artist(mbid = ArtistMbid("ar-dido-rowley"), name = "Dido Rowley"),
+        )
+
+        val model = viewModel(artistId = SERVER_MINTED, artistName = "Dido")
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.artistNotInCatalogue) loaded = awaitItem()
+            model.onFindInCatalogue()
+            advanceUntilIdle()
+            var found = awaitItem()
+            while (!found.namesakeSearchDone) found = awaitItem()
+            assertEquals(
+                listOf("Dido", "Dido Rowley"),
+                found.catalogueNamesakes.map { it.name },
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /** A failed look-up is reported as itself, because it is worth another tap. */
+    @Test
+    fun `a failed catalogue look-up is reported and not read as an empty one`() = runTest {
+        library.ownedByArtist.value = mapOf(SERVER_MINTED to owned)
+        library.discographyByArtist.value = mapOf(SERVER_MINTED to owned)
+        catalogue.bucketOutcome = Outcome.Failure(NeedlerError.Offline())
+
+        val model = viewModel(artistId = SERVER_MINTED, artistName = "Dido")
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.artistNotInCatalogue) loaded = awaitItem()
+            model.onFindInCatalogue()
+            advanceUntilIdle()
+            var failed = awaitItem()
+            while (!failed.namesakeSearchFailed) failed = awaitItem()
+            assertTrue(failed.catalogueNamesakes.isEmpty())
+            // Not "the catalogue has nobody of this name": nothing was learned about that.
+            assertFalse(failed.noNamesakesFound)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /** An empty answer is a different fact from never having asked, and only one of them is said. */
+    @Test
+    fun `nobody of this name in the catalogue is said only once it has been asked`() = runTest {
+        library.ownedByArtist.value = mapOf(SERVER_MINTED to owned)
+        library.discographyByArtist.value = mapOf(SERVER_MINTED to owned)
+
+        val model = viewModel(artistId = SERVER_MINTED, artistName = "Dido")
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.artistNotInCatalogue) loaded = awaitItem()
+            assertFalse(loaded.noNamesakesFound)
+
+            model.onFindInCatalogue()
+            advanceUntilIdle()
+            var asked = awaitItem()
+            while (!asked.namesakeSearchDone) asked = awaitItem()
+            assertTrue(asked.noNamesakesFound)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /** An artist with no name anywhere has no query to make, so the control is absent. */
+    @Test
+    fun `an artist with no name is offered no catalogue search`() = runTest {
+        val model = viewModel(artistId = SERVER_MINTED)
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.loading) loaded = awaitItem()
+            assertFalse(loaded.canFindInCatalogue)
+            model.onFindInCatalogue()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(catalogue.bucketQueries.isEmpty())
     }
 
     // ---- an artist nobody owns, reached from search -------------------------

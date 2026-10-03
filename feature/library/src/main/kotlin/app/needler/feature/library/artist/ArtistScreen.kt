@@ -5,6 +5,7 @@ package app.needler.feature.library.artist
 import app.needler.core.domain.model.NeedlerError
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +57,8 @@ import app.needler.core.design.component.PathPull
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
+import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.common.AlbumArtwork
@@ -118,6 +121,8 @@ fun ArtistScreen(
     onPull: (Album) -> Unit,
     onPullArtist: () -> Unit,
     onRetryDiscography: () -> Unit,
+    onFindInCatalogue: () -> Unit,
+    onOpenArtist: (ArtistMbid) -> Unit,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     onPlayAlbum: (ReleaseGroupMbid) -> Unit,
@@ -203,6 +208,7 @@ fun ArtistScreen(
                                 onAddToCrate = onAddToCrate,
                                 onPullArtist = onPullArtist,
                                 onRetryDiscography = onRetryDiscography,
+                                onFindInCatalogue = onFindInCatalogue,
                             )
                         }
                     }
@@ -253,6 +259,16 @@ fun ArtistScreen(
                             onAlbumClick = onAlbumClick,
                             onPull = onPull,
                         )
+
+                        // The legitimate half of the old unavailable sentence. These rows came out
+                        // of the mirror and the lane that refreshes them did not answer, so the
+                        // list may be short - and nothing else on the screen could tell a reader
+                        // that the nine records above are a cache rather than a catalogue.
+                        if (state.discographyIncomplete) {
+                            item(key = "catalogue-incomplete") {
+                                NoticeLine(message = CATALOGUE_INCOMPLETE)
+                            }
+                        }
                     }
 
                     if (state.discographyUnavailable) {
@@ -268,6 +284,35 @@ fun ArtistScreen(
                         }
                     }
 
+                    // What the catalogue knows by this name, for the artist whose id cannot reach
+                    // it. Rows rather than an automatic jump: MusicBrainz holds several artists per
+                    // name and binding the user's library to the wrong one would put a stranger's
+                    // discography under their own records. See `ArtistViewModel.onFindInCatalogue`.
+                    if (state.catalogueNamesakes.isNotEmpty()) {
+                        item(key = "namesakes-header") {
+                            SectionSpacer()
+                            NeedlerSectionHeader(title = "In the catalogue")
+                        }
+                        namesakeRows(
+                            artists = state.catalogueNamesakes,
+                            onOpenArtist = onOpenArtist,
+                        )
+                    }
+
+                    if (state.noNamesakesFound) {
+                        item(key = "namesakes-empty") {
+                            SectionSpacer()
+                            NoticeLine(message = NO_NAMESAKES)
+                        }
+                    }
+
+                    if (state.namesakeSearchFailed) {
+                        item(key = "namesakes-failed") {
+                            SectionSpacer()
+                            NoticeLine(message = NAMESAKE_SEARCH_FAILED)
+                        }
+                    }
+
                     if (state.hasNothing && !state.discographyUnavailable) {
                         item(key = "empty") {
                             SectionSpacer()
@@ -276,6 +321,19 @@ fun ArtistScreen(
                                 style = NeedlerTheme.typography.body,
                                 color = NeedlerTheme.colors.textSecondary,
                             )
+                        }
+                    }
+
+                    // The lookup finished and the catalogue had nothing more. Said rather than
+                    // left blank: with owned albums above it, a missing "More from this artist"
+                    // is indistinguishable from an artist who recorded nothing else, and the
+                    // device showed exactly that for an artist with a dozen un-owned records.
+                    // Guarded on `hasNothing` so it does not follow the line above saying the
+                    // same thing about a screen with nothing on it at all.
+                    if (state.discographyEmpty && !state.hasNothing) {
+                        item(key = "catalogue-empty") {
+                            SectionSpacer()
+                            NoticeLine(message = CATALOGUE_COMPLETE)
                         }
                     }
                 }
@@ -320,6 +378,7 @@ private fun ArtistActions(
     onAddToCrate: (Boolean) -> Unit,
     onPullArtist: () -> Unit,
     onRetryDiscography: () -> Unit,
+    onFindInCatalogue: () -> Unit,
 ) {
     val spacing = NeedlerTheme.spacing
     val name: String = state.spokenName
@@ -346,19 +405,6 @@ private fun ArtistActions(
                 size = NeedlerButtonSize.Medium,
                 enabled = !state.busy,
                 contentDescription = "Shuffle everything by " + name + " in your library",
-            )
-            // Beside the two controls that replace the crate, because this is the one that
-            // does not. An artist with records in the library is the commonest place to want
-            // "after what I am listening to", and until now the screen could only interrupt.
-            NeedlerCrateControl(
-                subject = "everything by " + name,
-                expanded = crateMenuOpen,
-                onExpandedChange = { crateMenuOpen = it },
-                onAddToCrate = { onAddToCrate(false) },
-                onPlayNext = { onAddToCrate(true) },
-                enabled = !state.busy,
-                emphasised = true,
-                visualSize = 44.dp,
             )
         }
         // The pack's one filled green button is the pull, and it is green because acquiring
@@ -390,6 +436,48 @@ private fun ArtistActions(
                 contentDescription = "Look up " + name + " in the catalogue again",
             )
         }
+        // The one action a name-derived artist can take, and the action [CATALOGUE_NO_MBID] names.
+        // Mutually exclusive with Try again by construction - `canRetryDiscography` excludes
+        // `artistNotInCatalogue` and this requires it - so the row never offers both.
+        if (state.canFindInCatalogue) {
+            NeedlerSecondaryButton(
+                text = if (state.searchingCatalogue) "Searching…" else "Search the catalogue",
+                onClick = onFindInCatalogue,
+                size = NeedlerButtonSize.Medium,
+                enabled = !state.busy && !state.searchingCatalogue,
+                contentDescription = "Search the MusicBrainz catalogue for artists named " + name,
+            )
+        }
+        // Last in the row, after every control that has a name. An overflow is not a peer of the
+        // actions beside it: it is where things go that have nowhere else, so it belongs where the
+        // eye stops rather than interrupting the run of named actions. Third, it pushed Pull all -
+        // the one filled green button on the screen - out past the dots.
+        //
+        // Still guarded by `canPlay`: there is nothing to queue from an artist with no owned
+        // records, so the menu is absent rather than present and empty. Composition order is the
+        // drawn order and the spoken order at once, and nothing in this row sets a
+        // `traversalIndex`, so the move keeps them matching.
+        if (state.canPlay) {
+            NeedlerCrateControl(
+                subject = "everything by " + name,
+                expanded = crateMenuOpen,
+                onExpandedChange = { crateMenuOpen = it },
+                onAddToCrate = { onAddToCrate(false) },
+                onPlayNext = { onAddToCrate(true) },
+                enabled = !state.busy,
+                emphasised = true,
+                visualSize = 44.dp,
+            )
+        }
+        // Last in the row, after every control that has a name. An overflow is not a peer of the
+        // actions beside it: it is where things go that have nowhere else, so it belongs where the
+        // eye stops rather than interrupting the run of named actions. Third, it pushed Pull all -
+        // the one filled green button on the screen - out past the dots.
+        //
+        // Still guarded by `canPlay`: there is nothing to queue from an artist with no owned
+        // records, so the menu is absent rather than present and empty. Composition order is the
+        // drawn order and the spoken order at once, and nothing in this row sets a
+        // `traversalIndex`, so the move keeps them matching.
     }
 }
 
@@ -541,6 +629,57 @@ private fun LazyListScope.ownedRows(
                     onAddToCrate = { onAddAlbumToCrate(album.releaseGroupMbid, false) },
                     onPlayNext = { onAddAlbumToCrate(album.releaseGroupMbid, true) },
                     enabled = !busy,
+                )
+            },
+        )
+    }
+}
+
+/**
+ * The catalogue's artists of this name, each opening its own artist screen.
+ *
+ * A row and not a link out to a browser: the destination is this same screen for a different MBID,
+ * which `:app` already routes, and arriving there means a real discography with a Pull on every
+ * un-owned record. That is the whole point of offering them.
+ *
+ * The subtitle is MusicBrainz's own disambiguation comment — "US singer-songwriter", "drummer,
+ * London" — which is the only thing that tells two identically-named rows apart. `Artist`'s own KDoc
+ * records why that field exists and that the mirror never writes it; these rows are catalogue rows,
+ * so they are exactly the case it was added for. With no comment the row falls back to the album
+ * count, and with neither it is the name alone, which is still honest: the catalogue gave us nothing
+ * else to say.
+ *
+ * Artwork is drawn circular, as the pack draws an artist everywhere one appears, and comes from the
+ * `ArtworkRef.Remote` the search response carried; see `CatalogueMappers.artist` for why a
+ * letter placeholder is the correct answer when it carried none.
+ */
+private fun LazyListScope.namesakeRows(
+    artists: List<Artist>,
+    onOpenArtist: (ArtistMbid) -> Unit,
+) {
+    items(
+        count = artists.size,
+        key = { index -> "namesake-" + artists[index].mbid.value },
+    ) { index ->
+        val candidate: Artist = artists[index]
+        val subtitle: String = candidate.disambiguation?.trim()?.takeIf { it.isNotEmpty() }
+            ?: LibraryFormat.plural(candidate.ownedAlbumCount.toLong(), "album")
+                .takeIf { candidate.ownedAlbumCount > 0 }
+            ?: NOT_IN_LIBRARY
+        NeedlerAlbumRow(
+            title = candidate.name,
+            subtitle = subtitle,
+            onClick = { onOpenArtist(candidate.mbid) },
+            showDivider = true,
+            contentDescription = candidate.name + ", " + subtitle + ", open in the catalogue",
+            artwork = {
+                NeedlerArtwork(
+                    model = candidate.artwork,
+                    identity = candidate.mbid.value,
+                    name = candidate.name,
+                    contentDescription = null,
+                    modifier = Modifier.size(NeedlerTheme.sizes.artworkRow),
+                    shape = CircleShape,
                 )
             },
         )
@@ -793,13 +932,71 @@ internal fun catalogueNoticeMessage(
  * retry. The wording deliberately avoids "MBID" and "UUID": the fact that matters to
  * a listener is that their server could not identify this artist, not which flavour
  * of identifier it minted instead.
+ *
+ * ## Why the last clause changed
+ *
+ * It used to end "Everything you own by them is listed above", and the device showed what that
+ * costs. The artist it says this about was the one with the most records in the user's library, and
+ * the whole screen was then accurate and useless: no discography, no way to get one, and a closing
+ * sentence that summarised the library rather than offering anything. The sentence now names the
+ * action beside it — **Search the catalogue** — and `ArtistUiState.canFindInCatalogue` is true in
+ * exactly the states this string is drawn in, so the action it names is always on the screen with
+ * it. A sentence naming a control that is not there is worse than a sentence that offers nothing.
+ *
+ * "Under this entry" is load-bearing too: the artist may be perfectly well known to MusicBrainz, and
+ * it is *this server's row for them* that cannot reach it. The old wording read as a claim about the
+ * artist.
  */
 internal const val CATALOGUE_NO_MBID: String =
     "Your server matched this artist by name rather than to MusicBrainz, so there is no full " +
-        "discography to look up. Everything you own by them is listed above."
+        "discography to look up under this entry. Search the catalogue by name to find them there."
 
 internal const val CATALOGUE_NOT_IN_CATALOGUE: String =
     "The catalogue has nothing else for this artist. What you own is listed above."
+
+/** A namesake row's subtitle when the catalogue offered no disambiguation and no album count. */
+internal const val NOT_IN_LIBRARY: String = "Not in your library"
+
+/**
+ * The answer when the catalogue has nobody of this name either.
+ *
+ * It does not invite another tap, because the same query will get the same answer. It does say which
+ * question was asked, so the user can tell this apart from the look-up having failed — see
+ * [NAMESAKE_SEARCH_FAILED], which is the one that is worth retrying.
+ */
+internal const val NO_NAMESAKES: String =
+    "MusicBrainz has no artist under this name, so there is no catalogue entry to pull from."
+
+/** The look-up itself failed, which is worth another tap where an empty answer is not. */
+internal const val NAMESAKE_SEARCH_FAILED: String =
+    "That catalogue search did not get through. Tap Search the catalogue to try it again."
+
+/**
+ * What the screen says when the lookup succeeded and the catalogue holds nothing more.
+ *
+ * A statement about the **discography**, not about the user's library. The sentence this replaces
+ * had the shape of an apology for the library being short - "what you own is listed above" - and a
+ * device report named exactly that: *"down the bottom it gives you a notice saying that's all you
+ * have - but why? Why not show other albums?"* The answer the user actually needs is whether the
+ * list above them is complete, and this says so without commenting on how much of it they own.
+ *
+ * It appears only when a lookup has finished and found nothing extra, which is why it can make that
+ * claim at all; [CATALOGUE_INCOMPLETE] is the opposite case and [CATALOGUE_UNAVAILABLE] the case
+ * where there was no answer.
+ */
+internal const val CATALOGUE_COMPLETE: String =
+    "That is this artist's whole discography as MusicBrainz has it. Nothing else to pull."
+
+/**
+ * The quiet line under a discography that is the cached one.
+ *
+ * The signal `ArtistUiState.discographyIncomplete` exists for. It does not say the catalogue is
+ * unavailable - its output is on the screen above - and it does not apologise for the library. It
+ * says the one thing a reader cannot work out for themselves: that the list may be short, and that
+ * the control to complete it is on this screen.
+ */
+internal const val CATALOGUE_INCOMPLETE: String =
+    "This list is the last one your server sent, so it may be short. Try again to refresh it."
 
 internal const val CATALOGUE_SERVER_ERROR: String =
     "Your server had a problem fetching the rest of this artist's discography. What you own is " +

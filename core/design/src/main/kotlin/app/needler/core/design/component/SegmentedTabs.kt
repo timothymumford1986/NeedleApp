@@ -67,13 +67,18 @@ fun NeedlerSegmentedTabs(
             Box(
                 modifier = Modifier
                     .defaultMinSize(minHeight = sizes.segmentedItemHeight)
-                    .clip(shape)
-                    .background(if (selected) colors.inverseSurface else Color.Transparent)
-                    .selectable(
-                        selected = selected,
-                        enabled = enabled,
-                        role = Role.Tab,
-                        onClick = { onSelect(index) },
+                    // Clip, fill, then press, in that order and only that order - a segment is a
+                    // pill, so a press applied before the clip flashes a rectangle across the two
+                    // segments either side of it.
+                    .needlerPressSurface(
+                        shape = shape,
+                        interaction = Modifier.selectable(
+                            selected = selected,
+                            enabled = enabled,
+                            role = Role.Tab,
+                            onClick = { onSelect(index) },
+                        ),
+                        background = if (selected) colors.inverseSurface else Color.Transparent,
                     )
                     .padding(horizontal = 10.dp, vertical = 4.dp),
                 contentAlignment = Alignment.Center,

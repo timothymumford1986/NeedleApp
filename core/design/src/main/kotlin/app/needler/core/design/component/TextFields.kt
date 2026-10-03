@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -374,6 +375,12 @@ fun NeedlerSearchField(
  *
  * On Library (02, 09) the search box is not a field: tapping it opens the Search screen. Drawing it
  * as a real text field there would put a cursor and a keyboard where the design has neither.
+ *
+ * It is pressed through [needlerPressSurface] on [searchFieldShape], because this box and the frame
+ * inside it measure to the same bounds and the frame has 16dp corners. Without the clip the press
+ * flashed a rectangle whose four corners stood outside the field it was meant to be filling - the
+ * same fault the device audit found on the play button, at a smaller radius. The fill and the
+ * outline stay on the frame, which already draws them; only the clip and the gesture are here.
  */
 @Composable
 fun NeedlerSearchFieldButton(
@@ -388,7 +395,11 @@ fun NeedlerSearchFieldButton(
         modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = NeedlerTheme.sizes.minTouchTarget)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .needlerPressSurface(
+                shape = searchFieldShape(),
+                interaction = Modifier
+                    .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+            )
             .semantics { contentDescription = label },
     ) {
         SearchFieldFrame(focused = false) {
@@ -403,6 +414,16 @@ fun NeedlerSearchFieldButton(
     }
 }
 
+/**
+ * The search box's radius, read in one place.
+ *
+ * Both the frame that draws it and [NeedlerSearchFieldButton]'s press clip need the same value, and
+ * a press clipped to a shape the frame has since stopped using would reintroduce the rectangle one
+ * corner at a time.
+ */
+@Composable
+private fun searchFieldShape(): Shape = NeedlerTheme.shapes.large
+
 /** The surface, border, radius and leading glyph shared by the field and its button form. */
 @Composable
 private fun SearchFieldFrame(
@@ -411,7 +432,7 @@ private fun SearchFieldFrame(
 ) {
     val colors = NeedlerTheme.colors
     val sizes = NeedlerTheme.sizes
-    val shape = NeedlerTheme.shapes.large
+    val shape = searchFieldShape()
     Row(
         modifier = Modifier
             .fillMaxWidth()

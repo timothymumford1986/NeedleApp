@@ -188,6 +188,112 @@ class SearchUiStateTest {
         )
     }
 
+    // ---- what "Nothing found" is allowed to claim ---------------------------
+
+    /**
+     * The one that shipped wrong, and the reason the sentence moved onto the
+     * state.
+     *
+     * A phone in aeroplane mode, searching for a string nothing matched, was
+     * told: "Nothing in your library or in the MusicBrainz catalogue matches …".
+     * MusicBrainz had not been asked. REQUIREMENTS.md "Search behaviour", rule 4
+     * requires the screen to "state plainly that catalogue search needs a
+     * connection", and reporting a negative for a call that was never made is
+     * the opposite of plainly.
+     *
+     * The assertion is on the absence of the claim rather than on the exact
+     * wording, so the sentence can be rewritten without the guarantee moving.
+     */
+    @Test
+    fun `an unreachable catalogue is never reported as a catalogue with nothing in it`() {
+        val offline = emptyResultWith(CatalogueLaneState.Unavailable(NeedlerError.Offline()))
+
+        assertTrue(offline.showEmptyResult)
+        assertFalse(
+            "MusicBrainz was never asked, so it cannot be quoted as having answered",
+            offline.emptyResultDetail.contains("MusicBrainz catalogue matches"),
+        )
+        assertTrue(offline.emptyResultDetail.contains("not searched"))
+        assertTrue("the query is still quoted back", offline.emptyResultDetail.contains("\"dido\""))
+    }
+
+    /**
+     * The same guarantee for the lane failures that happen while the device is
+     * nominally online, which is where [SearchUiState.offline] used to be wrong
+     * in the other direction: a stale session or a timed-out call leaves
+     * `offline` false and the catalogue just as unsearched.
+     */
+    @Test
+    fun `a failed lane claims no lookup either, whatever the network says`() {
+        val expired = emptyResultWith(CatalogueLaneState.Unavailable(NeedlerError.SessionExpired))
+        val failed =
+            emptyResultWith(CatalogueLaneState.Unavailable(NeedlerError.ServerError(502)))
+
+        assertFalse(expired.offline)
+        assertEquals(nothingFoundInLibraryOnly("dido"), expired.emptyResultDetail)
+        assertEquals(nothingFoundInLibraryOnly("dido"), failed.emptyResultDetail)
+    }
+
+    /** Connected, both lanes ran, both came back empty: the claim is earned. */
+    @Test
+    fun `a catalogue that answered may be reported as having nothing`() {
+        val answered = emptyResultWith(CatalogueLaneState.Ready())
+
+        assertTrue(answered.catalogueAnswered)
+        assertEquals(nothingFoundInEitherLane("dido"), answered.emptyResultDetail)
+        assertTrue(answered.emptyResultDetail.contains("MusicBrainz catalogue matches"))
+    }
+
+    /**
+     * A degraded upstream answered, so the claim stands here and
+     * [SearchUiState.catalogueNote] is what qualifies it. See
+     * [SearchUiState.catalogueAnswered] for the alternative rejected.
+     */
+    @Test
+    fun `a degraded catalogue answered, and the note above says it may be short`() {
+        val degraded = emptyResultWith(CatalogueLaneState.Ready(SampleSearch.degraded))
+
+        assertEquals(nothingFoundInEitherLane("dido"), degraded.emptyResultDetail)
+        assertEquals(SampleSearch.degraded.message, degraded.catalogueNote)
+    }
+
+    /**
+     * The path the device gets right today and the easiest one to regress: the
+     * mirror answers offline, so there is no empty state to word at all and the
+     * results are drawn with the library caption over them.
+     */
+    @Test
+    fun `offline with cached results is a results screen, not an empty one`() {
+        val state = SearchUiState(
+            query = "khruangbin",
+            offline = true,
+            results = SampleSearch.khruangbinResults.copy(
+                catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+            ),
+        )
+
+        assertFalse(state.showEmptyResult)
+        assertFalse(state.searching)
+        assertEquals(4, state.albums.size)
+        assertEquals(FROM_LIBRARY, state.albumsSourceNote)
+        assertEquals(CATALOGUE_OFFLINE, state.catalogueNote)
+        assertFalse("no page of a catalogue that cannot be reached", state.canPageCatalogue)
+    }
+
+    /** Online, with results: unchanged, and the caption claims the lane that ran. */
+    @Test
+    fun `online with results keeps the MusicBrainz caption`() {
+        val state = SearchUiState(
+            query = "khruangbin",
+            results = SampleSearch.khruangbinResults.copy(catalogue = CatalogueLaneState.Ready()),
+        )
+
+        assertFalse(state.showEmptyResult)
+        assertEquals(FROM_CATALOGUE, state.albumsSourceNote)
+        assertNull(state.catalogueNote)
+        assertTrue(state.canPageCatalogue)
+    }
+
     // ---- which block a row belongs in ---------------------------------------
 
     /**
@@ -403,6 +509,19 @@ class SearchUiStateTest {
         query = "khruangbin",
         results = UnifiedSearchResults(query = "khruangbin", catalogue = lane),
     ).catalogueNote
+
+    /**
+     * A settled search for "dido" that nothing matched, with the lane in [lane].
+     *
+     * `offline` is left false on purpose, including for the offline lane. That is
+     * exactly the disagreement the device produced — connectivity reading online
+     * while the lane had already recorded that it never ran — and a fixture that
+     * set both would pass whichever signal the copy read.
+     */
+    private fun emptyResultWith(lane: CatalogueLaneState): SearchUiState = SearchUiState(
+        query = "dido",
+        results = UnifiedSearchResults(query = "dido", catalogue = lane),
+    )
 
     /** The "wonder" results with one bucket expanded and nothing paged yet. */
     private fun expanded(bucket: SearchBucket): SearchUiState = SearchUiState(

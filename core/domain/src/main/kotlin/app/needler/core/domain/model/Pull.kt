@@ -320,7 +320,15 @@ public data class RequestReceipt(
 
 /** The status a request comes back with. */
 public enum class RequestStatus {
-    /** Accepted and parked for admin approval. */
+    /**
+     * Accepted and parked for admin approval, **because the server said so**.
+     *
+     * Only an approval token from the server reaches this member. It is the one state on this enum
+     * that makes a claim about another person, and the user it is shown to cannot check it: they
+     * either wait for an approval that is not coming or go and ask an administrator who has nothing
+     * to approve. See [fromServerToken] for the vocabulary, and for what reading `pending` as this
+     * cost on a device.
+     */
     PENDING_APPROVAL,
 
     /** Accepted and already executing: role `trusted` or `admin`. */
@@ -332,21 +340,54 @@ public enum class RequestStatus {
     /** Journalled locally because the app is offline; it will submit on reconnect. */
     QUEUED_OFFLINE,
 
-    /** Refused outright. */
+    /** Refused outright, or refused to start: a `rejected` status and a `failed` one both land here. */
     REJECTED,
     ;
 
     public companion object {
         /**
-         * Maps the server's `status` field. Unknown values fall back to [PENDING_APPROVAL] rather than
-         * [ACCEPTED], so the UI never promises progress the server did not.
+         * Maps the server's `status` field, which is the server's vocabulary and not this client's
+         * reading of it.
+         *
+         * The request lanes report `pending`, `awaiting_approval` and `failed`, plus
+         * `already_requested` from the batch endpoint and `already_in_library` from the track one,
+         * or the status of an in-flight request this one joined. `pending` means the server has the
+         * request and has not finished with it; `awaiting_approval` is the one that means an
+         * administrator. REQUIREMENTS.md "Placing a request" requires the status the server returned
+         * to be rendered "rather than inferring it from the cached role", and a token that does not
+         * say "approval" does not become one by passing through a client.
+         *
+         * ## Why [PENDING_APPROVAL] is no longer the `else`
+         *
+         * It used to be, on the argument that it never promises progress the server did not. That
+         * was wrong twice. `pending` is the server's *ordinary* answer on this lane and is also what
+         * `RequestAcceptedDto.status` defaults to when the field is absent, so every pull every role
+         * placed - including an admin's own, and every album of a batch - was recorded as parked for
+         * approval. The album screen then told the user an administrator had to approve something
+         * nobody had been asked to approve, and nothing ever corrected it.
+         *
+         * So an unrecognised token lands on [ACCEPTED] instead. A 202 is an acceptance, and
+         * [ACCEPTED] claims exactly that and nothing about any person; what the server does next
+         * arrives from `GET /api/v1/downloads` within one poll, as a fact rather than a guess.
+         * [RequestOutcome.OTHER] is the history lane's better answer to the same problem - it prints
+         * the token back - and the rejected alternative here was to copy it: this enum is rendered
+         * by exhaustive `when`s in three feature modules, so a new member is a compile error in
+         * modules that have nothing to do with this fix, and the weaker claim is the honest one
+         * available.
          */
         public fun fromServerToken(token: String?): RequestStatus {
             return when (token?.trim()?.lowercase()) {
-                "accepted", "approved", "executing", "queued", "searching", "started" -> ACCEPTED
-                "already_present", "exists", "owned", "skipped" -> ALREADY_PRESENT
-                "rejected", "denied" -> REJECTED
-                else -> PENDING_APPROVAL
+                "awaiting_approval", "awaiting-approval", "awaiting approval",
+                "pending_approval", "needs_approval",
+                -> PENDING_APPROVAL
+
+                "already_present", "already_requested", "already_in_library",
+                "exists", "owned", "skipped",
+                -> ALREADY_PRESENT
+
+                "rejected", "denied", "declined", "failed", "error" -> REJECTED
+
+                else -> ACCEPTED
             }
         }
     }

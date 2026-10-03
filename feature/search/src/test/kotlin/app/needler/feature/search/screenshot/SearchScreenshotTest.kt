@@ -173,6 +173,32 @@ class SearchScreenshotTest {
     }
 
     /**
+     * The state the device was in and the pack had no picture of: nothing
+     * matched **and** the catalogue was never asked.
+     *
+     * Every other offline image here is a results screen, which is why the
+     * sentence under "Nothing found" could claim a MusicBrainz lookup for a
+     * build's whole life without a baseline disagreeing. `offline` is left false
+     * on purpose — the device had connectivity reading online while the lane had
+     * already recorded that it never ran, and the image has to prove the copy
+     * reads the lane.
+     */
+    @Test
+    fun `nothing matched and the catalogue was never asked`() {
+        capture(
+            "search-no-results-offline",
+            NeedlerDevice.Phone,
+            SearchUiState(
+                query = "beastiedido",
+                results = UnifiedSearchResults(
+                    query = "beastiedido",
+                    catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+                ),
+            ),
+        )
+    }
+
+    /**
      * The request sheet a **Pull** opens, with the `monitor_artist` toggle
      * REQUIREMENTS.md "Placing a request" asks for. The sheet is `:core:design`'s,
      * shared with the library screens.

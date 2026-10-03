@@ -494,6 +494,120 @@ public class LibraryRepositoryTest {
         assertTrue(albumDao.rows.isEmpty())
     }
 
+    /**
+     * A warming response is not an empty discography.
+     *
+     * The device case: an artist with four owned albums and a dozen un-owned ones showed the four
+     * and said nothing at all about the rest - no section, no sentence, no retry, nothing in
+     * logcat. `warming` means the server is still resolving the artist upstream and the three
+     * buckets come back empty in that window, and reporting that as [Outcome.Ok] tells the caller
+     * the artist genuinely has nothing else. The screen then has no reason to draw anything and no
+     * reason to ask again.
+     */
+    @Test
+    public fun `a warming response with nothing in it is a failure, not an empty discography`(): Unit =
+        runTest {
+            v1.artistReleasesResponse = { ArtistReleasesDto(warming = true, sourceTotalCount = null) }
+
+            val result = repository.refreshArtistDiscography(ArtistMbid(REAL_ARTIST_MBID))
+
+            assertTrue("warming reported as success: " + result, result is Outcome.Failure)
+            assertTrue(
+                (result as Outcome.Failure).error is NeedlerError.CapabilityUnavailable,
+            )
+            assertTrue(albumDao.rows.isEmpty())
+        }
+
+    /** A partial answer is still an answer: the flag alone must not throw away resolved rows. */
+    @Test
+    public fun `a warming response that still carried releases is kept`(): Unit = runTest {
+        v1.artistReleasesResponse = {
+            ArtistReleasesDto(
+                warming = true,
+                albums = listOf(ReleaseItemDto(id = catalogueOnly, title = "Tweez", year = 1989)),
+            )
+        }
+
+        val result = repository.refreshArtistDiscography(ArtistMbid(REAL_ARTIST_MBID))
+
+        assertTrue(result is Outcome.Success)
+        assertEquals("Tweez", albumDao.rows[catalogueOnly]?.title)
+    }
+
+    /**
+     * An album cached by catalogue *search* is linked to its artist by the discography fetch.
+     *
+     * The second way a discography can come up empty with nothing to show for it. Catalogue search
+     * names an artist in text and never by id, so `CatalogueMappers.album(SearchResultDto)` leaves
+     * `artistMbid` null - and `AlbumDao.observeAlbumsByArtist` is `WHERE artist_mbid = :artistMbid`,
+     * so such a row is invisible to every artist screen. "Insert only what the mirror does not
+     * have" then skipped it for being known, which made the one fetch that could have supplied the
+     * link the one that guaranteed it never would.
+     */
+    @Test
+    public fun `a cached catalogue row with no artist id is linked to the artist that names it`(): Unit =
+        runTest {
+            artistDao.rows[ARTIST_MBID] = artistRow()
+            albumDao.rows[catalogueOnly] = albumRow(
+                mbid = catalogueOnly,
+                title = "Tweez",
+                artist = "",
+                artistMbid = null,
+                state = AlbumStateDb.NOT_OWNED,
+                year = 1989,
+            )
+            v1.artistReleasesResponse = {
+                ArtistReleasesDto(
+                    albums = listOf(ReleaseItemDto(id = catalogueOnly, title = "Tweez", year = 1989)),
+                )
+            }
+
+            repository.refreshArtistDiscography(ArtistMbid(ARTIST_MBID))
+
+            assertEquals(ARTIST_MBID, albumDao.rows[catalogueOnly]?.artistMbid)
+            // The name too, since the row had none to render and this response knows it.
+            assertEquals("Slint", albumDao.rows[catalogueOnly]?.artistName)
+            assertEquals(
+                listOf("Tweez"),
+                repository.observeArtistDiscography(ArtistMbid(ARTIST_MBID)).first().map { it.title },
+            )
+        }
+
+    /**
+     * The link is written only where there is none, and never onto an owned row.
+     *
+     * A release group already credited to another artist is a collaboration or a various-artists
+     * record, and overwriting the credit would move it off that artist's screen onto this one. An
+     * owned row's credit comes from Subsonic sync, which is authoritative about what the server
+     * itself believes; two writers for one column is how they come to disagree.
+     */
+    @Test
+    public fun `the artist link is never stolen from another artist or written onto an owned row`(): Unit =
+        runTest {
+            val otherArtist = "99999999-8888-7777-6666-555555555555"
+            artistDao.rows[ARTIST_MBID] = artistRow()
+            albumDao.rows[RG] = albumRow(artistMbid = null, state = AlbumStateDb.PINNED)
+            albumDao.rows[catalogueOnly] = albumRow(
+                mbid = catalogueOnly,
+                artistMbid = otherArtist,
+                state = AlbumStateDb.NOT_OWNED,
+            )
+            v1.artistReleasesResponse = {
+                ArtistReleasesDto(
+                    albums = listOf(
+                        ReleaseItemDto(id = RG, title = "Spiderland", year = 1991),
+                        ReleaseItemDto(id = catalogueOnly, title = "Tweez", year = 1989),
+                    ),
+                )
+            }
+
+            repository.refreshArtistDiscography(ArtistMbid(ARTIST_MBID))
+
+            assertNull(albumDao.rows[RG]?.artistMbid)
+            assertEquals(AlbumStateDb.PINNED, albumDao.rows[RG]?.state)
+            assertEquals(otherArtist, albumDao.rows[catalogueOnly]?.artistMbid)
+        }
+
     @Test
     public fun `a degraded session fails the discography without disturbing the owned half`(): Unit =
         runTest {

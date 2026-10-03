@@ -2,22 +2,18 @@ package app.needler.feature.library.common
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import app.needler.core.design.component.NeedlerIconButton
-import app.needler.core.design.component.NeedlerStrokeIcon
-import app.needler.core.design.theme.NeedlerTheme
+import app.needler.core.design.component.NeedlerFavouriteButton
 
 /**
- * The star: the one favourites control the app has.
+ * The library's favourite control: the shared heart, named for what it is starring.
  *
  * `FavouriteRepository` has been complete since the data layer was written -
- * `observeIsFavourite`, `setFavourite`, the `pending_sync` column that lets a star survive being
- * tapped offline, `star`/`unstar` wired to the server - and until now nothing in the UI called any of
- * it. "Starred" was already an option on the library's sort control, so the app could order a list by
- * a property no screen let anyone set.
+ * `observeIsFavourite`, `setFavourite`, the `pending_sync` column that lets a favourite survive being
+ * tapped offline, `star`/`unstar` wired to the server - and for a long time nothing in the UI called
+ * any of it. "Starred" was already an option on the library's sort control, so the app could order a
+ * list by a property no screen let anyone set.
  *
  * REQUIREMENTS.md "Playlists" is explicit about which mechanism this is: "`setRating` is a deliberate
  * no-op on this server: it validates and returns success without persisting anything. Needler must not
@@ -26,25 +22,23 @@ import app.needler.core.design.theme.NeedlerTheme
  * it — a rating UI here would report success and lose the user's input silently, which is the worst
  * failure a control can have.
  *
- * ## Why the glyph is drawn here rather than added to `:core:design`
+ * ## Why this file no longer draws anything
  *
- * `Icons.kt` says it plainly: "Screens that need icons the design system does not own (nav glyphs,
- * shuffle, the tonearm) can draw them the same way with [NeedlerStrokeIcon]." The design pack draws no
- * star, so there is no pack value to transcribe into the design system, and inventing one there would
- * put a shape with no source in the file whose whole claim is that every shape in it has one.
+ * It used to draw its own five-pointed star, because the design pack owns no favourite glyph and
+ * `:core:design` would not take a shape with no pack source. Meanwhile `:feature:player` drew a heart
+ * for the same job, and the device reported the obvious: "some screens have a star for favourites,
+ * some have a love heart. Just be consistent." Both glyphs and the colour and sizing rules around them
+ * now live in one place, [NeedlerFavouriteButton], whose KDoc records why the heart won and why the
+ * star was the riskier shape to keep. What is left here is the part that is genuinely the library's:
+ * the subject's name.
  *
- * ## Two channels, not one
- *
- * Filled versus outlined carries the state, and the colour changes with it — but colour is never the
- * only signal, for the same reason the playing row draws a record glyph as well as an accent title.
- * The spoken description leads with "Starred" when it is on, matching how the album screen's Pull
- * local button reads "On device. Remove …", and the node reports `selected` so TalkBack announces the
- * state without relying on the wording.
+ * The rejected alternative was to keep the star and change the player. It lost on the spec: a star
+ * glyph signifies the one thing REQUIREMENTS.md forbids this app from offering.
  *
  * @param name what is being starred, for the spoken description. An album title, an artist name, a
  *   track title.
- * @param visualSize the drawn glyph. The touch target is [NeedlerIconButton]'s 48dp minimum whatever
- *   this is, which is what lets a 36dp star sit on a 52dp track row without breaking
+ * @param visualSize the drawn control. The touch target is `NeedlerIconButton`'s 48dp minimum whatever
+ *   this is, which is what lets a 36dp control sit on a 52dp track row without breaking
  *   REQUIREMENTS.md "Accessibility".
  */
 @Composable
@@ -57,38 +51,29 @@ internal fun FavouriteButton(
     visualSize: Dp = 40.dp,
     glyphSize: Dp = 20.dp,
 ) {
-    val colors = NeedlerTheme.colors
-    NeedlerIconButton(
+    NeedlerFavouriteButton(
+        isFavourite = isFavourite,
         contentDescription = favouriteContentDescription(isFavourite = isFavourite, name = name),
-        onClick = onToggle,
-        modifier = modifier.semantics { selected = isFavourite },
+        onToggle = onToggle,
+        modifier = modifier,
         enabled = enabled,
         visualSize = visualSize,
-    ) {
-        NeedlerStrokeIcon(
-            pathData = PATH_STAR,
-            tint = when {
-                // `textMuted` means disabled, and only disabled. It measures 4.21:1 on the canvas
-                // and REQUIREMENTS.md "Accessibility" keeps it as drawn for placeholders and
-                // disabled text; using it for an *available* control would have said "you cannot
-                // press this" in the one colour the palette reserves for that. An un-starred star
-                // is off, not unavailable, so it wears `textSecondary` (7.0:1 on the canvas).
-                !enabled -> colors.textMuted
-                isFavourite -> colors.accent
-                else -> colors.textSecondary
-            },
-            size = glyphSize,
-            filled = isFavourite,
-        )
-    }
+        glyphSize = glyphSize,
+    )
 }
 
 /**
  * What TalkBack says.
  *
  * Internal rather than private so the tests can assert on the exact wording: this is the only place in
- * the app where the state of a favourite is announced, and "Starred" versus "Star" is one character
- * away from telling the user the opposite of the truth.
+ * the app where the state of a favourite is announced with the subject's name, and "Starred" versus
+ * "Star" is one character away from telling the user the opposite of the truth.
+ *
+ * The wording stayed when the glyph changed from a star to a heart. It matches the server's own
+ * `star`/`unstar` verbs and `getStarred2`, and the library's sort control already offers a "Starred"
+ * option, so the spoken vocabulary is consistent with everything around it. The hazard REQUIREMENTS.md
+ * "Playlists" describes is a five-pointed *picture* that implies a rating this server silently
+ * discards; the verb carries no such implication.
  */
 internal fun favouriteContentDescription(isFavourite: Boolean, name: String): String =
     if (isFavourite) {
@@ -96,14 +81,3 @@ internal fun favouriteContentDescription(isFavourite: Boolean, name: String): St
     } else {
         "Star " + name
     }
-
-/**
- * A five-pointed star on the pack's 24x24 icon viewport.
- *
- * Outer radius 8.5, inner radius 3.9, first point straight up, so it matches the optical weight of the
- * pack's other 24-unit glyphs. Stroked when off and filled when on, which is the same
- * outline-to-solid pair `NeedlerStrokeIcon` already draws for the play triangle.
- */
-private const val PATH_STAR: String =
-    "M12 3.5L14.29 8.85L20.08 9.37L15.71 13.21L17 18.88L12 15.9L7 18.88L8.29 13.21" +
-        "L3.92 9.37L9.71 8.85Z"

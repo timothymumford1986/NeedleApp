@@ -30,6 +30,8 @@ import app.needler.core.domain.model.PullTaskId
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.RequestStatus
+import app.needler.core.network.v1.dto.ActiveRequestItemDto
+import app.needler.core.network.v1.dto.ActiveRequestsDto
 import app.needler.core.network.v1.dto.DownloadActivitySummaryDto
 import app.needler.core.network.v1.dto.DownloadListDto
 import app.needler.core.network.v1.dto.DownloadTaskDto
@@ -140,6 +142,88 @@ public class PullRepositoryTest {
         assertEquals(PullStatusDb.SEARCHING, pullDao.rows[RG]?.status)
         assertEquals(AlbumStateDb.ACQUIRING, albumDao.rows[RG]?.state)
         assertNull(pullDao.rows[RG]?.error)
+    }
+
+    /**
+     * The receipt that put "waiting for an administrator" on a device.
+     *
+     * `POST /api/v1/requests/new` answers 202 with `status: "pending"` - the server's word for a
+     * request it has and has not finished with, and the field's own default when the body omits it.
+     * Read as an approval, it wrote `pending_approval` to the `pull` row *and* to the `album` row,
+     * and while the next poll corrected the pull, nothing ever corrected the album: the queue listed
+     * the pull as "Searching" and the album screen it opened said an administrator had to approve it.
+     * Asserted on both rows, because the rows are what the user is shown afterwards.
+     */
+    @Test
+    public fun `a pending receipt records no approval on either row`(): Unit = runTest {
+        v1.requestAlbumResponse = {
+            RequestAcceptedDto(success = true, musicbrainzId = RG, status = "pending")
+        }
+
+        val receipt: RequestReceipt =
+            (repository.requestAlbum(request) as Outcome.Success).value
+
+        assertEquals(RequestStatus.ACCEPTED, receipt.status)
+        assertEquals(PullStatusDb.SEARCHING, pullDao.rows[RG]?.status)
+        assertEquals(AlbumStateDb.ACQUIRING, albumDao.rows[RG]?.state)
+        assertFalse(albumDao.rows[RG]?.inLibrary ?: true)
+    }
+
+    /**
+     * An `album` row left claiming an approval is corrected by the poll that contradicts it.
+     *
+     * The second half of the device's defect. `album.state` was written once, when the request was
+     * placed, and the only thing that could ever have disagreed with it - the task the server
+     * actually reports - never wrote the column at all. The library grid and the artist screen map
+     * the `album` row with no pull joined, so for them a stale column is a stale badge.
+     */
+    @Test
+    public fun `a poll that reports a searching task clears a stale approval`(): Unit = runTest {
+        albumDao.rows[RG] = albumRow(state = AlbumStateDb.PENDING_APPROVAL)
+        pullDao.rows[RG] = pullRow(taskId = null, status = PullStatusDb.PENDING_APPROVAL)
+        v1.downloadsResponse = {
+            DownloadListDto(
+                items = listOf(
+                    task("t1", RG).copy(status = "queued", searchJobId = null, candidateIndex = null),
+                ),
+            )
+        }
+
+        repository.refreshPulls()
+
+        assertEquals(PullStatusDb.SEARCHING, pullDao.rows[RG]?.status)
+        assertEquals(AlbumStateDb.ACQUIRING, albumDao.rows[RG]?.state)
+        assertFalse(albumDao.rows[RG]?.inLibrary ?: true)
+    }
+
+    /**
+     * An approval the server really reported is kept, on both rows.
+     *
+     * The other half of the rule: REQUIREMENTS.md "Queue screen requirements" item 6 asks for the
+     * user's own pending approvals "with the waiting-for-approval state made explicit", and a fix
+     * that stopped saying it at all would be the same defect pointing the other way.
+     */
+    @Test
+    public fun `an approval the server reported is kept on the album as well`(): Unit = runTest {
+        v1.downloadsResponse = { DownloadListDto(items = emptyList()) }
+        v1.activeRequestsResponse = {
+            ActiveRequestsDto(
+                items = listOf(
+                    ActiveRequestItemDto(
+                        musicbrainzId = RG,
+                        albumTitle = "Spiderland",
+                        artistName = "Slint",
+                        status = "awaiting_approval",
+                    ),
+                ),
+                count = 1,
+            )
+        }
+
+        repository.refreshPulls()
+
+        assertEquals(PullStatusDb.PENDING_APPROVAL, pullDao.rows[RG]?.status)
+        assertEquals(AlbumStateDb.PENDING_APPROVAL, albumDao.rows[RG]?.state)
     }
 
     @Test
@@ -603,6 +687,50 @@ public class PullRepositoryTest {
         assertNull(pullDao.rows["gone"])
         assertNotNull(pullDao.rows[RG])
         assertEquals(1, repository.observePullBadgeCount().first())
+    }
+
+    /**
+     * And the album that row was the only evidence for stops claiming a pull.
+     *
+     * `album.state` outlives the `pull` row - nothing else rewrites it - so a task the server has
+     * forgotten used to leave an album badged "Pulling" or "Waiting" for ever, with no row left
+     * behind it to explain the badge and nothing for the mappers to correct it from.
+     */
+    @Test
+    public fun `an album whose pull the server forgot stops claiming one`(): Unit = runTest {
+        albumDao.rows["gone"] = albumRow(mbid = "gone", state = AlbumStateDb.ACQUIRING)
+        pullDao.rows["gone"] = pullRow(
+            mbid = "gone",
+            taskId = "task-gone",
+            status = PullStatusDb.DOWNLOADING,
+            updatedAt = STALE,
+        )
+        v1.downloadsResponse = { DownloadListDto(items = listOf(task("t1", RG))) }
+
+        repository.refreshPulls()
+
+        assertNull(pullDao.rows["gone"])
+        assertEquals(AlbumStateDb.NOT_OWNED, albumDao.rows["gone"]?.state)
+        assertFalse(albumDao.rows["gone"]?.inLibrary ?: true)
+    }
+
+    @Test
+    public fun `an album in the library keeps its state when its pull is retired`(): Unit = runTest {
+        // It has audio on the server, whatever became of the task that delivered it.
+        albumDao.rows["owned"] = albumRow(mbid = "owned", state = AlbumStateDb.OWNED)
+        pullDao.rows["owned"] = pullRow(
+            mbid = "owned",
+            taskId = "task-owned",
+            status = PullStatusDb.DOWNLOADING,
+            updatedAt = STALE,
+        )
+        v1.downloadsResponse = { DownloadListDto(items = listOf(task("t1", RG))) }
+
+        repository.refreshPulls()
+
+        assertNull(pullDao.rows["owned"])
+        assertEquals(AlbumStateDb.OWNED, albumDao.rows["owned"]?.state)
+        assertTrue(albumDao.rows["owned"]?.inLibrary ?: false)
     }
 
     /**

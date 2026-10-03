@@ -91,6 +91,13 @@ data class SearchUiState(
      * Not an error state. The local FTS lane needs no connection at all, so an
      * offline search still returns the library; what changes is that the
      * catalogue half is missing, which [catalogueNote] states plainly.
+     *
+     * This answers "is there a network right now" and nothing else. It must not
+     * be used to describe what a lane did or did not do — see
+     * [catalogueAnswered] for why, and for the device report that forced the
+     * distinction. Its one legitimate use is [canPageCatalogue], which is a
+     * question about a call the screen is about to make rather than about one it
+     * already made.
      */
     val offline: Boolean = false,
 
@@ -216,6 +223,65 @@ data class SearchUiState(
 
     /** Both lanes have answered and neither had anything. */
     val showEmptyResult: Boolean get() = !isIdle && results.isEmpty && catalogueSettled
+
+    /**
+     * Whether MusicBrainz was actually asked and actually replied.
+     *
+     * The lane's own record, and the only thing on this screen allowed to answer
+     * that question. REQUIREMENTS.md "Search behaviour", rule 4: offline or with
+     * a stale session, "show library results only and state plainly that
+     * catalogue search needs a connection" — plainly, which means the screen may
+     * not report a negative for a call it never made.
+     *
+     * [offline] is deliberately not consulted. It is a live answer to "is there
+     * a network right now", from `SessionRepository.observeConnectivity`, and
+     * that is a different question from "did the catalogue lane run", which
+     * `UnifiedSearchUseCase` settles once per query from the connectivity and
+     * session state it read at the time. The two disagree in every state where
+     * the lane failed while nominally online — an expired session, a timeout, a
+     * 5xx, a proxy — and they disagreed on a device in aeroplane mode, where
+     * [offline] read false and this screen told the user MusicBrainz had been
+     * searched and had nothing. Asserting absence from silence is the failure
+     * this codebase has been bitten by most often, and the lane state is the one
+     * signal on this screen that cannot do it: it is set on the request path, by
+     * the code that either made the call or decided not to.
+     *
+     * A degraded [CatalogueLaneState.Ready] counts as answered, because it was:
+     * the call went out and MusicBrainz replied. The alternative considered was
+     * treating degradation as not-answered, and it was rejected because it
+     * swaps one falsehood for another — the lane did run — and because
+     * [catalogueNote] already carries [CATALOGUE_DEGRADED] directly above this
+     * sentence, saying results may be short in the one place a reader of those
+     * results will see it.
+     */
+    val catalogueAnswered: Boolean get() = catalogue is CatalogueLaneState.Ready
+
+    /**
+     * The sentence under "Nothing found".
+     *
+     * Two forms, and which one is drawn turns on [catalogueAnswered] alone: this
+     * screen may describe a negative from MusicBrainz only when MusicBrainz
+     * returned one. What it may always describe is the library, because the
+     * local FTS lane needs no connection and therefore always ran.
+     *
+     * Neither form says *why* the catalogue is missing, and that is deliberate.
+     * [catalogueNote] is drawn directly above this block and already says why,
+     * in the words the particular cause deserves — no connection, an expired
+     * sign-in, or a problem the server named. Repeating the cause here would put
+     * one reason on screen twice, and the copy this replaces hard-coded "without
+     * a connection", which is wrong for the expired-session case that reaches
+     * exactly the same branch.
+     *
+     * A property on the state rather than a branch inside the screen, for the
+     * reason [catalogueNote] is one: the copy is the thing that lied, so it has
+     * to be assertable without rendering anything.
+     */
+    val emptyResultDetail: String
+        get() = if (catalogueAnswered) {
+            nothingFoundInEitherLane(query)
+        } else {
+            nothingFoundInLibraryOnly(query)
+        }
 
     /**
      * Whether to offer completions.
@@ -521,6 +587,31 @@ internal fun catalogueExhaustedNote(query: String): String =
 
 /** A failed page is a retry, not a dead end, so the line says what to do about it. */
 internal fun pageFailedNote(problem: String): String = "$problem Tap to try again."
+
+/**
+ * Both lanes ran and neither matched.
+ *
+ * The only case in which this app may report a MusicBrainz negative, because it
+ * is the only case in which MusicBrainz gave it one. The advice is attached to
+ * this form alone: shortening a query is what helps when the search really did
+ * run, and offering it when half the search never happened would send the user
+ * to retype something that was never the problem.
+ */
+internal fun nothingFoundInEitherLane(query: String): String =
+    "Nothing in your library or in the MusicBrainz catalogue matches \"" + query.trim() +
+        "\". A shorter query, or the artist's name on its own, usually finds more."
+
+/**
+ * The library ran, the catalogue did not.
+ *
+ * It states what was searched, what was not, and what that costs, then stops.
+ * The line directly above it is [SearchUiState.catalogueNote], which is where
+ * the reason lives and is why no reason is given twice.
+ */
+internal fun nothingFoundInLibraryOnly(query: String): String =
+    "Nothing in your library matches \"" + query.trim() + "\". The MusicBrainz catalogue was " +
+        "not searched, and it is the half that holds everything you do not own yet, so there " +
+        "may be more to find."
 
 /** The pack's caption on the ALBUMS header once MusicBrainz has answered. */
 internal const val FROM_CATALOGUE: String = "from MusicBrainz"

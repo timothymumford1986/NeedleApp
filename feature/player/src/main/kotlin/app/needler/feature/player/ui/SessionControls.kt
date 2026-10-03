@@ -12,9 +12,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -48,6 +52,22 @@ import kotlin.time.Instant
  * Hilt graph, no session and no Media3, which is what lets every state of them be screenshotted.
  * [SleepTimerChoices] is public for the screenshot that wants the panel on its own.
  *
+ * ## Why the expansion asks to be scrolled to
+ *
+ * An inline expansion is the shape [SleepTimerChip] argues for, and it is kept - but Now Playing's
+ * column is a fixed stack of artwork, metadata, scrubber, transport and chips that already measures
+ * close to a phone's height, so the choices unfold *below the fold* and the device audit found them
+ * "below the viewable screen". The column has scrolled since it was written, for 200% text; what it
+ * never did was scroll **to** anything, so six pills appeared somewhere a thumb could not see.
+ *
+ * [BringIntoViewRequester] is therefore asked once per expansion, which is a request rather than a
+ * layout change: whichever ancestor scrolls answers it, and on the tablet sidebar - where nothing
+ * scrolls and the crate underneath gives up the height instead - it is a no-op. The alternatives were
+ * both worse. Making the panel a sheet or a popup is what [SleepTimerChip] rejects and for the reasons
+ * it gives. Driving the host's `ScrollState` to its maximum would work only while the chips happen to
+ * be the last thing on the screen, and would mean handing a scroll state down through two screens and
+ * two routes to a composable whose own KDoc explains why its state is not threaded through either.
+ *
  * @param emphasised accent weight for Now Playing (07), quieter for the tablet sidebar (09), exactly as
  *   the pack draws the output chip in the two places.
  */
@@ -63,6 +83,8 @@ fun SessionControls(
     var expanded: Boolean by rememberSaveable { mutableStateOf(false) }
     // Only a timed stop counts down, so only a timed stop needs a clock.
     val now: Instant = rememberTickingClock(active = timer is SleepTimer.At)
+    // Not saveable: a request is not state, and there is nothing to restore after a process death.
+    val choicesInView: BringIntoViewRequester = remember { BringIntoViewRequester() }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -91,7 +113,11 @@ fun SessionControls(
                     expanded = false
                     onChooseSleepTimer(choice)
                 },
+                modifier = Modifier.bringIntoViewRequester(choicesInView),
             )
+            // Keyed on nothing, inside the branch: entering it is the event, so this runs once per
+            // expansion and never on a recomposition that only moved the countdown on.
+            LaunchedEffect(Unit) { choicesInView.bringIntoView() }
         }
     }
 }

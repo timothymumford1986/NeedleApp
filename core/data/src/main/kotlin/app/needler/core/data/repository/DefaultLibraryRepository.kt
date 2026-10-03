@@ -1,5 +1,6 @@
 package app.needler.core.data.repository
 
+import app.needler.core.data.local.SortKeys
 import app.needler.core.data.local.dao.AlbumDao
 import app.needler.core.data.local.dao.ArtistDao
 import app.needler.core.data.local.dao.FavouriteDao
@@ -375,6 +376,43 @@ public class DefaultLibraryRepository(
      * nothing ever will be" is not the same answer as "nothing to fetch", and artist detail draws a
      * different sentence for each. It is not retryable, so a write-queue entry carrying it is dropped
      * rather than replayed forever.
+     *
+     * ## A warming response is not an empty discography
+     *
+     * [ArtistReleasesDto.warming] means the server is still resolving this artist upstream, and its
+     * own documentation records that `source_total_count` is null while that is true. The three
+     * buckets come back empty in that window. Reporting it as [Outcome.Ok] - which is what this did -
+     * tells the caller the artist genuinely has nothing else, so the screen drew no discography, no
+     * sentence and no retry, and never asked again: an artist with four owned albums and a dozen
+     * un-owned ones looked exactly like an artist with four records in total. It is reported as
+     * [NeedlerError.CapabilityUnavailable] instead, so that the caller has something to say and a
+     * reason to offer another look.
+     *
+     * `isRetryable` is false on that error, and that is correct here rather than in spite of itself:
+     * the flag governs whether the offline write queue replays an entry, and a discography fetch is a
+     * read that nothing queues. The retry artist detail offers for it is a user pressing a button,
+     * which is the only kind of retry a warming window wants - an automatic replay would hammer a
+     * server that has already said it is working on it.
+     *
+     * Only an empty-and-warming response is a failure. A warming response that still carried releases
+     * is a partial answer worth keeping, so it is written and reported as success; the alternative,
+     * failing on the flag alone, would throw away rows the server had already resolved.
+     *
+     * ## A known row is not necessarily a correct row
+     *
+     * "Insert only what the mirror does not have" was read as "a row exists, so there is nothing to
+     * do", and that lost the one field this fetch is the only source of. A release group cached by
+     * *catalogue search* - `CatalogueMappers.album(SearchResultDto)` - carries `artistMbid = null`,
+     * because the search response names an artist in text and never by id. `AlbumDao`'s artist query
+     * is `WHERE artist_mbid = :artistMbid`, so such a row is invisible to every artist screen for
+     * ever: the discography fetch that could have supplied the link skipped it for being known.
+     * [relinked] fills it in.
+     *
+     * Only when it is **null**. A release group already credited to a different artist is a
+     * collaboration or a various-artists record, and overwriting the link would move it off that
+     * artist's screen to put it on this one. And only for a row that is **not** in the library: an
+     * owned row's artist id comes from Subsonic sync, which is authoritative about the server's own
+     * credit, and two writers for one column is how they come to disagree.
      */
     override suspend fun refreshArtistDiscography(mbid: ArtistMbid): Outcome<Unit> {
         if (!mbid.isCatalogueIdentifier) {
@@ -390,21 +428,53 @@ public class DefaultLibraryRepository(
         val now: Long = nowMillis()
         val incoming: List<Album> = (releases.albums + releases.eps + releases.singles)
             .mapNotNull { CatalogueMappers.album(it, artistName, mbid) }
-        if (incoming.isEmpty()) return Outcome.Ok
+        if (incoming.isEmpty()) {
+            return if (releases.warming) {
+                Outcome.Failure(NeedlerError.CapabilityUnavailable(DISCOGRAPHY_WARMING))
+            } else {
+                Outcome.Ok
+            }
+        }
 
-        val known: Set<String> = albumDao
+        val known: Map<String, AlbumEntity> = albumDao
             .getAlbums(incoming.map { it.releaseGroupMbid.value })
-            .map { it.releaseGroupMbid }
-            .toSet()
-        val fresh: List<AlbumEntity> = incoming
-            .filter { !known.contains(it.releaseGroupMbid.value) }
-            .map { CatalogueMappers.albumEntity(it, now) }
-        if (fresh.isNotEmpty()) albumDao.upsertAll(fresh)
+            .associateBy { it.releaseGroupMbid }
+        val writes: List<AlbumEntity> = incoming.mapNotNull { album ->
+            val row: AlbumEntity = known[album.releaseGroupMbid.value]
+                ?: return@mapNotNull CatalogueMappers.albumEntity(album, now)
+            relinked(row = row, mbid = mbid, artistName = artistName, now = now)
+        }
+        if (writes.isNotEmpty()) albumDao.upsertAll(writes)
 
         if (artist != null && releases.sourceTotalCount != null) {
             artistDao.upsert(artist.copy(updatedAt = now))
         }
         return Outcome.Ok
+    }
+
+    /**
+     * The same row with this artist's id written onto it, or null when it must be left alone.
+     *
+     * The narrowest write that makes an already-cached release group reachable from its artist: the
+     * join column, plus the artist's name and its sort key when the cached row has none to render.
+     * Nothing else is touched - not the state, not the track count, not `inLibrary` - because the
+     * reason this fetch may not overwrite a known row at all is that the catalogue copy knows none
+     * of those. See [refreshArtistDiscography] for which rows qualify and why the other two do not.
+     */
+    private fun relinked(
+        row: AlbumEntity,
+        mbid: ArtistMbid,
+        artistName: String,
+        now: Long,
+    ): AlbumEntity? {
+        if (row.inLibrary || row.artistMbid != null) return null
+        val named: Boolean = row.artistName.isBlank() && artistName.isNotBlank()
+        return row.copy(
+            artistMbid = mbid.value,
+            artistName = if (named) artistName else row.artistName,
+            artistNormalised = if (named) SortKeys.normalise(artistName) else row.artistNormalised,
+            updatedAt = now,
+        )
     }
 
     /**
@@ -433,6 +503,16 @@ public class DefaultLibraryRepository(
         const val NAME_DERIVED_ARTIST: String =
             "catalogue discography: this artist's id was derived from their name, not matched to " +
                 "MusicBrainz"
+
+        /**
+         * The capability name reported when the server is still resolving this artist upstream.
+         *
+         * Reads as a sentence in the diagnostics log for the reason [NAME_DERIVED_ARTIST] does, and
+         * names the wire field so that the next reader of a log line can find the flag that produced
+         * it. Unlike that one it is worth asking again about; see [refreshArtistDiscography].
+         */
+        const val DISCOGRAPHY_WARMING: String =
+            "catalogue discography: the server is still resolving this artist upstream (warming)"
 
         /**
          * Disc and track folded into one comparable value, for matching a starred favourite row

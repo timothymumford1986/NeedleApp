@@ -50,4 +50,13 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.hilt.navigation.compose)
+
+    // On the JVM, beside Robolectric, so the album action row's order can be read off a real
+    // measure pass rather than off a PNG. AlbumActionOrderTest lays the row out and compares the
+    // laid-out bounds of Play, Shuffle, Pull local and the crate menu: a Roborazzi render cannot
+    // do that, because an image with the dots in the wrong place is still an image of the right
+    // size. The version comes from the compose BOM the screenshot convention plugin already puts
+    // on this source set. :feature:player's build file carries the same dependency for the same
+    // kind of assertion.
+    testImplementation(libs.compose.ui.test.junit4)
 }

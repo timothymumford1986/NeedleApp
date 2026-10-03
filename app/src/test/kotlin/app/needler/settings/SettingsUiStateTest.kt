@@ -170,6 +170,40 @@ class SettingsUiStateTest {
     }
 
     @Test
+    fun `a server that can transcode gets both rung pickers`() {
+        val state = PlayingSectionState(transcodingAvailable = true, transcodingNegotiated = true)
+        assertEquals(StreamQualityAffordance.PICKERS, state.streamQuality(serverConfigured = true))
+    }
+
+    @Test
+    fun `a server that said it cannot transcode gets one row and no picker`() {
+        // REQUIREMENTS.md rule 3 of "Streaming": hidden, not disabled. Every rung on such a server
+        // resolves to original bytes, so a picker would be eight ways to change nothing.
+        val state = PlayingSectionState(transcodingAvailable = false, transcodingNegotiated = true)
+        assertEquals(StreamQualityAffordance.STATEMENT, state.streamQuality(serverConfigured = true))
+    }
+
+    @Test
+    fun `a server that has not been asked still gets the pickers`() {
+        // The defect reported from the device. `observeCapabilities` is null until something
+        // negotiates and nothing negotiates on launch, so this is the state after every restart -
+        // and it used to render as the refusal above, which made the whole rung ladder unreachable.
+        // Unknown is not "no": a rung is a local preference and a ceiling, so offering it can never
+        // produce a request a server rejects.
+        val state = PlayingSectionState(transcodingAvailable = false, transcodingNegotiated = false)
+        assertEquals(
+            StreamQualityAffordance.PICKERS_UNCONFIRMED,
+            state.streamQuality(serverConfigured = true),
+        )
+    }
+
+    @Test
+    fun `a fresh install with no server gets the statement, not a line about an unasked server`() {
+        val state = PlayingSectionState(transcodingAvailable = false, transcodingNegotiated = false)
+        assertEquals(StreamQualityAffordance.STATEMENT, state.streamQuality(serverConfigured = false))
+    }
+
+    @Test
     fun `the default rungs are original on wifi and mp3 320 on mobile data`() {
         // REQUIREMENTS.md, rule 1 of "Streaming": "Default stream quality is Original". On mobile data
         // the default is the pair the retired MP3 320 toggle already stored.
@@ -252,6 +286,66 @@ class SettingsUiStateTest {
         assertEquals("1 album · 1.0 MB", state.downloadedAlbumsTrailing)
     }
 
+    // ---- how much of the downloaded list the Storage section draws ----------
+    //
+    // Asserted here rather than in a screenshot because the section sits below the fold on the
+    // design pack's 390x844 phone artboard: three renders of Settings with three different album
+    // counts came out byte-identical, so an image cannot see this at all.
+
+    @Test
+    fun `a handful of albums is drawn whole, with nothing hidden and no see-all row`() {
+        // The device the defect was reported from: five albums. It must lose neither a row nor a tap.
+        val state = StorageSectionState(downloadedAlbums = albums(5))
+        assertEquals(5, state.downloadedAlbumsInline(destinationRegistered = true).size)
+        assertFalse(state.downloadedAlbumsTruncated(destinationRegistered = true))
+    }
+
+    @Test
+    fun `a single extra album is drawn rather than hidden behind a tap`() {
+        // Seven is the threshold plus one. A "See all 7 albums" row that reveals one more row is a
+        // row that cannot justify itself.
+        val state = StorageSectionState(downloadedAlbums = albums(7))
+        assertEquals(7, state.downloadedAlbumsInline(destinationRegistered = true).size)
+        assertFalse(state.downloadedAlbumsTruncated(destinationRegistered = true))
+    }
+
+    @Test
+    fun `a library past the threshold keeps the largest six in place and offers the rest`() {
+        val state = StorageSectionState(downloadedAlbums = albums(14))
+        val inline = state.downloadedAlbumsInline(destinationRegistered = true)
+
+        assertEquals(StorageSectionState.INLINE_DOWNLOADED_ALBUMS, inline.size)
+        assertTrue(state.downloadedAlbumsTruncated(destinationRegistered = true))
+        // The six that survive are the six largest, which is the point: REQUIREMENTS.md "Storage,
+        // and why there is no budget" orders this list by size because that is the order a person
+        // reclaiming space reads in. Truncating the other end would leave the actionable rows hidden.
+        assertEquals(
+            state.downloadedAlbums.take(6).map { it.sizeBytes },
+            inline.map { it.sizeBytes },
+        )
+        assertEquals("See all 14 albums", state.seeAllDownloadedAlbumsLabel)
+    }
+
+    @Test
+    fun `with no destination registered every album is drawn, however many there are`() {
+        // REQUIREMENTS.md "Storage, and why there is no budget" leaves no storage limit in the
+        // product, which makes this list the only lever a user has on a full device. A host that has
+        // not registered the Downloaded albums route gets the whole list inline - the behaviour from
+        // before that screen existed - rather than a truncated one with nowhere to go.
+        val state = StorageSectionState(downloadedAlbums = albums(14))
+        assertEquals(14, state.downloadedAlbumsInline(destinationRegistered = false).size)
+        assertFalse(state.downloadedAlbumsTruncated(destinationRegistered = false))
+    }
+
+    @Test
+    fun `the header counts every album, not the handful drawn inline`() {
+        // The section draws at most INLINE_DOWNLOADED_ALBUMS rows and sends the rest to a screen of
+        // its own. The figure above them has to describe the device, not the visible rows, or the
+        // section's own total would depend on how much of it was on screen.
+        val state = StorageSectionState(downloadedAlbums = albums(23))
+        assertEquals("23 albums · 276 MB", state.downloadedAlbumsTrailing)
+    }
+
     // ---- about --------------------------------------------------------------
 
     @Test
@@ -286,6 +380,10 @@ class SettingsUiStateTest {
         val prompt: String = DestructiveSettingsAction.RemoveAllFromDevice.prompt
         assertTrue(prompt.contains("library stays browsable"))
     }
+
+    /** [count] albums with distinct sizes, largest first, as the query hands them over. */
+    private fun albums(count: Int): List<DownloadedAlbum> =
+        List(count) { index -> album(1_048_576L * (count - index)) }
 
     private fun album(sizeBytes: Long): DownloadedAlbum = DownloadedAlbum(
         releaseGroupMbid = ReleaseGroupMbid("d2b6bd7d-8d2d-4f33-9a8e-3cbb1cf1a2f" + sizeBytes % 10L),

@@ -48,6 +48,42 @@ import kotlinx.datetime.Instant
  * server has since replaced is discarded rather than played. Baking a URL into the queue answers all three
  * questions once, far too early.
  *
+ * ## One play, one format - because Media3 re-opens at a byte offset
+ *
+ * Resolving afresh is right. Resolving afresh **and** honouring `DataSpec.position` on a later open was a
+ * bug, and it needed no user action to fire.
+ *
+ * Media3 builds one of these per `ProgressiveMediaPeriod` and re-uses it for every load of that item.
+ * `ProgressiveMediaPeriod.startLoading` opens the next load at
+ * `seekMap.getSeekPoints(positionUs).first.position` - a **byte** offset into the stream the extractor
+ * parsed - and its retry path resumes at the extractor's current input position, also in bytes. Neither
+ * carries an `If-Range`: the etag is a local in `ExtractingLoadable.load`, null on each loadable's first
+ * open, so a seek and a retry both arrive with a bare `Range` and nothing to validate it against.
+ *
+ * `ResolvePlayableSourceUseCase` reads `ConnectivityState`, so the format flips between two opens the
+ * moment the device moves between Wi-Fi and mobile data - which is what a phone does on the way out of a
+ * house, and the dropped connection is itself what triggers the retry. The offset and the stream then come
+ * from different formats. Byte 4,000,000 of a FLAC and byte 4,000,000 of an MP3 320 are different music,
+ * and the containers do not even agree on where the audio starts, so the result is a seek that lands
+ * somewhere else, noise, or a decoder error - and nothing says anything, because the server answers `206`
+ * for a range it can perfectly well satisfy.
+ *
+ * So [pinnedFormat] records the format that was actually served, and an open at a non-zero position that
+ * resolves to a different one is served the **recorded** format instead. This is [StreamRecovery]'s own
+ * rule about the `416` path - "serving the extractor bytes from a different offset than it asked for is
+ * how a track plays as noise" - applied to the other half of the same request: the offset is meaningless
+ * without the stream it was measured in.
+ *
+ * The cost is that a connectivity change takes effect at the next play rather than mid-track. That is the
+ * better of the two behaviours anyway, and the three promises above are untouched, because every one of
+ * them is about resolving per *play* and not per *open*: a read from byte zero always adopts whatever the
+ * resolver now says.
+ *
+ * Retention was never at risk here and still is not. `SourcePlanner.mayWriteThrough` already refuses a
+ * write for any read that does not start at byte zero, so no partly-written original was ever assembled
+ * from two formats - REQUIREMENTS.md "Why transcoded bytes are never cached" is satisfied by that guard
+ * and this change does not touch it.
+ *
  * ## Threading
  *
  * `open` and `read` are called on ExoPlayer's loading thread, which exists to block. The suspend calls into
@@ -88,6 +124,19 @@ public class NeedlerAudioDataSource(
     private var readToEnd: Boolean = false
 
     /**
+     * The format whose bytes this source has already served, or null before the first open succeeded.
+     *
+     * Written once per successful open, from what was *fetched* rather than what was planned - the `429`
+     * fall-back in [openHttpStream] changes the format after the plan is made, and the recorded value has
+     * to be the stream the extractor actually measured its offsets in.
+     *
+     * Read by [heldFormat], which is the whole of the fix; see the class note "One play, one format".
+     * The lifetime is one instance, which Media3 gives one `ProgressiveMediaPeriod` - so one play of one
+     * item - and no synchronisation is needed because `open` and `read` are called on one loading thread.
+     */
+    private var pinnedFormat: StreamFormat? = null
+
+    /**
      * Whether `transferStarted` was reported for this open.
      *
      * Media3 calls `close()` even when `open()` threw, and a `transferEnded` with no matching start is a
@@ -124,6 +173,12 @@ public class NeedlerAudioDataSource(
             val length: Long? = openLocalFile(plan, dataSpec)
             if (length != null) {
                 isPlayingFromLocalFile = true
+                // On-device bytes are always the original file - REQUIREMENTS.md "Why transcoded bytes
+                // are never cached" makes a download "that track's permanent offline version", which is
+                // why there is no rung picker for pulling. So an offset taken against the local copy is
+                // comparable to an Original stream and to nothing else, and recording that is what stops
+                // a file evicted mid-play from being continued as a metered transcode.
+                pinnedFormat = StreamFormat.Original
                 started = true
                 transferStarted(dataSpec)
                 return length
@@ -141,12 +196,45 @@ public class NeedlerAudioDataSource(
             is SourcePlan.LocalFile -> throw fail(NeedlerError.NotFound("cached audio file"))
             is SourcePlan.HttpStream -> {
                 isPlayingFromLocalFile = false
-                val length: Long = openHttpStream(current, dataSpec)
+                val length: Long = openHttpStream(heldFormat(current, dataSpec), dataSpec)
                 started = true
                 transferStarted(dataSpec)
                 length
             }
         }
+    }
+
+    /**
+     * The plan to actually fetch: the resolver's, unless its format would contradict an offset already
+     * measured in another one.
+     *
+     * Three cases, and the first two are the ordinary ones:
+     *
+     *  * **Nothing served yet, or the same format.** The resolver wins outright.
+     *  * **A read from byte zero.** There is no offset to contradict, so a new format takes over and a
+     *    rung or connectivity change takes effect from here. This is what keeps "resolution happens on
+     *    open" true rather than turning it back into resolution on enqueue.
+     *  * **A different format at a non-zero position.** The recorded format is used instead, and the
+     *    disagreement is written down. The alternative - honour the resolver and serve the new stream at
+     *    the old stream's offset - is the defect: the server answers `206` for a range it can satisfy,
+     *    the extractor is handed a different piece of music than it asked for, and nothing anywhere
+     *    reports a fault.
+     *
+     * [SourcePlan.HttpStream.writeThrough] is left exactly as the resolver set it. It has no say here,
+     * because `SourcePlanner.mayWriteThrough` refuses every read that does not start at byte zero and
+     * this branch only ever fires when the position is non-zero.
+     */
+    private fun heldFormat(plan: SourcePlan.HttpStream, dataSpec: DataSpec): SourcePlan.HttpStream {
+        val held: StreamFormat = pinnedFormat ?: return plan
+        if (held == plan.format || dataSpec.position == 0L) return plan
+        diagnostics.record(
+            DiagnosticsLevel.Warn,
+            "held format for " + plan.key.canonicalString + " - the resolver now says " +
+                AudioRetentionEvent.describe(plan.format) + " but byte " + dataSpec.position +
+                " was measured in " + AudioRetentionEvent.describe(held) +
+                ", so that stream is continued instead",
+        )
+        return plan.copy(format = held)
     }
 
     override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
@@ -235,6 +323,10 @@ public class NeedlerAudioDataSource(
      * The loop is short by design: one honoured `Retry-After`, then the transcode is abandoned in favour of
      * the original stream, and one retry without an assumed length for a `416`. Anything past that is
      * Media3's load-error policy's business, which is the layer that is allowed to back off for minutes.
+     *
+     * The one rule added to that table is positional, and it is the same rule as [heldFormat]'s: the
+     * fall-back to the original stream is only available to a read that starts at byte zero, because a
+     * non-zero offset was measured in the transcode and does not name the same music in the original.
      */
     private fun openHttpStream(plan: SourcePlan.HttpStream, dataSpec: DataSpec): Long {
         var format: StreamFormat = plan.format
@@ -253,6 +345,9 @@ public class NeedlerAudioDataSource(
                 val length: Long = source.open(request)
                 delegate = source
                 openedUri = source.uri
+                // What was fetched, not what was planned: the fall-back below can have moved it, and the
+                // extractor's offsets from here on are measured in whatever actually arrived.
+                pinnedFormat = format
                 sink = openWriteThrough(plan, format, request, declaredWholeFileLength(length, request))
                 return length
             } catch (failure: Throwable) {
@@ -280,6 +375,15 @@ public class NeedlerAudioDataSource(
                     }
 
                     StreamRecovery.FallBackToOriginal -> {
+                        if (dataSpec.position != 0L) {
+                            // The same hazard as a mid-track connectivity change, reached from inside this
+                            // loop: byte `position` was measured in the transcode, and the original's bytes
+                            // are not at the same offsets. There is no correct response to this request, so
+                            // it fails - loudly, on PlaybackState.error for every surface - rather than
+                            // serving the extractor a different piece of music than it asked for. Pressing
+                            // play again builds a new period, which resolves the format afresh from zero.
+                            throw fail(NeedlerError.StreamSlotsExhausted, invalid)
+                        }
                         // REQUIREMENTS.md: a one-line notice, not a failure. The original stream is always
                         // available, and its bytes are the ones the store is allowed to keep.
                         format = StreamFormat.Original

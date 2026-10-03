@@ -80,7 +80,7 @@ data class WearStoreSpace(
      * Whether [incomingBytes] may be written.
      *
      * **Nothing is evicted to make room, ever.** The watch's tier is entirely REQUIREMENTS.md's
-     * "Downloaded" - "kept on device because the user asked for it; never evicted automatically" - so
+     * **Device** tier - "kept because the user asked for it; never evicted automatically" - so
      * the floor refuses the incoming bytes instead of choosing a victim. REQUIREMENTS.md takes exactly
      * this decision for the phone in the one case where its own eviction cannot help: "the incoming
      * bytes are **skipped, not forced in**, and nothing extra is evicted for them."

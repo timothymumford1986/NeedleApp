@@ -62,7 +62,34 @@
         android:supportsRtl="true"
         android:allowBackup="false"
         android:theme="@style/Theme.Needler"
+        android:enableOnBackInvokedCallback="true"
         android:networkSecurityConfig="@xml/network_security_config">
+
+        <!--
+          Predictive back. This one line is the difference between Android
+          routing a back gesture through OnBackInvokedDispatcher and routing it
+          through the legacy onBackPressed path, and nothing else in the app can
+          substitute for it.
+
+          Without it androidx.activity never receives onBackStarted or
+          onBackProgressed, so navigation-compose's NavHostEventHandler never
+          sets inPredictiveBack and the predictivePopEnterTransition and
+          predictivePopExitTransition that NeedlerNavTransitions supplies are
+          dead code: a gestural back got no preview at all and then committed in
+          one jump. On a device from the last three years that reads as the
+          transition being broken, which is exactly how it was reported.
+
+          Declared rather than relied upon. The platform defaults it to true for
+          apps targeting Android 15 and above, and REQUIREMENTS.md "Target
+          devices" sets minSdk 26 - so on API 33 and 34 the default is false and
+          the gesture is unpreviewed unless it is written here.
+
+          It does not override reduced motion. NeedlerNavTransitions returns
+          EnterTransition.None and ExitTransition.None when the animator
+          duration scale is zero, and a seeked transition between two unmoving
+          states is still nothing moving.
+        -->
+
 
         <!--
           The one activity. Needler is a single-activity Compose app: Connect,

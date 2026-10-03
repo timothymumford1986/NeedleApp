@@ -515,6 +515,55 @@ class PlayerViewModelTest {
     }
 
     @Test
+    fun `an override is a preference and not a transport command`() = runTest {
+        // The device report: "hitting any of those buttons doesn't seem to make a difference anyway".
+        // It is accurate mid-track and it is deliberate. The rung is written to the preference store
+        // and read by the data source on the next load, so the decision moves - the tag below proves
+        // that - while the session is sent nothing at all and the prepared item keeps the stream it
+        // was opened with. See PlayerViewModel.overridePlayingTrackQuality for the three reasons
+        // re-preparing the current item was rejected.
+        controller.emitState(PlaybackState(currentItem = PlayerFixtures.playingItem))
+        sessions.connectivityFlow.value = ConnectivityState(NetworkStatus.METERED)
+        playbackSettings.setDataStreamRung(StreamRung.MP3_320)
+        val viewModel = viewModel()
+
+        viewModel.state.test {
+            assertEquals("MP3 320", awaitItem().serverTagValue)
+            controller.commands.clear()
+
+            viewModel.overridePlayingTrackQuality(StreamRung.MP3_128)
+            val state: PlayerUiState = awaitItem()
+
+            assertEquals("MP3 128", state.serverTagValue)
+            // Nothing was asked of the session: no re-prepare, no seek, no play.
+            assertEquals(emptyList<String>(), controller.commands)
+        }
+    }
+
+    @Test
+    fun `the transcode caveat is drawn on a transcode and on nothing else`() = runTest {
+        // REQUIREMENTS.md "Why transcoded bytes are never cached" is a fact about this track only
+        // while a re-encode is what would play. QualityTags draws the one line on this flag, which is
+        // what keeps it off the screen on the default Wi-Fi rung.
+        controller.emitState(PlaybackState(currentItem = PlayerFixtures.playingItem))
+        // Set before the view model, so each step below is one change and therefore one emission.
+        playbackSettings.setDataStreamRung(StreamRung.MP3_192)
+        val viewModel = viewModel()
+
+        viewModel.state.test {
+            // Unmetered, Original: the server sends the file untouched, so there is nothing to say.
+            assertFalse(awaitItem().isStreamingTranscoded)
+
+            sessions.connectivityFlow.value = ConnectivityState(NetworkStatus.METERED)
+            assertTrue(awaitItem().isStreamingTranscoded)
+
+            // A download wins, so the server rung is dormant and the bytes that are here are kept.
+            pins.cachedAudio.value = downloaded(PlayerFixtures.sienna)
+            assertFalse(awaitItem().isStreamingTranscoded)
+        }
+    }
+
+    @Test
     fun `a downloaded copy takes over and the server tag goes dormant`() = runTest {
         controller.emitState(PlaybackState(currentItem = PlayerFixtures.playingItem))
         sessions.connectivityFlow.value = ConnectivityState(NetworkStatus.METERED)

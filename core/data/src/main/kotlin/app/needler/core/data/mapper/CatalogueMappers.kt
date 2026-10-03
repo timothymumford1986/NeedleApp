@@ -79,7 +79,33 @@ public object CatalogueMappers {
         )
     }
 
-    /** An artist hit. `musicbrainz_id` is the artist MBID when `type` is `artist`. */
+    /**
+     * An artist hit. `musicbrainz_id` is the artist MBID when `type` is `artist`.
+     *
+     * ## Where a catalogue artist's picture comes from, and when there is none
+     *
+     * There is no artist-image *route*: REQUIREMENTS.md "Endpoints Needler consumes" lists one
+     * catalogue artwork endpoint, `GET /api/v1/covers/release-group/{mbid}`, and it is keyed on
+     * release groups. The picture instead rides on **this response**: `thumb_url`, `fanart_url` and
+     * `banner_url` are fields of the search result itself, so an artist the server does not own can
+     * be drawn with a real photograph at no extra request at all. First non-null wins, thumbnail
+     * first, because this is a 44dp avatar and a fanart backdrop scaled into one is a waste of the
+     * bytes it costs.
+     *
+     * When all three are null there is no photograph to be had, and `NeedlerArtwork`'s letter over a
+     * tint derived from the MBID is the answer. Observed on a device: a search for `dido` drew the
+     * owned Dido with a photograph - hers is an [ArtworkRef.Owned] through Subsonic `getCoverArt`,
+     * which only exists because the server holds her - and Dido Rowley, Dido Wilson and Dido Brown
+     * with placeholders, because upstream has no image for any of the three. That is the honest
+     * answer rather than a gap.
+     *
+     * **Rejected: the artist's best-known release-group cover as a stand-in portrait.** It would fill
+     * every one of those placeholders, and it would put an album sleeve where a face belongs - on a
+     * round avatar, in a row captioned with a person's name, which reads as a photograph of them. An
+     * artist with one record would be represented by its sleeve for ever, and the same sleeve would
+     * then appear twice on one screen, once as the artist and once as the album. A placeholder that
+     * is obviously a placeholder is worth more than an image that is wrong about what it depicts.
+     */
     public fun artist(dto: SearchResultDto): Artist? {
         val mbid: String = dto.musicbrainzId.trim()
         if (mbid.isEmpty() || !dto.type.equals("artist", ignoreCase = true)) return null
@@ -232,11 +258,47 @@ public object CatalogueMappers {
         }
 
     /**
-     * A request still waiting for an admin, from `GET /api/v1/requests/active`.
+     * Whether a `status` token says an administrator has to act.
      *
-     * These carry no task id - there is no download yet - so they are stored with
-     * [PullStatusDb.PENDING_APPROVAL] and render with the waiting-for-approval state made explicit,
-     * which is the only way such a pull is distinguishable from one making no progress.
+     * The same vocabulary [app.needler.core.domain.model.RequestStatus.fromServerToken] matches, kept
+     * here as the one test this module applies on the way *in*: a token this list does not hold is
+     * some other state of the server's, and deriving "waiting for an administrator" from it would be
+     * the inference REQUIREMENTS.md "Placing a request" forbids. `pending` is deliberately absent -
+     * it is the server's word for a request it has and has not finished with, which is every request
+     * for its first moments.
+     */
+    private fun isApprovalToken(token: String?): Boolean =
+        when (token?.trim()?.lowercase()) {
+            "awaiting_approval", "awaiting-approval", "awaiting approval",
+            "pending_approval", "needs_approval",
+            -> true
+
+            else -> false
+        }
+
+    /**
+     * An active request, from `GET /api/v1/requests/active`: the lane that carries the approvals.
+     *
+     * These carry no task id - there is no download yet - so an approval is stored with
+     * [PullStatusDb.PENDING_APPROVAL] and renders with the waiting-for-approval state made explicit,
+     * which REQUIREMENTS.md "Queue screen requirements" item 6 asks for and which is the only way
+     * such a pull is distinguishable from one making no progress.
+     *
+     * ## Only an approval token is an approval
+     *
+     * This lane returns every active request, not only the parked ones, and the server distinguishes
+     * `pending` from `awaiting_approval`: the first says it has the request, the second says a person
+     * has to act. Both used to be read as [PullStatusDb.PENDING_APPROVAL], so a request the server
+     * had merely not started yet was badged "Waiting" and explained as waiting for an administrator -
+     * a claim about someone else's system that the user cannot check. `pending` now derives like any
+     * other status, which for a request with no search job is "Searching", and the administrator is
+     * named only when the server named one.
+     *
+     * The second half of the same rule is that the approval test is skipped entirely once the server
+     * has reported a download state. `download_status` and `download_state` describe a task, and a
+     * task exists because the request is past approval; a row that said `pending` beside
+     * `download_status: downloading` used to store as waiting for an approval that had plainly
+     * already happened.
      *
      * ## `musicbrainz_id` means two different things on this lane
      *
@@ -255,9 +317,10 @@ public object CatalogueMappers {
         val kind: String = requestKind(dto.requestKind)
         val recording: String? = dto.musicbrainzId.trim()
             .takeIf { it.isNotEmpty() && kind == PullEntity.REQUEST_KIND_TRACK }
-        val awaiting: Boolean = dto.status.equals("awaiting_approval", ignoreCase = true) ||
-            dto.status.equals("pending", ignoreCase = true)
-        val status: PullStatus = PullStatus.fromServerToken(dto.downloadStatus ?: dto.status)
+        val taskStatus: String? = dto.downloadStatus?.trim()?.takeIf { it.isNotEmpty() }
+            ?: dto.downloadState?.trim()?.takeIf { it.isNotEmpty() }
+        val awaiting: Boolean = taskStatus == null && isApprovalToken(dto.status)
+        val status: PullStatus = PullStatus.fromServerToken(taskStatus ?: dto.status)
         val createdAt: Long = WireTime.toEpochMillis(WireTime.fromIso(dto.requestedAt)) ?: now
         return PullEntity(
             releaseGroupMbid = mbid,

@@ -1,8 +1,11 @@
 package app.needler.core.design.component
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,7 +38,8 @@ import app.needler.core.design.theme.NeedlerTheme
  *
  * Two overlays, both drawn on the artwork at an 8dp inset:
  *
- *  - **on device**: a 22dp positive-green disc holding a 2.4-weight check, bottom left;
+ *  - **device**: a 22dp positive-green disc holding a 2.4-weight check, bottom left. The green is
+ *    [NeedlerAlbumSource.Device]'s own hue, which is the colour that state carries everywhere;
  *  - **play**: a 32dp disc with a 1.5dp `rgba(242,245,238,0.85)` rim over a
  *    `rgba(13,18,10,0.35)` scrim, bottom right.
  *
@@ -66,7 +71,9 @@ fun NeedlerAlbumGridCell(
             .semantics(mergeDescendants = true) {
                 contentDescription = buildString {
                     append("$title, $artistName")
-                    if (onDevice) append(", on device")
+                    // The state word itself, so the grid cell and the badge beside a list row
+                    // read the same three words. REQUIREMENTS.md "Vocabulary".
+                    if (onDevice) append(", " + NeedlerAlbumSource.Device.label())
                 }
             },
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -105,11 +112,20 @@ fun NeedlerAlbumGridCell(
             }
 
             if (onPlayClick != null) {
+                // Shared between the 48dp target and the 32dp disc, for the same reason
+                // [NeedlerIconButton] shares one: the node that is touched and the node that is
+                // drawn are different sizes here on purpose, so the press has to be drawn on the
+                // disc rather than on the target around it or it flashes a 48dp square over a
+                // 32dp circle. `indication = null` below moves the feedback onto the disc; it does
+                // not take it away.
+                val playInteraction = remember { MutableInteractionSource() }
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .size(sizes.minTouchTarget)
                         .clickable(
+                            interactionSource = playInteraction,
+                            indication = null,
                             role = Role.Button,
                             onClick = onPlayClick,
                         )
@@ -127,7 +143,8 @@ fun NeedlerAlbumGridCell(
                                 width = 1.5.dp,
                                 color = colors.artworkOutline,
                                 shape = NeedlerTheme.shapes.circle,
-                            ),
+                            )
+                            .indication(playInteraction, LocalIndication.current),
                         contentAlignment = Alignment.Center,
                     ) {
                         NeedlerStrokeIcon(

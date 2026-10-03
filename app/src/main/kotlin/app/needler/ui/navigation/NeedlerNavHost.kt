@@ -7,17 +7,19 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavGraph
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.NavType
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
@@ -71,6 +73,24 @@ private const val ROUTE_HOME = "home"
  */
 private const val ROUTE_NOW_PLAYING = "nowplaying"
 private const val ROUTE_CRATE = "crate"
+
+/**
+ * The outer destinations that are a layer over the app rather than a place in
+ * it, and the one thing [NeedlerNavTransitions] needs to know about this graph.
+ *
+ * Both of these animate as a surface crossing the bottom edge, so the bar and
+ * the mini-player that Home draws are revealed and covered rather than faded.
+ * Connect is deliberately **not** in here: it is not a layer over Home, it
+ * replaces it - both navigations between the two carry
+ * `popUpTo { inclusive = true }` - so it cross-fades like any other change of
+ * place.
+ *
+ * Built from the route constants the graph below registers, so there is one
+ * spelling of each and not two. `internal` so `NeedlerNavTransitionsTest` can
+ * hold the membership: a third chrome-free destination has to be added here as
+ * well as declared, and a destination that keeps the bottom bar must not be.
+ */
+internal val PLAYER_LAYER_ROUTES: Set<String> = setOf(ROUTE_NOW_PLAYING, ROUTE_CRATE)
 
 /**
  * Detail destinations, which live inside the scaffold alongside the four tabs.
@@ -151,6 +171,62 @@ private fun playlistRoute(id: String): String = "playlist/$id"
 private fun genreRoute(genre: String): String = "genre/" + Uri.encode(genre)
 
 /**
+ * Which tab a destination in the inner graph belongs to, read off the back
+ * stack rather than off the route.
+ *
+ * REQUIREMENTS.md "Tablet layout" keeps the bottom bar and the nav rail visible
+ * on album and artist detail, so one of the four items always has to be lit -
+ * and the honest answer to which one is *the tab the listener pushed it from*,
+ * which only the back stack knows.
+ *
+ * ### The bug this replaces
+ *
+ * A `when` over the current route used to answer it, mapping album, artist,
+ * playlists, playlist, genres and genre to Library unconditionally. Reach an
+ * artist by searching for it and the bar lit Library while the back stack read
+ * `library -> search -> artist/dido`. That much is plain from the old code. What
+ * it then cost was reported from the device: tapping Search did nothing visible
+ * at all.
+ *
+ * The mechanism, read from `NavController` rather than stepped through, is that
+ * a wrongly-lit bar sends the tap down the wrong branch of `selectTab`. With
+ * `Search != Library` it took the `popUpTo(start) { saveState = true } ...
+ * restoreState = true` branch, which pops `artist/dido` and `search`, files them
+ * as Search's saved stack, and then restores that same stack because Search is
+ * what it is navigating to. The listener was returned to the screen they were
+ * already on, and would have been every time they tried. "Nothing happens" is
+ * also the evidence for it: had the restore not fired, the tap would have pushed
+ * a bare `search` and they would have seen the search field.
+ *
+ * That was the second sighting of one bug. The first was Settings doing nothing
+ * when tapped from the Crossfade screen, which `selectTab`'s own first branch
+ * was added to fix. A route cannot answer "where did this come from" - a
+ * playlist, a genre, an album and an artist are all reachable from more than one
+ * tab - so no `when` over routes was ever going to be right.
+ *
+ * ### Why the top of the stack and not the bottom
+ *
+ * The four tab routes are the only ones [NeedlerDestination.fromRoute] matches,
+ * and tab switching pops back to the graph's start destination, so at most one
+ * tab route sits on the stack at a time - except transiently, which is why this
+ * walks **down from the top** and takes the first it finds. On
+ * `library -> search -> artist/dido -> album/x` that is Search, which is where
+ * the listener actually is.
+ *
+ * @param backStackRoutes the inner graph's back stack, bottom entry first, with
+ *   the graph's own entry already removed. A list of plain route strings and not
+ *   a `NavController`, so this is a pure function a test can drive directly;
+ *   deriving it inside the composable instead left the only interesting logic in
+ *   the file reachable only through an instrumented navigation host.
+ * @return the tab to light. [NeedlerDestination.Start] when the stack holds no
+ *   tab route at all, which is the state between a controller being created and
+ *   its start destination being added.
+ */
+internal fun owningTab(backStackRoutes: List<String?>): NeedlerDestination =
+    backStackRoutes.asReversed().firstNotNullOfOrNull(NeedlerDestination::fromRoute)
+        ?: NeedlerDestination.Start
+
+/**
  * The app's navigation graph.
  *
  * Two levels, and the split is what keeps the chrome still while the content
@@ -206,10 +282,66 @@ fun NeedlerNavHost(
     // reuses that rather than adding a second mechanism for the same job.
     var pendingDestination: NotificationDestination? by remember { mutableStateOf(null) }
 
+    // Read once, here, and captured by the six lambdas below. The transition
+    // lambdas `NavHost` takes are not composable, so none of them can read
+    // LocalReducedMotion for itself.
+    val reducedMotion: Boolean = NeedlerTheme.reducedMotion
+
     NavHost(
         navController = navController,
         startDestination = if (startConnected) ROUTE_HOME else ROUTE_CONNECT,
         modifier = modifier,
+        // The player layer rises and falls; Connect and Home cross-fade. See
+        // NeedlerNavTransitions for what the library's own defaults were doing
+        // to the bottom bar and the mini-player before any of this was named.
+        enterTransition = {
+            NeedlerNavTransitions.enter(
+                toPlayerLayer = targetState.destination.route in PLAYER_LAYER_ROUTES,
+                reducedMotion = reducedMotion,
+            )
+        },
+        exitTransition = {
+            NeedlerNavTransitions.exit(
+                toPlayerLayer = targetState.destination.route in PLAYER_LAYER_ROUTES,
+                reducedMotion = reducedMotion,
+            )
+        },
+        popEnterTransition = {
+            NeedlerNavTransitions.popEnter(
+                fromPlayerLayer = initialState.destination.route in PLAYER_LAYER_ROUTES,
+                reducedMotion = reducedMotion,
+            )
+        },
+        popExitTransition = {
+            NeedlerNavTransitions.popExit(
+                fromPlayerLayer = initialState.destination.route in PLAYER_LAYER_ROUTES,
+                reducedMotion = reducedMotion,
+            )
+        },
+        // The same two again, for a pop the system is dragging rather than
+        // committing. navigation-compose keeps these separate so a gestural Back
+        // can be seeked; giving them the same answer is what makes Now Playing's
+        // chevron-down and a Back gesture land identically, which is the whole
+        // of that gesture either way. Left at the library's own defaults - a
+        // spring fade in and `scaleOut(0.7f)` - the finger would have scaled the
+        // player down in place while the bar faded up behind it, and the chevron
+        // would have done something else entirely.
+        //
+        // The swipe edge is ignored on purpose: this surface moves on the
+        // vertical axis, so which side the finger came from says nothing about
+        // where it should go.
+        predictivePopEnterTransition = { _ ->
+            NeedlerNavTransitions.popEnter(
+                fromPlayerLayer = initialState.destination.route in PLAYER_LAYER_ROUTES,
+                reducedMotion = reducedMotion,
+            )
+        },
+        predictivePopExitTransition = { _ ->
+            NeedlerNavTransitions.popExit(
+                fromPlayerLayer = initialState.destination.route in PLAYER_LAYER_ROUTES,
+                reducedMotion = reducedMotion,
+            )
+        },
     ) {
         composable(ROUTE_CONNECT) {
             ConnectRoute(
@@ -335,19 +467,27 @@ private fun NeedlerHome(
     notificationDestination: NotificationDestination? = null,
     onNotificationDestinationHandled: () -> Unit = {},
 ) {
-    val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute: String? = backStackEntry?.destination?.route
-    // A sub-screen belongs to the tab it was opened from, so the bar keeps that
-    // tab lit rather than falling back to the start: album and artist sit under
-    // Library, the equaliser and crossfade under Settings.
-    val selected: NeedlerDestination = when (currentRoute) {
-        ROUTE_ALBUM, ROUTE_ARTIST -> NeedlerDestination.Library
-        ROUTE_PLAYLISTS, ROUTE_PLAYLIST, ROUTE_GENRES, ROUTE_GENRE ->
-            NeedlerDestination.Library
-        ROUTE_EQUALISER, ROUTE_CROSSFADE, ROUTE_LICENCES, ROUTE_DIAGNOSTICS ->
-            NeedlerDestination.Settings
-        else -> NeedlerDestination.fromRoute(currentRoute) ?: NeedlerDestination.Start
-    }
+    // The whole back stack, not just its top, because which tab a sub-screen
+    // belongs to is a fact about how the listener got there and nothing else.
+    // See [owningTab] for the bug that reading the route alone produced.
+    //
+    // collectAsState and not collectAsStateWithLifecycle: this is already in
+    // memory and costs nothing to watch, and a nav bar that lit the wrong tab
+    // for a frame after every resume would be a new version of the same
+    // complaint.
+    val backStack: List<NavBackStackEntry> by navController.currentBackStack.collectAsState()
+    // The graph's own entry sits at the bottom of the back queue and is not a
+    // destination anyone navigated to; `currentBackStackEntry` filters it out
+    // the same way, and both reads below need the same list.
+    val routes: List<String?> = backStack
+        .filter { it.destination !is NavGraph }
+        .map { it.destination.route }
+    val currentRoute: String? = routes.lastOrNull()
+    val selected: NeedlerDestination = owningTab(routes)
+
+    // Read here for the same reason the outer host reads it: the inner host's
+    // transition lambdas are not composable either.
+    val reducedMotion: Boolean = NeedlerTheme.reducedMotion
 
     // A notification tap lands here rather than on the outer graph, because
     // every destination it can name - an album, an artist, the Pulls tab - is
@@ -456,6 +596,17 @@ private fun NeedlerHome(
         NavHost(
             navController = navController,
             startDestination = NeedlerDestination.Start.route,
+            // A change of content inside chrome that does not move, so all four
+            // are the same short cross-fade. The predictive pair is deliberately
+            // left at the library's defaults: a gestural Back in here gets the
+            // platform's own seeked `scaleOut(0.7f)` preview of the screen
+            // behind, which is the one place a finger-dragged Back should look
+            // different from a committed one, and the bar stays still under it
+            // either way.
+            enterTransition = { NeedlerNavTransitions.contentEnter(reducedMotion) },
+            exitTransition = { NeedlerNavTransitions.contentExit(reducedMotion) },
+            popEnterTransition = { NeedlerNavTransitions.contentEnter(reducedMotion) },
+            popExitTransition = { NeedlerNavTransitions.contentExit(reducedMotion) },
         ) {
             composable(NeedlerDestination.Library.route) {
                 LibraryRoute(
@@ -463,6 +614,14 @@ private fun NeedlerHome(
                     onOpenAlbum = { navController.navigate(albumRoute(it.value)) },
                     onOpenArtist = { navController.navigate(artistRoute(it.value)) },
                     onOpenSearch = { selectTab(NeedlerDestination.Search) },
+                    // Playlists and Genres were registered below as destinations and nothing ever
+                    // opened them: four finished, tested, screenshot-baselined screens that no user
+                    // could reach, because every test exercised the screens themselves and none
+                    // asserted anyone could get to one. A plain navigate, not selectTab - they are
+                    // sub-screens of Library in the sense album and artist are, so they keep the bar
+                    // lit on Library and Back returns here.
+                    onOpenPlaylists = { navController.navigate(ROUTE_PLAYLISTS) },
+                    onOpenGenres = { navController.navigate(ROUTE_GENRES) },
                 )
             }
 
@@ -492,6 +651,11 @@ private fun NeedlerHome(
                     widthSizeClass = widthSizeClass,
                     onBack = { navController.popBackStack() },
                     onOpenAlbum = { navController.navigate(albumRoute(it.value)) },
+                    // A related artist, pushed rather than replaced: the listener
+                    // followed a link and Back has to walk it back. The chain
+                    // still belongs to whichever tab it started in, which
+                    // [owningTab] reads off the stack rather than off the route.
+                    onOpenArtist = { navController.navigate(artistRoute(it.value)) },
                 )
             }
 

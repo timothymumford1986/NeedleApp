@@ -280,6 +280,8 @@ class LibraryScreenshotTest {
             onAlbumPlay = {},
             onArtistClick = {},
             onSongPlay = {},
+            onOpenPlaylists = {},
+            onOpenGenres = {},
             onAlbumAddToCrate = { _, _ -> },
             onSongAddToCrate = { _, _ -> },
             onDismissNotice = {},

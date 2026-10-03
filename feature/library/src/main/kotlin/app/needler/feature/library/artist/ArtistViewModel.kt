@@ -9,6 +9,8 @@ import androidx.lifecycle.viewModelScope
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.ArtistMbid
+import app.needler.core.domain.model.CatalogueSearchPage
+import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.FavouriteTarget
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
@@ -20,8 +22,10 @@ import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.repository.FavouriteRepository
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.PullRepository
+import app.needler.core.domain.repository.SearchRepository
 import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.domain.usecase.RequestAlbumUseCase
+import app.needler.core.domain.usecase.UnifiedSearchUseCase
 import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.common.RequestSheetState
 import app.needler.feature.library.common.addTracksToCrate
@@ -64,6 +68,17 @@ import kotlinx.coroutines.launch
  * discography was never obtainable. `ArtistMbid.isCatalogueIdentifier` is checked
  * before the call is made, and the screen says so in words instead.
  *
+ * ## The screen may never be silent about the catalogue half
+ *
+ * Observed on a device at v0.0.12: an artist with four owned albums and a dozen un-owned ones showed
+ * the four and nothing else - no discography, no sentence, no retry, nothing in logcat. The three
+ * reasons a user might see that are "we did not try", "we could not look it up" and "that is all
+ * there is", and they had exactly one appearance between them. [DiscographyLookup] is what tells
+ * them apart: the error says which failure, and `settled` says whether there has been an answer at
+ * all, so `ArtistUiState.discographyEmpty` can mean what it says. REQUIREMENTS.md "Library browse"
+ * makes this screen "where the two lanes meet visibly"; a lane that is missing without comment is
+ * not visible.
+ *
  * ## This screen plays
  *
  * Play and Shuffle were missing here while the album screen had both, which the
@@ -79,6 +94,13 @@ class ArtistViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val favourites: FavouriteRepository,
     private val playback: Optional<PlaybackController>,
+    /**
+     * The catalogue lane, for one question only: who else goes by this artist's name.
+     *
+     * This screen does not search. It asks [onFindInCatalogue]'s single question, which is the only
+     * recourse a name-derived artist has, and nothing else here touches this repository.
+     */
+    private val search: SearchRepository,
     pulls: PullRepository,
     sessions: SessionRepository,
 ) : ViewModel() {
@@ -114,7 +136,19 @@ class ArtistViewModel @Inject constructor(
     private val busy = MutableStateFlow(false)
     private val notice = MutableStateFlow<AlbumNotice?>(null)
     private val requestSheet = MutableStateFlow<RequestSheetState?>(null)
-    private val discographyFailure = MutableStateFlow<NeedlerError?>(null)
+
+    /**
+     * What the catalogue lookup has done so far: whether it has finished, and what it said.
+     *
+     * One flow rather than two because the screen's question is a single one with three answers -
+     * still looking, could not look, looked and there is nothing - and two booleans combined
+     * elsewhere can represent a fourth that does not exist. It also keeps the state `combine` at
+     * four arguments, which is the last width that has a typed overload.
+     */
+    private val lookup = MutableStateFlow(DiscographyLookup())
+
+    /** The catalogue namesakes offered to a name-derived artist, and whether that look-up is running. */
+    private val namesakes = MutableStateFlow(Namesakes())
 
     /**
      * Every playable track of every owned album, in the order the owned list is drawn.
@@ -184,22 +218,25 @@ class ArtistViewModel @Inject constructor(
         notice,
         requestSheet,
         crate,
-    ) { isBusy, currentNotice, sheet, queue ->
+        namesakes,
+    ) { isBusy, currentNotice, sheet, queue, found ->
         Interaction(
             busy = isBusy,
             notice = currentNotice,
             requestSheet = sheet,
             crateTrackCount = queue.items.size,
             crateDurationMs = queue.totalDurationMs,
+            namesakes = found,
         )
     }
 
     val state: StateFlow<ArtistUiState> = combine(
         content,
         sessions.observeConnectivity(),
-        discographyFailure,
+        lookup,
         interaction,
-    ) { current, connectivity, failure, acted ->
+    ) { current, connectivity, catalogueLookup, acted ->
+        val failure: NeedlerError? = catalogueLookup.error
         ArtistUiState(
             loading = false,
             artist = current.artist,
@@ -214,10 +251,19 @@ class ArtistViewModel @Inject constructor(
             // telling the user the discography is unavailable while it is on screen
             // above the sentence would be worse than saying nothing.
             artistNotInCatalogue = artistMbid.isNameDerived && current.catalogue.isEmpty(),
+            discographySettled = catalogueLookup.settled,
+            // Kept whether or not [discographyError] was suppressed above. A discography that is
+            // on screen *and* failed to refresh is a cached list that may be short, and that is a
+            // different sentence from the one a screen with no discography at all needs.
+            discographyFetchFailed = failure != null,
             offline = !connectivity.isOnline,
             busy = acted.busy,
             notice = acted.notice,
             requestSheet = acted.requestSheet,
+            catalogueNamesakes = acted.namesakes.found,
+            searchingCatalogue = acted.namesakes.searching,
+            namesakeSearchFailed = acted.namesakes.failed,
+            namesakeSearchDone = acted.namesakes.searched,
             playableTracks = current.playableTracks,
             crateTrackCount = acted.crateTrackCount,
             crateDurationMs = acted.crateDurationMs,
@@ -478,9 +524,10 @@ class ArtistViewModel @Inject constructor(
         if (artistMbid.isNameDerived) {
             // Nothing to fetch, ever. `artistNotInCatalogue` is what the screen draws
             // from; there is no failure here to record and nothing to log.
-            discographyFailure.value = null
+            lookup.value = DiscographyLookup(settled = true, error = null)
             return
         }
+        lookup.value = lookup.value.copy(settled = false)
         viewModelScope.launch {
             val result: Outcome<Unit> = library.refreshArtistDiscography(artistMbid)
             // Keep the reason, not just the fact. NeedlerError's own KDoc says
@@ -498,7 +545,76 @@ class ArtistViewModel @Inject constructor(
                 // where a v1-lane failure is visible at all.
                 Log.w(TAG, "artist discography failed for " + artistMbid.value + ": " + error.diagnostic)
             }
-            discographyFailure.value = error
+            lookup.value = DiscographyLookup(settled = true, error = error)
+        }
+    }
+
+    // ---- a way out of a name-derived artist ---------------------------------
+
+    /**
+     * Ask the catalogue who else goes by this artist's name.
+     *
+     * The recourse a name-derived artist had none of. `artistNotInCatalogue` told the user, truthfully,
+     * that their server matched this artist by name rather than to MusicBrainz, and then offered
+     * nothing to do about it - and the artist it says that about is, on the reporting device, the one
+     * with the most records in the library. An accurate dead end is still a dead end.
+     *
+     * The way out exists because the *name* is still a perfectly good catalogue query even when the id
+     * is useless: `GET /api/v1/search` resolves "dido" against MusicBrainz and answers with artists
+     * carrying real v4 MBIDs, each of which opens an artist screen that can fetch a full discography.
+     * So this screen is a dead end only for as long as nothing asks that question.
+     *
+     * ## Why the per-bucket endpoint and not rule 2's combined search
+     *
+     * [SearchRepository.searchCatalogueBucket] asks for the artists bucket alone. The combined search
+     * of REQUIREMENTS.md rule 2 would answer this too and would also fetch a screenful of albums for
+     * a question that is entirely about artists, doubling the upstream MusicBrainz work for rows that
+     * are then thrown away. Rule 5 names this endpoint for paging, and one page of one bucket is
+     * exactly what is wanted here.
+     *
+     * ## Rejected: re-keying the artist automatically
+     *
+     * The tempting version is to run this search invisibly, take the best name match and treat the
+     * mirror's artist as that MBID - the discography would simply appear and nobody would have to
+     * tap anything. Rejected, because it asserts an identity the server explicitly declined to
+     * assert. MusicBrainz holds several artists called "Wonder" and the device found three further
+     * Didos; silently binding the user's library to the wrong one would put a stranger's discography
+     * under their own records, with a Pull button on every row of it. The candidates are shown and
+     * the user picks, which is the same reason `UnifiedSearchUseCase.mergeArtists` keeps distinct
+     * MBIDs apart rather than guessing that two artists with one name are one artist.
+     *
+     * Two filters on what comes back, both of which would otherwise offer a tap that leads nowhere:
+     * a candidate whose own id is name-derived cannot fetch a discography either, and a candidate
+     * whose name does not answer the query - the catalogue ranks on aliases and credits, which is how
+     * a search for "wonder" returned "Jr. Wonder" first - is not the artist the user is looking at.
+     * [UnifiedSearchUseCase.artistMatches] is the same predicate the search lane ranks with, borrowed
+     * rather than written again.
+     */
+    fun onFindInCatalogue() {
+        val name: String = (state.value.artist?.name ?: knownName)?.trim().orEmpty()
+        if (name.isEmpty() || namesakes.value.searching) return
+        namesakes.value = Namesakes(searching = true)
+        viewModelScope.launch {
+            val result: Outcome<CatalogueSearchPage> = search.searchCatalogueBucket(
+                bucket = SearchBucket.ARTISTS,
+                query = name,
+                limit = NAMESAKE_LIMIT,
+                offset = 0,
+            )
+            namesakes.value = when (result) {
+                is Outcome.Failure -> {
+                    Log.w(TAG, "catalogue namesakes failed for " + name + ": " + result.error.diagnostic)
+                    Namesakes(failed = true)
+                }
+                is Outcome.Success -> Namesakes(
+                    found = result.value.artists.filter { candidate ->
+                        candidate.mbid != artistMbid &&
+                            candidate.mbid.isCatalogueIdentifier &&
+                            UnifiedSearchUseCase.artistMatches(name, candidate.name)
+                    },
+                    searched = true,
+                )
+            }
         }
     }
 
@@ -528,6 +644,20 @@ class ArtistViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The catalogue lookup's own state: finished or not, and what it answered.
+     *
+     * [settled] exists because "the catalogue returned nothing" and "the catalogue has not answered
+     * yet" look identical from the album lists alone, and the screen owes the user different
+     * sentences for them. Without it there is no honest way to draw the second: an artist whose owned
+     * albums are on screen and whose discography is still in flight would be told it is empty, and
+     * half a second later told otherwise.
+     */
+    private data class DiscographyLookup(
+        val settled: Boolean = false,
+        val error: NeedlerError? = null,
+    )
+
     private data class Content(
         val artist: Artist?,
         val owned: List<Album>,
@@ -541,6 +671,22 @@ class ArtistViewModel @Inject constructor(
         val requestSheet: RequestSheetState?,
         val crateTrackCount: Int,
         val crateDurationMs: Long,
+        val namesakes: Namesakes,
+    )
+
+    /**
+     * The catalogue namesake look-up's own state.
+     *
+     * [searched] is the same distinction [DiscographyLookup.settled] draws, for the same reason: an
+     * empty [found] means "nobody by that name in the catalogue either" only once the question has
+     * been asked, and before that it means nothing at all. [failed] is separate from an empty answer
+     * because one is worth another tap and the other is not.
+     */
+    private data class Namesakes(
+        val found: List<Artist> = emptyList(),
+        val searching: Boolean = false,
+        val searched: Boolean = false,
+        val failed: Boolean = false,
     )
 
     companion object {
@@ -559,6 +705,15 @@ class ArtistViewModel @Inject constructor(
 
         /** Optional route argument carrying the subtitle the caller showed, e.g. search own. */
         const val ARTIST_SUBTITLE_ARG: String = "artistSubtitle"
+
+        /**
+         * How many catalogue namesakes to offer.
+         *
+         * Five, which is the same judgement `:feature:search`'s `ARTIST_PREVIEW` makes with four: the
+         * list answers "which of these did you mean", not "browse MusicBrainz". The device's worst
+         * case was four Didos, and a sixth row would be a worse match than the five above it.
+         */
+        private const val NAMESAKE_LIMIT: Int = 5
 
         private const val SUBSCRIPTION_TIMEOUT_MS: Long = 5_000L
 

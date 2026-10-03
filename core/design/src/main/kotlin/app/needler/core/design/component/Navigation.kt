@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -163,12 +162,16 @@ private fun NavDestination(
     Column(
         modifier = modifier
             .defaultMinSize(minHeight = NeedlerTheme.sizes.navItemMinHeight)
-            .clip(NeedlerTheme.shapes.extraLarge)
-            .background(if (item.selected) selectedBackground else Color.Transparent)
-            .selectable(
-                selected = item.selected,
-                role = Role.Tab,
-                onClick = item.onClick,
+            // A nav item has 18dp corners, so the press is clipped to them rather than squared off
+            // across the item next to it. The ordering is the helper's, not this call site's.
+            .needlerPressSurface(
+                shape = NeedlerTheme.shapes.extraLarge,
+                interaction = Modifier.selectable(
+                    selected = item.selected,
+                    role = Role.Tab,
+                    onClick = item.onClick,
+                ),
+                background = if (item.selected) selectedBackground else Color.Transparent,
             )
             .semantics(mergeDescendants = true) { contentDescription = spoken }
             .padding(vertical = 6.dp),

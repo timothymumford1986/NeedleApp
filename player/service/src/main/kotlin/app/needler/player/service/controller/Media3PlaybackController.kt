@@ -19,6 +19,7 @@ import app.needler.core.domain.model.QueueItemSource
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.model.Track
+import app.needler.core.domain.playback.OutputRouter
 import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.core.domain.playback.PlaybackState
@@ -26,6 +27,7 @@ import app.needler.core.domain.playback.RepeatMode
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.PlaybackSettingsRepository
 import app.needler.player.service.media.TrackCatalogue
+import app.needler.player.service.output.OutputRouteMonitor
 import app.needler.player.service.session.NeedlerPlaybackService
 import app.needler.player.service.session.awaitResult
 import app.needler.player.service.source.NeedlerPlaybackException
@@ -44,6 +46,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -68,6 +71,15 @@ import kotlinx.coroutines.withContext
  * Every command returns `Unit` and suspends until the session is connected. A failure appears on
  * [PlaybackState.error], because the session is shared: a track that will not play has to be visible to the
  * lock screen, Auto and Wear, not only to whichever client pressed play.
+ *
+ * ## Why it is also the OutputRouter
+ *
+ * REQUIREMENTS.md "Output" puts route discovery in this module - "a repository over Room and HTTP that
+ * opened a route-discovery callback would be keeping the radio awake from the wrong place entirely" - and
+ * the picker needs it in domain types, so one object implements both interfaces rather than two singletons
+ * both claiming to speak for the session. The actual platform work is [OutputRouteMonitor]'s; what is here
+ * is the boundary, plus folding the live route into [PlaybackState.output] so every surface naming the
+ * output names the same thing.
  */
 @OptIn(UnstableApi::class)
 @Singleton
@@ -75,7 +87,8 @@ public class Media3PlaybackController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val libraryRepository: LibraryRepository,
     private val settingsRepository: PlaybackSettingsRepository,
-) : PlaybackController {
+    private val outputRoutes: OutputRouteMonitor,
+) : PlaybackController, OutputRouter {
 
     private val catalogue = TrackCatalogue(libraryRepository)
     private val queueBuilder = QueueBuilder()
@@ -89,12 +102,13 @@ public class Media3PlaybackController @Inject constructor(
      *
      * Three sources, not one, because only the first of them is the session: the output target and the
      * sleep timer are things the player *shows* that Media3 has never heard of. Both are narrowed before
-     * they are combined - the timer through a `map` and `distinctUntilChanged` - so an unrelated settings
-     * change, a crossfade length or an EQ band, cannot re-emit a playback state that has not changed.
+     * they are combined - the timer through a `map` and `distinctUntilChanged`, the output through
+     * [namedOutput] - so an unrelated settings change, a crossfade length or an EQ band, cannot re-emit a
+     * playback state that has not changed.
      */
     override fun observeState(): Flow<PlaybackState> = combine(
         sessionEvents(STATE_EVENTS),
-        settingsRepository.observeSelectedOutput(),
+        namedOutput(),
         armedSleepTimer(),
     ) { session, output, timer -> readState(session, output, timer) }
         .flowOn(Dispatchers.Main.immediate)
@@ -133,10 +147,23 @@ public class Media3PlaybackController @Inject constructor(
     override suspend fun currentState(): PlaybackState = withContext(Dispatchers.Main.immediate) {
         readState(
             session = connect(),
-            output = settingsRepository.observeSelectedOutput().first(),
+            output = namedOutput().first(),
             sleepTimer = armedSleepTimer().first(),
         )
     }
+
+    // ------------------------------------------------------------------- the output
+
+    /**
+     * The picker's rows, from [OutputRouteMonitor].
+     *
+     * Nothing is connected to the session to answer this, deliberately: opening the "Play on" sheet must
+     * not be what starts the player service. The device list is a platform read and has no business
+     * binding a `MediaController`.
+     */
+    override fun observeOutputTargets(): Flow<List<OutputTarget>> = outputRoutes.observeTargets()
+
+    override fun observeActiveOutput(): Flow<OutputTarget?> = outputRoutes.observeActive()
 
     // ---------------------------------------------------------------- the transport
 
@@ -378,6 +405,27 @@ public class Media3PlaybackController @Inject constructor(
     /** The armed timer alone, so a crossfade or EQ change on the same flow does not re-emit a state. */
     private fun armedSleepTimer(): Flow<SleepTimer> = settingsRepository.observePlaybackPreferences()
         .map { preferences -> preferences.sleepTimer }
+        .distinctUntilChanged()
+
+    /**
+     * What to call the output: where sound is actually going, and the remembered choice only when the
+     * platform will not say.
+     *
+     * REQUIREMENTS.md "Output": "The current output is always named in the player - 'Living room speaker',
+     * 'This tablet' - so a user never wonders where sound is going." The remembered selection alone cannot
+     * honour that, because it is where the user last pointed sound rather than where it is - a speaker
+     * that drops out mid-track leaves the two disagreeing, and the player has to print the true one.
+     *
+     * `onStart` with a null is what keeps this safe to put inside a `combine` that feeds the lock screen,
+     * the widgets and Wear: without it, a first route reading that never arrived would stall the whole
+     * state flow and no surface would see playback at all. With it, the first emission is exactly what
+     * this flow produced before the route monitor existed - the remembered selection - and the live route
+     * replaces it when one is known.
+     */
+    private fun namedOutput(): Flow<OutputTarget?> = combine(
+        outputRoutes.observeActive().onStart { emit(null) },
+        settingsRepository.observeSelectedOutput(),
+    ) { active, remembered -> active ?: remembered }
         .distinctUntilChanged()
 
     private suspend fun readState(

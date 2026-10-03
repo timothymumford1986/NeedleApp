@@ -7,10 +7,8 @@ package app.needler.settings
 import android.app.Application
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import app.needler.core.domain.model.CrossfadeDuration
-import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EqPreset
 import app.needler.core.domain.model.StreamRung
-import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.screenshot.NeedlerDevice
 import app.needler.screenshot.NeedlerScreenshots
 import app.needler.screenshot.assertRendered
@@ -35,6 +33,17 @@ import org.robolectric.annotation.GraphicsMode
  * `application = Application::class` keeps Hilt out of it, exactly as `ConnectScreenshotTest` does.
  * Everything here renders the stateless [SettingsScreen] from a literal [SettingsUiState] with
  * [INERT] callbacks; nothing needs a dependency graph, a `DataStore`, a cache index or a server.
+ *
+ * ## There is no golden for the downloaded-album list
+ *
+ * Deliberately, and it is worth recording why rather than leaving it as an omission. The Storage
+ * section sits below the fold on both artboards, so Roborazzi captures the window and never reaches
+ * it: renders of Settings with three, fourteen and fourteen-with-no-destination albums came out
+ * **byte-identical**, and a golden that cannot tell those apart is a golden that will pass through
+ * any regression in them. The truncation rule is therefore a pure function on
+ * [StorageSectionState] - `downloadedAlbumsInline` and `downloadedAlbumsTruncated` - and is asserted
+ * in `SettingsUiStateTest`. The list itself has its own images in `DownloadsScreenshotTest`, where it
+ * is the whole screen.
  *
  * ## The goldens do not exist yet
  *
@@ -66,11 +75,36 @@ class SettingsScreenshotTest {
     @Test
     fun `a server that cannot transcode hides the mobile-data row entirely`() {
         // REQUIREMENTS.md, rule 3 of "Streaming": hidden, not disabled - on a server without ffmpeg
-        // there is nothing for a user to go and enable.
+        // there is nothing for a user to go and enable. `transcodingNegotiated` is named explicitly
+        // because that is what distinguishes this from the test below: the server answered, and the
+        // answer was no.
         capture(
             "settings-no-transcoding",
             NeedlerDevice.Phone,
-            FULL.copy(playing = FULL.playing.copy(transcodingAvailable = false)),
+            FULL.copy(
+                playing = FULL.playing.copy(
+                    transcodingAvailable = false,
+                    transcodingNegotiated = true,
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `a server that has not been asked still offers both rungs`() {
+        // The state the device was in: capabilities are negotiated at sign-in, held in memory, and
+        // never re-read on launch, so after a restart `transcodingAvailable` is false without the
+        // server having refused anything. Drawing the refusal there made the finished eight-rung
+        // ladder unreachable. Both pickers are drawn, with one line saying the answer is not in yet.
+        capture(
+            "settings-transcoding-unconfirmed",
+            NeedlerDevice.Phone,
+            FULL.copy(
+                playing = FULL.playing.copy(
+                    transcodingAvailable = false,
+                    transcodingNegotiated = false,
+                ),
+            ),
         )
     }
 
@@ -164,6 +198,10 @@ class SettingsScreenshotTest {
             // rows missing is a screenshot of a wiring gap rather than of the screen.
             onOpenDiagnostics = {},
             onOpenLicences = {},
+            // Wired for the same reason, with the opposite consequence: null does not remove
+            // anything here, it draws every downloaded album inline. See the unwired test, which is
+            // the only one that passes null.
+            onOpenDownloads = {},
         )
 
         /** The pack's own placeholder values, plus the figures REQUIREMENTS.md's Storage rewrite adds. */
@@ -196,28 +234,13 @@ class SettingsScreenshotTest {
                 cachedBytes = 671_088_640L,
                 artworkBytes = 46_137_344L,
                 deviceFreeBytes = 32_212_254_720L,
-                downloadedAlbums = listOf(
-                    downloaded("Submarine", "The Marías", 1_181_116_006L, "0a1b"),
-                    downloaded("Con Todo El Mundo", "Khruangbin", 734_003_200L, "1b2c"),
-                    downloaded("Fetch the Bolt Cutters", "Fiona Apple", 339_738_624L, "2c3d"),
-                ),
+                // A handful, which is what the device this was reported from holds: Settings draws
+                // all three inline and offers no "See all". The bigger library has its own test.
+                downloadedAlbums = DownloadedAlbumFixtures.FEW,
                 keepPulledAlbumsOnDevice = true,
                 downloadToDeviceOnWifiOnly = true,
             ),
             about = AboutSectionState(versionName = "0.1.0", versionCode = 10_100L),
-        )
-
-        fun downloaded(
-            title: String,
-            artist: String,
-            sizeBytes: Long,
-            suffix: String,
-        ): DownloadedAlbum = DownloadedAlbum(
-            releaseGroupMbid = ReleaseGroupMbid("d2b6bd7d-8d2d-4f33-9a8e-3cbb1cf1a$suffix"),
-            title = title,
-            artistName = artist,
-            sizeBytes = sizeBytes,
-            pinnedAt = TWO_MINUTES_AGO,
         )
     }
 }

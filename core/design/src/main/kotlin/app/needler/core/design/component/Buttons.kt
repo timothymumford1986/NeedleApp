@@ -1,8 +1,11 @@
 package app.needler.core.design.component
 
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,6 +68,72 @@ enum class NeedlerButtonSize {
     /** 32dp minimum, pill, 13sp/700. Play on a finished pull (06); the output selector (09). */
     Compact,
 }
+
+/**
+ * The one correct order for a control that is not a rectangle: clip, fill, outline, then press.
+ *
+ * ## What this fixes
+ *
+ * `Modifier.clickable` draws its press indication over the bounds of the node it is attached to, and
+ * `Modifier.clip` only shapes what is drawn *after* it in the chain. A chain that presses before it
+ * clips therefore flashes a rectangle over a round or pill-shaped control. The device audit reported
+ * it as "you hit play, and a quick square outline appears over the button" - a 48dp square of ripple
+ * over the 80dp accent disc on Now Playing.
+ *
+ * ## Why the order lives here rather than at the call site
+ *
+ * Because it is invisible in review and invisible in a screenshot. The indication is a transient
+ * animation, so no static capture holds it, and a reviewer reading a twelve-line modifier chain has
+ * no reason to notice that two of its lines are the wrong way round. Thirty-six interaction
+ * modifiers were written across this application and exactly one carried a comment showing anyone
+ * had thought about the ordering.
+ *
+ * So the ordering is not something to remember. A caller hands over a shape, a fill, an outline and
+ * an interaction as *values*, and this function puts them in sequence. There is no argument order
+ * that produces the wrong draw order, which makes the guarantee structural rather than tested.
+ *
+ * The rejected alternative was a lint rule over "clip appears after clickable". It would have to
+ * know which shapes are rectangular or it fires on every list row in the application - and a list
+ * row's rectangular ripple is correct, because a list row is a rectangle - and it would still leave
+ * every existing chain to be found and fixed one at a time.
+ *
+ * ## What it does not do
+ *
+ * It does not choose the indication. The press feedback stays whatever `LocalIndication` provides,
+ * which under [app.needler.core.design.theme.NeedlerTheme] is the platform ripple; this function
+ * only decides what shape that ripple is allowed to be. Nothing here suppresses feedback, and
+ * nothing here invents any.
+ *
+ * Note for REQUIREMENTS.md "Motion", which asks that animation be suppressed when the system
+ * animator duration scale is zero: the ripple is the platform's own animation and it does **not**
+ * consult [app.needler.core.design.motion.LocalReducedMotion]. That is the behaviour as it stands
+ * and this change does not alter it either way - a control with no press feedback at all is worse
+ * than one with an instant one, so the policy is a decision to take deliberately rather than a side
+ * effect of fixing a shape.
+ *
+ * @param shape the control's own shape - the same value its fill and outline are drawn with. Pass it
+ *   even for a barely-rounded control: clipping to a 10dp radius costs nothing and says out loud
+ *   that the press was meant to follow the control.
+ * @param interaction the gesture node: `Modifier.clickable`, `selectable`, `toggleable` or
+ *   `combinedClickable`. Handed in rather than built here so one helper serves all four, and
+ *   *placed* here rather than by the caller, which is the entire point.
+ * @param background [Color.Transparent] for an outlined control. An outlined control still needs the
+ *   clip - what is being shaped is the indication, not the fill.
+ * @param borderColor `null` for no outline. Drawn before [interaction] so a press lands on top of
+ *   the hairline rather than underneath it.
+ */
+@Composable
+fun Modifier.needlerPressSurface(
+    shape: Shape,
+    interaction: Modifier,
+    background: Color = Color.Transparent,
+    borderColor: Color? = null,
+    borderWidth: Dp = NeedlerTheme.sizes.hairlineThickness,
+): Modifier = this
+    .clip(shape)
+    .background(background)
+    .then(if (borderColor != null) Modifier.border(borderWidth, borderColor, shape) else Modifier)
+    .then(interaction)
 
 /**
  * A filled button: the pack's primary action.
@@ -200,16 +270,14 @@ fun NeedlerPillButton(
     Row(
         modifier = modifier
             .defaultMinSize(minHeight = sizes.pillMinHeight)
-            .clip(shape)
-            .background(if (selected) colors.inverseSurface else Color.Transparent)
-            .then(
-                if (selected) {
-                    Modifier
-                } else {
-                    Modifier.border(sizes.hairlineThickness, colors.hairline, shape)
-                },
+            .needlerPressSurface(
+                shape = shape,
+                interaction = Modifier
+                    .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+                background = if (selected) colors.inverseSurface else Color.Transparent,
+                // The chosen pill is a solid fill with no outline; the others are the reverse.
+                borderColor = if (selected) null else colors.hairline,
             )
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics {
                 this.selected = selected
                 if (contentDescription != null) this.contentDescription = contentDescription
@@ -269,10 +337,35 @@ fun NeedlerTextButton(
  * [app.needler.core.design.theme.NeedlerSizes.minTouchTarget], honouring REQUIREMENTS.md's
  * "transport controls are at least 48 dp".
  *
+ * ## Why the press is drawn on a different node from the one that is pressed
+ *
+ * This is the control the device audit was complaining about: the play button on Now Playing flashed
+ * a square. It is the one shape in the pack where the thing that is *touched* and the thing that is
+ * *drawn* are deliberately different sizes - `max(visualSize, 48dp)` for the target, [visualSize]
+ * for the ink - so [needlerPressSurface] cannot fix it, because there is no single node to clip.
+ * Clipping the touch target instead would ripple a 48dp circle over a 32dp disc, which is round but
+ * is not the control.
+ *
+ * So one [MutableInteractionSource] is shared between the two nodes. The outer node takes the
+ * gesture and the semantics; the inner node, which is the control as drawn and is clipped to
+ * [shape], takes the indication for that same source. `indication = null` on the outer node moves
+ * the feedback, it does not remove it - the press is still drawn, on the disc, which is the only
+ * place it was ever meant to appear. REQUIREMENTS.md "Accessibility" is satisfied in both halves:
+ * the target is still at least
+ * [app.needler.core.design.theme.NeedlerSizes.minTouchTarget], and the control still answers a
+ * press visibly.
+ *
+ * The indication itself is `LocalIndication.current`, which is exactly the object `clickable` would
+ * have used had it been left to pick its own. Nothing is substituted; the feedback is the platform's
+ * and only its bounds change.
+ *
  * @param contentDescription required, not nullable: this control has no visible label, so a screen
  *   reader has nothing else to announce.
  * @param background pass [app.needler.core.design.theme.NeedlerColors.accent] for the filled
- *   play/pause button; the default is the pack's transparent transport button.
+ *   play/pause button; the default is the pack's transparent transport button. A transparent
+ *   background still gets the clipped node, because the ripple needs a shape whether or not there is
+ *   a fill under it - a bare transport glyph rippling as a 48dp square was the same defect wearing
+ *   no paint.
  */
 @Composable
 fun NeedlerIconButton(
@@ -286,26 +379,31 @@ fun NeedlerIconButton(
     icon: @Composable () -> Unit,
 ) {
     val touchTarget = maxOf(visualSize, NeedlerTheme.sizes.minTouchTarget)
+    val interactionSource = remember { MutableInteractionSource() }
     Box(
         modifier = modifier
             .defaultMinSize(minWidth = touchTarget, minHeight = touchTarget)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                // Relocated to the inner node below, not suppressed. See the KDoc.
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick,
+            )
             // A merging node, so a row that merges its own descendants still leaves this button
             // reachable as a separate target.
             .semantics(mergeDescendants = true) { this.contentDescription = contentDescription },
         contentAlignment = Alignment.Center,
     ) {
-        if (background == Color.Transparent) {
-            icon()
-        } else {
-            Box(
-                modifier = Modifier
-                    .defaultMinSize(minWidth = visualSize, minHeight = visualSize)
-                    .clip(shape)
-                    .background(background),
-                contentAlignment = Alignment.Center,
-            ) { icon() }
-        }
+        Box(
+            modifier = Modifier
+                .defaultMinSize(minWidth = visualSize, minHeight = visualSize)
+                .clip(shape)
+                .background(background)
+                .indication(interactionSource, LocalIndication.current),
+            contentAlignment = Alignment.Center,
+        ) { icon() }
     }
 }
 
@@ -356,16 +454,13 @@ private fun ButtonSurface(
     Row(
         modifier = modifier
             .defaultMinSize(minHeight = minHeight)
-            .clip(shape)
-            .background(background)
-            .then(
-                if (borderColor != null) {
-                    Modifier.border(sizes.hairlineThickness, borderColor, shape)
-                } else {
-                    Modifier
-                },
+            .needlerPressSurface(
+                shape = shape,
+                interaction = Modifier
+                    .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+                background = background,
+                borderColor = borderColor,
             )
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics {
                 if (selectedState != null) this.selected = selectedState
                 if (contentDescription != null) this.contentDescription = contentDescription

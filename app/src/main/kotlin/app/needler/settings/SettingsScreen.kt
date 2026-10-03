@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -28,27 +27,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerHairline
-import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerPillButton
 import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerSectionHeader
 import app.needler.core.design.component.NeedlerSettingsRow
-import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.NeedlerToggleRow
-import app.needler.core.design.component.PathClose
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.StreamRung
@@ -106,6 +100,23 @@ data class SettingsCallbacks(
     val onOpenLicences: (() -> Unit)? = null,
 
     /**
+     * Opens the full downloaded-album list - [DownloadsRoute].
+     *
+     * **Null does not remove a feature here, unlike the three callbacks above it.** It falls the
+     * Storage section back to drawing every downloaded album inline, which is what it did before this
+     * screen had anywhere to send them. That asymmetry is deliberate. REQUIREMENTS.md "Storage, and
+     * why there is no budget" leaves no storage limit in the product at all, which makes this list
+     * the user's only lever on a full device and "the only view that can answer 'what is actually
+     * taking up the room'" - so a host that has not registered the route yet must not be able to make
+     * part of it unreachable. A wiring gap may cost the user a tidier screen; it may not cost them
+     * the ability to free space.
+     *
+     * Register it as described on [DownloadsRoute], and the section truncates to
+     * [StorageSectionState.INLINE_DOWNLOADED_ALBUMS] rows with "See all N albums" under them.
+     */
+    val onOpenDownloads: (() -> Unit)? = null,
+
+    /**
      * Re-authenticates an expired companion session, which means going back to Connect for the
      * account password - Needler never stores it, so there is no silent renewal. Null leaves the
      * expiry warning as a statement rather than an action.
@@ -133,12 +144,24 @@ data class SettingsCallbacks(
  * | Storage | Storage | Rewritten: no budget, usage split by tier, albums listed and removable |
  * | *(legal block)* | About | Gains the version row; the rest is the pack's copy verbatim |
  *
- * ## Why this is a LazyColumn
+ * ## Why this is a LazyColumn, and what bounds the one section that was unbounded
  *
- * Because of one section. Everything else on this screen is a fixed handful of rows, but
- * REQUIREMENTS.md makes the downloaded-album list "the only view that can answer 'what is actually
- * taking up the room'", and it is as long as the user's offline library. A `verticalScroll`
- * `Column` would compose every one of those rows on every frame of a scroll.
+ * Everything on this screen is a fixed handful of rows except one section. REQUIREMENTS.md "Storage,
+ * and why there is no budget" makes the downloaded-album list "the only view that can answer 'what is
+ * actually taking up the room'", and that list is as long as the user's offline library - so a
+ * `verticalScroll` `Column` would compose every one of those rows on every frame of a scroll.
+ *
+ * It used to be unbounded as well as lazy, which is the defect reported from the device: "it's just a
+ * huge list. It seems like a poor UI choice." The complaint is about placement and density, not
+ * existence - an `items()` with no ceiling in the middle of Settings is a section that grows until it
+ * buries About and Sign out behind it. So the section now draws at most
+ * [StorageSectionState.INLINE_DOWNLOADED_ALBUMS] rows, largest first, and sends the rest to [DownloadsScreen] through
+ * "See all N albums". On the device this was reported from, which holds five, nothing changed at all;
+ * on a device with fifty, the section is six rows instead of fifty.
+ *
+ * Nothing was capped *away*: every album stays individually removable, and the screen the overflow
+ * leads to lists all of them in the same order with the same controls. [DownloadsUiState] records the
+ * two alternatives weighed against this and why each lost.
  *
  * Note that the list has no `verticalArrangement` spacing: the pack's rows butt up against one
  * another and are separated by the 1dp hairline each one draws under itself, so a gap between items
@@ -195,7 +218,16 @@ fun SettingsScreen(
 
             item(key = "server") { ServerSection(state = state.server, callbacks = callbacks) }
 
-            item(key = "playing") { PlayingSection(state = state.playing, callbacks = callbacks) }
+            item(key = "playing") {
+                PlayingSection(
+                    state = state.playing,
+                    // Read from the server block rather than the playing block: a fresh install has
+                    // no server to ask, so it gets the plain statement instead of a line about a
+                    // negotiation that has not been attempted because there is nothing to attempt.
+                    serverConfigured = state.server.host != null,
+                    callbacks = callbacks,
+                )
+            }
 
             item(key = "notifications") {
                 NotificationsSection(state = state.notifications, callbacks = callbacks)
@@ -204,23 +236,41 @@ fun SettingsScreen(
             item(key = "storage") { StorageSection(state = state.storage, callbacks = callbacks) }
 
             if (state.storage.downloadedAlbums.isNotEmpty()) {
+                val openDownloads: (() -> Unit)? = callbacks.onOpenDownloads
+                // Both decisions live on the state, where they can be asserted on: this section is
+                // below the fold on the pack's phone artboard, so no screenshot of Settings can see
+                // whether it truncated. See StorageSectionState.downloadedAlbumsInline.
+                val shown: List<DownloadedAlbum> =
+                    state.storage.downloadedAlbumsInline(openDownloads != null)
+                val truncated: Boolean =
+                    state.storage.downloadedAlbumsTruncated(openDownloads != null)
+
                 item(key = "downloaded-albums-header") {
                     Column(modifier = Modifier.padding(top = spacing.sectionGap)) {
                         NeedlerSectionHeader(
                             title = "Downloaded albums",
+                            // Every album, not the ones drawn below it. See
+                            // StorageSectionState.downloadedAlbumsTrailing.
                             trailing = state.storage.downloadedAlbumsTrailing,
                         )
                     }
                 }
-                items(
-                    items = state.storage.downloadedAlbums,
-                    key = { album -> album.releaseGroupMbid.value },
-                ) { album ->
+                items(items = shown, key = { album -> album.releaseGroupMbid.value }) { album ->
                     DownloadedAlbumRow(
                         album = album,
                         enabled = !state.storage.working,
                         onRemove = { callbacks.onRemoveDownload(album) },
                     )
+                }
+                if (truncated && openDownloads != null) {
+                    item(key = "downloaded-albums-all") {
+                        NeedlerSettingsRow(
+                            label = state.storage.seeAllDownloadedAlbumsLabel,
+                            onClick = openDownloads,
+                            // Last row of the section; the rows above it carry the hairlines.
+                            showDivider = false,
+                        )
+                    }
                 }
             }
 
@@ -357,16 +407,28 @@ private fun ServerSection(state: ServerSectionState, callbacks: SettingsCallback
  * navigation destination, and this control is eight one-word choices. Only one picker is open at a
  * time: two open pickers put sixteen chips on screen and make it easy to set the wrong one.
  *
- * ## Both pickers disappear rather than greying out
+ * ## Both pickers disappear rather than greying out - but only when the server has said no
  *
  * REQUIREMENTS.md rule 3 of "Streaming": hide it entirely unless `transcoding:1` is advertised
  * *and* the server reports transcoding enabled. A disabled row invites a user to go looking for the
  * switch that would enable it, and on a server without ffmpeg there is nothing to find. What is left
  * in that case is one row reporting "Original", which is the truth on such a server: every rung
  * resolves to original bytes.
+ *
+ * **This branch used to also swallow the case where the server had not been asked**, which is how
+ * the finished seven-rung ladder came to be unreachable on the device: `observeCapabilities` is null
+ * until something negotiates, nothing negotiates on launch, so every restart drew the refusal.
+ * [PlayingSectionState.streamQuality] now separates the two and
+ * [StreamQualityAffordance.PICKERS_UNCONFIRMED] draws the pickers with [TRANSCODING_UNCONFIRMED]
+ * above them. The reasoning is on [PlayingSectionState.transcodingNegotiated]; the underlying fix
+ * belongs to `:core:data` and is not this module's to make.
  */
 @Composable
-private fun PlayingSection(state: PlayingSectionState, callbacks: SettingsCallbacks) {
+private fun PlayingSection(
+    state: PlayingSectionState,
+    serverConfigured: Boolean,
+    callbacks: SettingsCallbacks,
+) {
     // Which rung picker is expanded, if either. Screen-local: it is not a preference, it does not
     // survive leaving the screen, and nothing else can act on it.
     var openPicker: StreamRungPicker? by remember { mutableStateOf<StreamRungPicker?>(null) }
@@ -387,7 +449,16 @@ private fun PlayingSection(state: PlayingSectionState, callbacks: SettingsCallba
             value = state.equaliserLabel,
             onClick = callbacks.onOpenEqualiser,
         )
-        if (state.transcodingAvailable) {
+        val affordance: StreamQualityAffordance = state.streamQuality(serverConfigured)
+        if (affordance == StreamQualityAffordance.STATEMENT) {
+            // Nothing to choose between: without ffmpeg the server serves original bytes whatever it
+            // is asked for. The row reports rather than offering, and carries no chevron, because a
+            // chevron on a row that goes nowhere is the same lie as an inert tap target.
+            NeedlerSettingsRow(label = "Stream quality", value = "Original")
+        } else {
+            if (affordance == StreamQualityAffordance.PICKERS_UNCONFIRMED) {
+                NoticeLine(text = TRANSCODING_UNCONFIRMED)
+            }
             StreamRungRow(
                 label = "Stream quality on Wi-Fi",
                 selected = state.wifiRung,
@@ -410,10 +481,6 @@ private fun PlayingSection(state: PlayingSectionState, callbacks: SettingsCallba
                 },
                 onSelect = callbacks.onDataRungChange,
             )
-        } else {
-            // Nothing to choose between: without ffmpeg the server serves original bytes whatever it
-            // is asked for. The row reports rather than offering, and carries no chevron.
-            NeedlerSettingsRow(label = "Stream quality", value = "Original")
         }
         NeedlerToggleRow(
             label = state.scrobbleLabel,
@@ -427,6 +494,23 @@ private fun PlayingSection(state: PlayingSectionState, callbacks: SettingsCallba
 
 /** Which of the two rung pickers is open. Screen-local state, not a preference. */
 private enum class StreamRungPicker { WIFI, DATA }
+
+/**
+ * The line above the pickers when the server has not been asked whether it can re-encode.
+ *
+ * It reports the uncertainty rather than withholding the control over it, which is the whole point:
+ * both rungs are local preferences and a rung is a **ceiling**, so setting one can never produce a
+ * request a server rejects. The sentence says what is saved and what is conditional, and does not
+ * ask the user to do anything - there is nothing for them to do, and the next successful negotiation
+ * removes the line.
+ *
+ * It avoids blaming the connection, because an unasked server is not an offline one: the capability
+ * set is negotiated at sign-in and not re-read on launch, so this appears on a perfectly healthy
+ * network.
+ */
+private const val TRANSCODING_UNCONFIRMED: String =
+    "Needler has not asked this server whether it can re-encode since it started. Both settings " +
+        "are saved either way, and a rung below Original only changes anything on a server that can."
 
 /**
  * One rung picker: a row that names its current rung, and the ladder underneath it when tapped.
@@ -608,76 +692,8 @@ private fun StorageActions(
     }
 }
 
-/**
- * One downloaded album, with what it occupies and a control that removes it.
- *
- * Not a [NeedlerSettingsRow]: that row's whole width is the tap target, and here the tap target
- * deletes files. The size has to be visible beside the title rather than only in the removal's
- * confirmation, because REQUIREMENTS.md requires "a size shown against an album is the bytes
- * actually on disk, not what the server says the album weighs" - this list is how a user decides
- * which album to give up.
- */
-@Composable
-private fun DownloadedAlbumRow(
-    album: DownloadedAlbum,
-    enabled: Boolean,
-    onRemove: () -> Unit,
-) {
-    val colors = NeedlerTheme.colors
-    val typography = NeedlerTheme.typography
-    val sizeLabel: String = SettingsFormat.bytes(album.sizeBytes)
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = NeedlerTheme.sizes.listRowMinHeight)
-                .padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    // Merged so TalkBack reads the album once, as a whole, and then finds the
-                    // remove button as a separate target rather than three fragments and a button.
-                    .semantics(mergeDescendants = true) {
-                        contentDescription =
-                            album.title + ", " + album.artistName + ", " + sizeLabel + " on this device"
-                    },
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = album.title,
-                    style = typography.rowTitle,
-                    color = colors.textPrimary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = album.artistName,
-                    style = typography.meta,
-                    color = colors.textSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Text(text = sizeLabel, style = typography.bodySmall, color = colors.textSecondary)
-            NeedlerIconButton(
-                contentDescription = "Remove " + album.title + " from this device, freeing " + sizeLabel,
-                onClick = onRemove,
-                enabled = enabled,
-                visualSize = 36.dp,
-            ) {
-                NeedlerStrokeIcon(
-                    pathData = PathClose,
-                    tint = if (enabled) colors.destructive else colors.textMuted,
-                    size = 18.dp,
-                )
-            }
-        }
-        NeedlerHairline()
-    }
-}
+// `DownloadedAlbumRow` moved to DownloadsScreen.kt with the list it draws. It is still called from
+// this file's fallback path, which is why it is `internal` rather than private to that one.
 
 // ---------------------------------------------------------------------------
 // About
@@ -901,6 +917,9 @@ private const val TITLE: String = "Settings"
  * An inference, not a transcription: the pack has no tablet artboard for screen 12. 640dp is a
  * little over one and a half phone widths, which keeps a row's label and its switch within a glance
  * of each other on a 1280dp pane.
+ *
+ * `internal` so [DownloadsScreen] caps itself at the same width. A sub-screen of Settings that
+ * measured differently from Settings would look like a different app on a tablet.
  */
-private val TABLET_CONTENT_MAX_WIDTH: Dp = 640.dp
+internal val TABLET_CONTENT_MAX_WIDTH: Dp = 640.dp
 

@@ -1,8 +1,10 @@
 # Needler — Requirements & Architecture
 
-Android music player for DroppedNeedle · drafted 2026-09-17 · revised 2026-09-18 · revised 2026-10-02
+Android music player for DroppedNeedle · drafted 2026-09-17 · revised 2026-09-18 · revised 2026-10-02 · revised 2026-10-03
 
 > **As of 2026-09-18 this file is the canonical copy of Needler's requirements, and it is maintained alongside the code.** The first draft was written before any code existed. Five foundation modules have since been built against the DroppedNeedle source, and a good deal of what follows was found to be wrong, or too vague to implement. Those passages are corrected in place, and the correction is spelled out wherever the reasoning matters more than the conclusion. A change here is a change to the contract for the work that remains, so it belongs in the same commit as the code that makes it true.
+
+> **The 2026-10-03 revision is a vocabulary cut, and it lands with the code that makes it true.** "Vocabulary" had nine words for three facts and is now three words, three actions and two retention tiers, each group under its own heading so that the shape of the model is visible from the table. "Design system", "Album states", "Request and acquire", "Offline and caching", "Partial content is a normal state", "Accessibility" and "Design pack discrepancies" are corrected in place to match, and two of the pack's colour decisions are overturned with the reasoning recorded rather than the conclusion alone. Nothing is appended as errata: a reader who starts at the top should never meet a retired word except where this file is explaining that it retired it.
 
 > **The 2026-10-02 revision is a catch-up, and the rule above is what it broke.** Roughly 45,000 lines landed in the week to 2026-10-01 — the remaining feature surfaces, a device audit's worth of fixes — and this file was left untouched throughout, so for a week the canonical copy of the requirements was the one document in the repository known to be wrong. Every claim below is now checked against the tree rather than against the last revision. The lesson is the rule, not an exception to it: a surface that ships without its paragraph here leaves the next reader trusting a sentence the code stopped honouring.
 
@@ -44,7 +46,7 @@ The Songs tab was once listed here as incomplete, and is no longer. It used to f
 | Decision | Choice | Main consequence |
 | --- | --- | --- |
 | Server interface | OpenSubsonic for library and playback; `/api/v1` for search, requests and queue | Needs an admin to enable the Subsonic protocol once |
-| Offline model | User-downloaded albums, plus an LRU cache of what was played | Two storage tiers with different bounds and different eviction rules |
+| Offline model | User-downloaded albums, plus an LRU cache of what was played | Two retention tiers, Device and Temporary, with different bounds and different eviction rules |
 | Stack | Kotlin, Jetpack Compose, Media3 | Single-platform; best control of Range requests and caching |
 | v1 feature set | Player, search, request, download queue | Discovery and admin surfaces deferred |
 | Connectivity | One saved server, any URL form, opt-in trust of a self-signed certificate | User supplies their own VPN or reverse proxy for remote access |
@@ -76,15 +78,17 @@ The palette is a single dark theme built on a near-black olive canvas, with one 
 | Text primary | `#f2f5ee` | Titles, track names |
 | Text secondary | `#a8b3a0` | Artists, metadata |
 | Text muted | `#6f7a68` | Placeholders, disabled |
-| Accent | `#aed5f2` | Primary buttons, links, transport |
+| Accent | `#aed5f2` | Primary buttons, links, transport, **the server state** |
 | On accent | `#071520` | Text on accent fills |
-| Positive | `#bbdb9b` | Progress, Ready, on-device check |
+| Positive | `#bbdb9b` | Progress, Ready, **the device state** and its check |
 | On positive | `#0f1a0a` | Text on positive fills |
 | Hairline | `rgba(242,245,238,0.08)` | Borders and dividers |
 | Destructive | `#e8908a` | Remove all, unpin, sign out, delete confirmations |
 | On destructive | `#200c0a` | Text on destructive fills |
 
 The destructive pair is an addition, not a value from the pack; `#6f7a68` is kept as drawn despite failing AA. Both are decisions with reasoning, recorded under Accessibility.
+
+**Accent and positive are the state pair.** "Vocabulary" gives each of the two drawn record states one of them, permanently: accent is *server*, positive is *device*, and they do not trade places when emphasis moves. They are the only complementary pair in the palette, `positive` was already the on-device colour in the row above, and that is the whole reason no token was added for this — a tenth value was considered and would have been a worse answer than a pair the design already had.
 
 Type is two families. Space Grotesk at 500 and 700 carries the wordmark, screen titles, numerals and badges; the wordmark is uppercase at `0.04em` tracking. Hanken Grotesk at 400 to 700 carries all body text. Elapsed and remaining times use tabular numerals so they do not jitter.
 
@@ -100,15 +104,64 @@ Every one of these is suppressed under `prefers-reduced-motion` in the design pa
 
 The product has its own words, and they must be used consistently across the UI, notifications, widgets and Android Auto.
 
+**This table had nine words for three facts, and the 2026-10-03 revision cut it to three.** It said Pull, Pull local, In library, On device, Downloaded, Cached while listening, and the album screen added `Pulled:` and `Server:` on top. A user reading those nine could not have told you how many states a record has, because the words were not grouped by anything: two of them named retention policies, two named locations, two named actions, and two were tag labels for the same two locations under different names. There are three places a record can be, and there is now one word for each.
+
+#### Where a record is
+
+| State | Word | Means |
+| --- | --- | --- |
+| `NotOwned` | **Not retrieved** | Not on the server and not on the device |
+| `Owned` | **Server** | On the server, not on the device |
+| `Pinned` | **Device** | On the server and on the device |
+
+These are the only three, and they are the words every surface draws: the badge on a library row, grid cell, search row and artist row; the quality tags `Server:` and `Device:` on the player and the album screen; the Android Auto browse node; the Wear picker; and every content description of any of them. `:core:design`'s `NeedlerAlbumSource` is the single definition, and nothing is allowed to write one of these words as a literal.
+
+**Each state has a hue, and the hue belongs to the state.** `Server` is the accent `#aed5f2` and `Device` is the positive `#bbdb9b` — the palette's own complementary pair, so nothing was added to the palette to do this. `Not retrieved` has no hue because it has no badge: a record that is nowhere wears the **Pull** button instead, which is the whole signal.
+
+The hue used to belong to the *emphasis* instead, and that is what this revision was asked to fix. The player and the album screen draw two quality tags side by side, and the pair gave the green and the chip to whichever tag was in force. So pulling an album to the device moved the green off `Server:` and onto `Pulled:`, and the colour meant "this is the one that applies" before the tap and the opposite after it — a code that changes meaning is not a code anyone can learn. Which tag applies is now carried by the chip and the label's weight, neither of which is colour and neither of which changes the tag's size; see "Accessibility" for the measurements, including why the hue is deliberately never the only channel.
+
+#### The verb survives, and there is only one of it
+
+| Action | Label | Means |
+| --- | --- | --- |
+| `PULL` | **Pull** | Ask the server to acquire a record it does not have: not retrieved → server |
+| `PULL_LOCAL` | **Pull to device** | Download a record the server has onto this device: server → device |
+| `CANCEL` | **Stop** | Stop an acquisition in flight, either the server's or this device's |
+| `REMOVE_FROM_DEVICE` | **Remove from device** | Delete the bytes and report what was freed: device → server |
+
+**Pull is the product's identity word and it stays.** The request was for simpler states, not for the removal of the verb, and dropping it would rename a navigation destination, a whole screen and the thing the app is for. What goes is "Pull local", which was the weak half of the pair: *local* is an adjective doing an adverb's work, and it named neither where the record was nor where it was going. Now the one verb takes its destination from the state words, so the two acquisitions read as the same act onto different stores — which is what they are. The alternative was to label both buttons plainly "Pull" and let context disambiguate; rejected, because the two appear on the same screen for the same record moments apart and would have been two identical buttons doing different things.
+
+**Stop is not Remove from device.** "Offline and caching" makes removal delete bytes and report how many; stopping a download leaves what has already landed as a part-downloaded pin, which plays. Two actions, two outcomes, and the album offers whichever one can still apply.
+
+#### Two retention tiers, which are not states
+
+| Tier | Word | Means |
+| --- | --- | --- |
+| Pinned bytes | **Device** | Kept because the user asked for it; never evicted automatically |
+| Opportunistic bytes | **Temporary** | Kept as a side effect of streaming; evicted to keep the device above its free-space floor |
+
+**The two tiers survive the cut, and the reason is the eviction policy.** Collapsing them was considered and would have been wrong: the Storage screen currently reads 440 MB in the first tier and 5.3 MB in the second, and a single figure covering both would promise permanence for 5.3 MB the app is entitled to delete the moment the device gets tight. The whole of "Storage, and why there is no budget" rests on one tier being untouchable and the other being bounded by free space.
+
+**What was wrong was their names, not their existence.** "Downloaded" and "Cached while listening" read like states a record could be in, so a user who had just learned three state words would reasonably have hunted for those two among them. **Device** is the one state word that genuinely *is* a retention policy — a pinned album is exactly the device state — and **Temporary** says the only thing about the other tier the user can act on, which is that it goes away.
+
+**The conflation this is accused of cannot reach a badge, and that is why one `Device` badge is honest.** The worry is real in the abstract: a badge meaning both tiers would promise permanence for bytes that get evicted. It cannot arise, because every on-device signal in the app is gated on the album being *pinned*, and the temporary tier is per track with no album-level reader at all:
+
+- the badge comes from `AlbumState`, and `AlbumState.Pinned` is written only from the `pin` table — `DefaultPinRepository` and `AlbumSyncer` are the only writers of `AlbumStateDb.PINNED`;
+- the artwork check and the row's spoken "device" come from `Album.isFullyOnDevice`, which is `AlbumState.Pinned` **and** a complete download;
+- the player's `Device:` tag requires `cached.pinned && cached.isComplete && !stale` — three conditions, of which the first excludes the temporary tier outright.
+
+So no surface can draw `Device` for temporary bytes. Verified by reading those four call sites, not by running the app.
+
+#### Unaffected
+
 | Term | Means |
 | --- | --- |
-| Pull | Ask the server to acquire an album you do not own |
-| Pull local | Download an owned album to this device |
 | In the crate | The play queue |
-| On device | Cached locally, plays without a network |
-| In library | Owned by the server, streams on demand |
-| Downloaded | Kept on device because the user asked for it; never evicted automatically |
-| Cached while listening | Kept as a side effect of streaming; evicted to keep the device above its free-space floor |
+| On watch / On phone | Which of two devices holds the bytes, on Wear only |
+
+**"In the crate" is untouched by this revision.** It names the play queue, which is a different axis entirely, and it is as short as the state words are.
+
+**Wear keeps two words where the phone has one.** "On watch" and "On phone" answer a question the phone never has to ask — which of two devices the bytes are on — so they are a narrowing of the **device** state rather than a fourth and fifth state. Recorded here so that a later pass does not "fix" them into one word and lose the distinction the whole Wear sync policy is built on.
 
 ## Server interface
 
@@ -263,7 +316,7 @@ The alternative — asking for both an account password and an app-password — 
 
 ## Identity model
 
-The MusicBrainz release-group MBID is the join key that lets one screen show owned and un-owned music together. This is the single most load-bearing fact in the architecture.
+The MusicBrainz release-group MBID is the join key that lets one screen show retrieved and not-retrieved music together. This is the single most load-bearing fact in the architecture.
 
 DroppedNeedle's Subsonic IDs are type-prefixed and built from MBIDs, and its request API is keyed on the same MBIDs:
 
@@ -295,18 +348,26 @@ stateDiagram-v2
 
 One `Album` entity carries this state. The UI never has separate "search result" and "library album" types, which removes a whole class of duplicate-rendering bugs.
 
-Each state has one label, fixed by the design pack. Screens 03 and 10 show all four on the same list.
+Each state has one label. Screens 03 and 10 show four of them on the same list.
 
-| State | Badge | Action offered |
-| --- | --- | --- |
-| `NotOwned` | none | **Pull** |
-| `PendingApproval` | Waiting | none |
-| `Acquiring` | Pulling, with percentage | Cancel |
-| `Owned` | In library | Play, **Pull local** |
-| `Pinned` | On device, green check on artwork | Play, remove from device |
-| `Failed` | no source found | Retry |
+| State | Badge | Hue | Action offered |
+| --- | --- | --- | --- |
+| `NotOwned` | none | — | **Pull** |
+| `PendingApproval` | Waiting | secondary | none |
+| `Acquiring` | Pulling, with percentage | accent | **Stop** |
+| `Owned` | Server | accent | Play, **Pull to device** |
+| `Pinned`, download in flight | Pulling to device, with percentage | positive | Play, **Stop** |
+| `Pinned`, download held for Wi-Fi | Waiting for Wi-Fi | secondary | Play, **Stop** |
+| `Pinned`, on the device | Device, check on artwork | positive | Play, **Remove from device** |
+| `Failed` | no source found | muted | Retry |
 
-A pull can also land **partially**: the server's task status `partial` means some tracks arrived and others did not. Such an album is `Owned` — it is in the library and it plays — with the missing tracks marked individually rather than hidden. See "Partial content is a normal state".
+**The badge words changed in the 2026-10-03 revision and the pack's two hue choices went with them.** "In library" and "On device" became **Server** and **Device** for the reason set out in "Vocabulary". The pack drew `Pulling` in the positive green, which is also the on-device colour, so green meant both "on its way to the server" and "already on the device" — the exact ambiguity the state hues exist to remove. A transition now takes the hue of **where it is going**, so a record is the server's colour for its whole journey to the server and changes hue exactly once, when it reaches the device. `Ready` on the Pulls screen keeps its green as that screen's own word for a finished pull; it is a pull-lifecycle label rather than a location, and the Pulls screen draws no location badges to contradict.
+
+**`Pinned` is three rows because pinning is instant and the bytes are not.** The pin exists the moment the user taps, and nothing will evict it, but the album is not on the device until the download lands. REQUIREMENTS.md already drew the *other* transition as progress on the badge of the thing that is changing, with a Cancel beside it; the local download now does the same, and the album screen's full-width download banner is deleted. See "Partial content is a normal state" for what that banner got wrong and why a badge cannot repeat it.
+
+A **part**-downloaded pin draws the plain `Device` badge, not a fourth word. The album is on the device — pinned, exempt from eviction, playing offline for the tracks it holds — and how many tracks that is, is a per-track fact the track list already states in position. The exception is a pin with *nothing* on the device yet, whether because the download failed or because the record has no downloadable tracks at all: that reads `Server`, because the bytes are not here and claiming otherwise is the one thing the badge must not do.
+
+A pull can also land **partially**: the server's task status `partial` means some tracks arrived and others did not. Such an album is `Owned` — it is on the server and it plays — with the missing tracks marked individually rather than hidden. See "Partial content is a normal state".
 
 ### Track identity is not stable
 
@@ -342,7 +403,7 @@ All library browsing reads the local metadata mirror, so it works identically on
 | Screen | Source | Ordering |
 | --- | --- | --- |
 | Artists | `getArtists` | Alphabetical, with index jump |
-| Artist detail | `getArtist` plus `GET /api/v1/artists/{mbid}/releases` | Owned albums first, then un-owned |
+| Artist detail | `getArtist` plus `GET /api/v1/artists/{mbid}/releases` | Albums the server has first, then not-retrieved |
 | Album detail | `getAlbum` | Disc, then track number |
 | Recently added | `getAlbumList2?type=newest` | Newest first |
 | Most played | `getAlbumList2?type=frequent` | Server-computed |
@@ -352,7 +413,7 @@ All library browsing reads the local metadata mirror, so it works identically on
 
 `getAlbumList2` accepts `random`, `newest`, `frequent`, `recent`, `starred`, `alphabeticalByName`, `alphabeticalByArtist`, `byYear` and `byGenre` on this server. It **rejects `highest`**, for the same reason `setRating` is a no-op: there is no rating data to sort on. Do not offer a "Top rated" shelf.
 
-Artist detail is where the two lanes meet visibly. It shows owned albums from the mirror and the artist's full discography from `GET /api/v1/artists/{mbid}/releases`, with everything un-owned carrying a request action.
+Artist detail is where the two lanes meet visibly. It shows the albums the server has from the mirror and the artist's full discography from `GET /api/v1/artists/{mbid}/releases`, with everything not retrieved carrying a **Pull**.
 
 ### Playlists
 
@@ -362,7 +423,7 @@ Playlists are read and written through Subsonic: `getPlaylists`, `getPlaylist`, 
 
 ## Request and acquire
 
-Requesting is one tap on any un-owned album, and the app then tracks the album until it is playable. The user never needs to understand slskd, Usenet or indexers.
+Requesting is one tap on any not-retrieved album, and the app then tracks the album until it is playable. The user never needs to understand slskd, Usenet or indexers.
 
 ### Placing a request
 
@@ -530,7 +591,7 @@ The whole UI works with no network. Metadata is fully mirrored, so browsing, sea
 
 **Downloads were not retained, and now are.** The streaming write path and the download write path shared one partial file and disagreed about it: a stream deletes it on open because a stream starts at byte zero, and a download keeps it because those bytes are the `Range` resume point. Nothing recorded that a download held it, and `NeedlerAudioDataSource.openWriteThrough` abandons its handle — deleting that file — on every track change and every seek. So playing an album while it pulled destroyed the download in flight, and the short commit that followed deleted what was left. Streams have their own `.streaming` partial now, a short commit no longer discards its own bytes, and a row claiming a file is checked against the file existing.
 
-**That fix was described here as "verified by CI; not yet exercised on a device", and the device then disagreed.** The download tier worked — `Downloaded 125 MB` — and the listening tier read `Cached while listening 0 B` after tracks had played to completion. Two further defects, both on the streaming write path and both independent of the first:
+**That fix was described here as "verified by CI; not yet exercised on a device", and the device then disagreed.** The Device tier worked — `Downloaded 125 MB`, as the screen read it then — and the Temporary tier read `0 B` after tracks had played to completion. Two further defects, both on the streaming write path and both independent of the first:
 
 - **The write was held to the mirror's remembered size rather than the response's `Content-Length`.** The mirror's figure is a description of the file at the last sync; the response's is a measurement of the bytes arriving now. DroppedNeedle replaces files in place on a quality upgrade, so between the upgrade and the next sync the two legitimately disagree — in the observed case by eleven bytes. The completeness check then read a whole body as truncated and discarded it, and because the file name derives from the track key, the same disagreement recurred on every single play. The transfer's own view of the length now wins, with the mirror as the fallback for a server that declares none; the download path had already reached that conclusion and this is the streaming half being held to the same rule.
 - **`WriteThroughSink.finish` required end-of-input *on top of* a matching byte count.** Media3 closes a `DataSource` when its load ends, and a load can take every byte without the reader asking once more and being told there are none left — a track's final block landing exactly on the end of the body, or a load cancelled a moment after the last read. Demanding both discarded those writes. A matching byte count is a measurement and settles the question on its own; end-of-input is the weaker evidence and is used only when nothing declared a length. A short body is still refused, which is the rule the sink exists for. The download path never had the extra requirement.
@@ -545,7 +606,7 @@ The reason it took a five-hour source trace to find an eleven-byte disagreement 
 | --- | --- | --- |
 | Metadata mirror | Every artist, album, track, playlist, favourite | Never; refreshed by sync |
 | Artwork cache | Album and artist art at display sizes | LRU, separate small budget |
-| Audio | Downloaded albums and recently played tracks | Downloaded never; played by LRU against a device free-space floor |
+| Audio | Albums on the device, and recently played tracks | The Device tier never; the Temporary tier by LRU against a device free-space floor |
 
 One audio store serves both pinned and cached tracks, with a pin flag deciding eviction. Storing pinned downloads twice would double disk use for no benefit.
 
@@ -557,27 +618,27 @@ The two tiers are bounded by different things, and that difference is the whole 
 
 | Tier | Bound | Evicted |
 | --- | --- | --- |
-| Downloaded | None | Never automatically. Only the user removes an album |
-| Cached while listening | Device free space | LRU by last played, until the device is back above its floor |
+| Device | None | Never automatically. Only the user removes an album |
+| Temporary | Device free space | LRU by last played, until the device is back above its floor |
 
 1. Audio lives in app-private internal storage. No permissions, and it is removed on uninstall.
-2. **Downloaded albums have no limit at all.** The user asked for them, so nothing evicts one — not when the device is nearly full, not when another download is in flight, never. The eviction candidate query filters downloaded rows out entirely, so no code path can even construct a plan that names one as a victim.
-3. **The listening cache is bounded by device free space**, never by a setting. Bytes are retained only while retaining them leaves at least the floor free. The floor is the larger of 2 GB and 2% of the volume's total size: 2 GB is about one system update plus working room and is the right answer on a 32 GB phone, but it is noise on a 1 TB one, where 20 GB of headroom is the honest equivalent. It scales with the device and is deliberately not a preference — a floor the user can lower is a floor that has stopped protecting them. An unmeasurable volume size falls back to the 2 GB minimum, never to zero.
+2. **The Device tier has no limit at all.** The user asked for those albums, so nothing evicts one — not when the device is nearly full, not when another download is in flight, never. The eviction candidate query filters pinned rows out entirely, so no code path can even construct a plan that names one as a victim.
+3. **The Temporary tier is bounded by device free space**, never by a setting. Bytes are retained only while retaining them leaves at least the floor free. The floor is the larger of 2 GB and 2% of the volume's total size: 2 GB is about one system update plus working room and is the right answer on a 32 GB phone, but it is noise on a 1 TB one, where 20 GB of headroom is the honest equivalent. It scales with the device and is deliberately not a preference — a floor the user can lower is a floor that has stopped protecting them. An unmeasurable volume size falls back to the 2 GB minimum, never to zero.
 4. Free space is read with `StatFs` on the volume the audio directory actually sits on, not on "the device" — adopted storage and multi-user devices can put app-private storage somewhere other than the data partition — and it is read fresh every time, because a stale figure is precisely how a cache overshoots. A reading that fails **suspends the policy** rather than guessing: guessing low deletes a healthy device's music, and guessing high fills the device.
-5. When the floor cannot be met even with the whole listening tier gone, the incoming bytes are **skipped, not forced in**, and nothing extra is evicted for them. The track streams and plays normally; it is simply not kept. Evicting further would cost the user recently played music *and* still leave the write unable to fit.
-6. A device below the floor produces a warning, not an eviction of downloads. Downloads can legitimately fill a phone, and the correct response is to say so and offer to remove albums — never to delete something the user chose to keep.
-7. "Keep pulled albums on device" auto-downloads any album this device successfully pulled, so newly acquired music is already offline next time.
+5. When the floor cannot be met even with the whole Temporary tier gone, the incoming bytes are **skipped, not forced in**, and nothing extra is evicted for them. The track streams and plays normally; it is simply not kept. Evicting further would cost the user recently played music *and* still leave the write unable to fit.
+6. A device below the floor produces a warning, not an eviction of the Device tier. The Device tier can legitimately fill a phone, and the correct response is to say so and offer to remove albums — never to delete something the user chose to keep.
+7. "Keep pulled albums on the device" auto-downloads any album this device successfully pulled, so newly acquired music is already offline next time.
 
 Screen 12's Storage section therefore shows:
 
-- **Usage split into Downloaded and Cached while listening**, with artwork on its own line and the device's free space beside them. Artwork is reported separately because it has its own small LRU and is usually tiny; a user hunting for gigabytes should not spend a tap on it.
-- **Downloaded albums listed by size, largest first**, each removable on its own. This replaces the budget as the way space is reclaimed, and it is the only view that can answer "what is actually taking up the room".
-- **Clear cached music**, which removes the listening tier alone. Safe behind a single tap, because those bytes are re-fetchable and were never explicitly asked for.
+- **Usage split into Device and Temporary**, with artwork on its own line and the device's free space beside them. Artwork is reported separately because it has its own small LRU and is usually tiny; a user hunting for gigabytes should not spend a tap on it.
+- **Albums on the device listed by size, largest first**, each removable on its own. This replaces the budget as the way space is reclaimed, and it is the only view that can answer "what is actually taking up the room".
+- **Clear temporary music**, which removes the Temporary tier alone. Safe behind a single tap, because those bytes are re-fetchable and were never explicitly asked for.
 - **Remove all from device**, which clears both audio tiers and the artwork cache but never the metadata mirror — removing the mirror would leave the app unable to browse. It clears the download records too, or the downloader would immediately fetch everything again.
 
 A size shown against an album is the bytes actually on disk, not what the server says the album weighs. A part-downloaded album, or one partly evicted as stale, must show what removing it would really free.
 
-**Removing a download deletes the bytes there and then**, and reports how many were freed. It must not merely demote the album into the listening tier to be evicted later: with no budget left in the product, removal is the user's only lever on a full device, and a "remove" that leaves the usage figure unchanged is the one thing that would make this whole screen untrustworthy. The delete happens in a transaction that returns the file paths for the caller to unlink, since files cannot be removed inside a database transaction.
+**Removing from the device deletes the bytes there and then**, and reports how many were freed. It must not merely demote the album into the Temporary tier to be evicted later: with no budget left in the product, removal is the user's only lever on a full device, and a "remove" that leaves the usage figure unchanged is the one thing that would make this whole screen untrustworthy. The delete happens in a transaction that returns the file paths for the caller to unlink, since files cannot be removed inside a database transaction.
 
 Downloads use per-track `Range` GETs against `download?id=`, which resume after interruption. Do not use `GET /api/v1/download/local/album/{id}`: it zips server-side, cannot resume, gives no per-track progress, and makes the server build an archive it then throws away.
 
@@ -585,15 +646,44 @@ Downloads use per-track `Range` GETs against `download?id=`, which resume after 
 
 Two half-finished states are common enough to be requirements rather than edge cases, and they are handled in opposite ways.
 
-**A part-delivered pull.** The server acquired some of an album's tracks and not others. The album reads as **in library** and plays the tracks that arrived; the missing ones are listed in their right positions, greyed, each with a retry. There is nothing to stream for them — those tracks exist nowhere, not on the server and not on any device — so there is no fallback to offer, and a list that quietly omitted them would misrepresent what the user owns.
+**A part-delivered pull.** The server acquired some of an album's tracks and not others. The album reads as **server** and plays the tracks that arrived; the missing ones are listed in their right positions, greyed, each with a retry. There is nothing to stream for them — those tracks exist nowhere, not on the server and not on any device — so there is no fallback to offer, and a list that quietly omitted them would misrepresent what the user owns.
 
-**A part-downloaded pin.** The album is complete on the server and partly on this device. Cached tracks play from disk, the rest stream, and the outstanding downloads continue in the background. The user should not be able to tell which is which beyond the on-device marks, and a download still in flight never blocks playback of the very track it is fetching.
+**A part-downloaded pin.** The album is complete on the server and partly on this device. Tracks on the device play from disk, the rest stream, and the outstanding downloads continue in the background. The user should not be able to tell which is which beyond the per-track marks, and a download still in flight never blocks playback of the very track it is fetching.
+
+### The download in flight is a badge, not a banner
+
+**The album screen drew a full-width "Downloading to this device" banner, and a device audit found two faults with it.** It was distracting — a long-running background operation taking the width of the screen it is happening on, under the artwork of a record that was already playing — and it did not go away when the download finished. The banner is deleted, and the progress moves onto the badge of the album that is changing.
+
+**There are two reasons it never went away, and only one of them is the banner's own.**
+
+The first is that the banner drew *resting* states in the shape of an operation. A pin that stops at `partial` — a part-delivered record, or a download that lost a track permanently — is a true and permanent statement, and `AlbumDownloader` is right to refuse `complete` for it: `complete` is what draws the check that says this record is whole on this device, and such a record is not whole anywhere. But rendered as a full-width line under the artwork, a permanent truth is indistinguishable from a stuck operation, and the user reasonably read it as one.
+
+The second is a genuine un-exitable state, and it is **not** fixed by moving to a badge. A retryable transport failure leaves the pin row at `downloading` for `WorkManager` to retry with backoff, and the download job is enqueued `KEEP`. Nothing re-enqueues it when the app next starts. So a row whose job the system dropped — cancelled, or retried to exhaustion — stays `downloading` with nothing advancing it, and that is the same shape as the updater's permanent "Installing" bar: the only thing that could clear the state is the event that can no longer happen. `PinRepository.retryPinnedDownload` exists and is a manual action. **The missing piece is a resume sweep at start-up: every pin row at `downloading` or `queued` re-enqueued, which `KEEP` makes idempotent for the jobs that do still exist.** Until that lands, the badge reduces the symptom from a banner to a stale percentage; it does not remove it, and this paragraph says so rather than implying a badge fixed something it cannot reach.
+
+**A badge cannot repeat the fault, and that is the main argument for it over a better banner.** It is derived from the pin row on every emission rather than raised as an event, so there is nothing to dismiss and nothing holding state of its own. Every ending clears it by the same route — the row changing:
+
+| Ending | Row | Badge becomes |
+| --- | --- | --- |
+| Every fetchable track landed | `complete` | **Device** |
+| Stopped by the user | pin deleted, bytes kept or dropped per the action | **Server**, or **Device** if any track remains |
+| Transport failure, nothing landed | `failed` | **Server**, with a retry |
+| Transport failure, some landed | `partial` | **Device** |
+| App backgrounded or killed mid-download | unchanged; the `WorkManager` job resumes | whatever the row says, recomputed on the next frame |
+| Every fetchable track landed, but the record is missing one on the server | `partial` | **Device**, with no percentage |
+
+Backgrounding is the case a banner handles worst and a badge does not have to handle at all: the download is a `WorkManager` job and was never tied to the screen, so there is no in-memory indicator to survive. The one case that still sticks is the lost job above, and the honest statement is that the badge does not fix it — the resume sweep does.
+
+**The percentage is a summary of a per-track reality and must not read as "unusable until complete".** The album plays throughout, so Play stays offered beside the badge and the spoken label says so in as many words: "Pulling to device, 62 percent, playing now". A progress indicator that implies waiting would contradict the paragraph above it.
+
+**Stopping is offered, and it is not Remove from device.** `Acquiring` has offered a Cancel since the first draft, and there was no argument for the local download being the one transition the user could start and not stop. The two are different actions with different outcomes: stopping leaves what has landed as a part-downloaded pin, which plays, while removing deletes the bytes and reports what it freed. The album offers whichever one can still apply.
+
+**A hold is not progress, so it gets its own word.** A download held because "Download to device on Wi-Fi only" is on and the connection is metered reads **Waiting for Wi-Fi**, in the secondary colour rather than either state's hue: nothing is moving and the record has not gone anywhere, so a badge claiming the device's colour would be reporting an intention as a location. The reason has to be sayable somewhere, because it is the one thing the user can act on.
 
 ### The Wi-Fi-only setting is mislabelled
 
 Screen 12 lists "Pull on Wi-Fi only" under Pulling. A pull costs the phone nothing — the server does the downloading over its own connection, and the phone sends one small request.
 
-What genuinely consumes mobile data is **Pull local**, downloading audio to the device. The setting moves to Storage and reads "Download to device on Wi-Fi only", defaulting to on. Leaving it under Pulling would teach users that requesting music costs them data, which is false.
+What genuinely consumes mobile data is **Pull to device**, fetching audio onto the device. The setting moves to Storage and reads "Download to device on Wi-Fi only", defaulting to on. Leaving it under Pulling would teach users that requesting music costs them data, which is false.
 
 This correction is confirmed and settled rather than proposed: the settings store carries it as a download-to-device preference, and the design pack's placement is superseded.
 
@@ -773,7 +863,7 @@ Widgets read through the domain repositories and the `PlaybackController`, never
 
 ### Android Auto
 
-The browse tree mirrors the app: Library with albums, artists and songs; Recently added; Playlists; Favourites; On device. Voice search maps to the same unified search, restricted to owned music, since pulling while driving makes no sense.
+The browse tree mirrors the app: Library with albums, artists and songs; Recently added; Playlists; Favourites; Device. Voice search maps to the same unified search, restricted to owned music, since pulling while driving makes no sense.
 
 Auto needs `MediaLibraryService` browse and search from the start. Retrofitting it later means restructuring playback, which is why it belongs in v1 even though it is not drawn.
 
@@ -926,7 +1016,7 @@ than guess.
 
 **Clearing the database returns file paths rather than deleting files.** File deletion cannot happen inside a Room transaction, so the clear operations — server changed, remove everything, clear the listening cache — collect the paths of the rows they are about to drop, *before* dropping them, since afterwards there is no record of what was on disk, and return them for the caller to unlink. A caller that ignores the return value leaves orphaned gigabytes behind.
 
-**The metadata mirror is pruned.** Catalogue search results land in `album` as un-owned rows, and a long session of browsing MusicBrainz would grow the mirror without bound. A prune drops un-owned rows that nothing references and that have not been touched recently; owned, pinned, pulled and starred rows are spared, so nothing the user has expressed any interest in is ever collected.
+**The metadata mirror is pruned.** Catalogue search results land in `album` as not-retrieved rows, and a long session of browsing MusicBrainz would grow the mirror without bound. A prune drops not-retrieved rows that nothing references and that have not been touched recently; owned, pinned, pulled and starred rows are spared, so nothing the user has expressed any interest in is ever collected.
 
 ### Secrets and migrations
 
@@ -967,6 +1057,17 @@ Contrast on the specified palette has been measured, and it produced one decisio
 **The muted grey is kept as drawn.** `#6f7a68` measures 4.21:1 on the canvas, 3.82:1 on surface and 3.42:1 on raised surface, so it fails the 4.5:1 AA threshold for normal text everywhere the pack uses it — placeholders, timecodes, disabled text, inactive nav items. A lighter same-hue alternative was identified and costed: `#828f7a`, which measures 5.56:1 on the canvas and clears AA on every background in use. The drawn value is nevertheless kept. This is a recorded product decision, not an outstanding risk, and the alternative is written down here so that reversing the decision later is a one-line change rather than a re-investigation.
 
 **A destructive colour was added.** The pack draws none, which meant "Remove all from device" rendered in the same accent blue as "Connect" and "Play" — permanent data loss styled exactly like the primary action. `#e8908a` fills the gap: a pale, desaturated red in the same family as the pack's other two signal colours, rather than a saturated warning red that would be louder than anything else in the design. It measures 7.93:1 on the canvas, 7.21:1 on surface and 6.44:1 on raised surface.
+
+**The two state hues are measured, and hue is deliberately not the signal.** "Vocabulary" gives *server* the accent `#aed5f2` and *device* the positive `#bbdb9b`, and both clear AA comfortably on all three backgrounds a badge or a quality tag is ever drawn on:
+
+| | Canvas `#0d120a` | Surface `#161d12` | Surface raised `#1f271b` |
+| --- | --- | --- | --- |
+| Accent `#aed5f2` — server | 12.27:1 | 11.16:1 | 9.97:1 |
+| Positive `#bbdb9b` — device | 12.38:1 | 11.26:1 | 10.06:1 |
+
+Against each other they measure **1.01:1**. That is not a defect, it is what a complementary pair at one lightness *is*, and it is why they look deliberate together — but it also means they are very nearly one swatch to a red-green colour-blind reader, and the pair is 160 degrees apart in hue with nothing else to tell them by. So the hue is never the signal: each state's **word** is drawn wherever its hue is, and spoken wherever it is drawn. The hue only makes the distinction quicker for the readers who can see it, which is the right job for colour and the only one it is given here. Replacing one of the two with a lighter or darker value to open the gap was the alternative; rejected because it would have meant a tenth palette token and because the words already carry the information, so the gap buys nothing a reader needs.
+
+The same reasoning is what moved emphasis off colour in the quality tag pair. Which of `Server:` and `Device:` is in force is carried by a hairline chip and the label's weight, at one type size — WCAG 1.4.1, colour not the only means — and the previous arrangement failed twice over: it used hue as the only channel *and* drew the dormant tag in `#6f7a68`, which measures 3.82:1 on surface, on a tag whose whole purpose is to be read. The dormant tag now keeps its state's hue, so that half of the pair went from 3.82:1 to above 9.9:1 as a side effect of fixing the first problem.
 
 **Non-text contrast is open.** WCAG 1.4.11 asks 3:1 of user-interface components and their boundaries. The hairline, `rgba(242,245,238,0.08)`, measures **1.20:1** against the canvas, so control boundaries, dividers, input outlines and unselected chip borders are effectively invisible to anyone not already looking for them. This touches the shape of the design rather than a single token — the hairline is what separates almost every surface in the pack from the one behind it — so it is carried as an open question rather than quietly patched.
 
@@ -1019,7 +1120,7 @@ Ten things in the server, and eight in the design pack, constrain what Needler c
 | `subsonic_enabled` defaults off, admin-only | A non-admin cannot finish onboarding | Detect it and name the exact setting an admin must turn on |
 | Transcoding capped at 1 per user, 2 global | A transcode rung on mobile data collides with a second device or a Cast session | Default to original bytes; cap every rung against the source; fall back on `429` |
 | Direct streams capped at 8 per user, 32 global | Downloads competing with playback can hit the ceiling | Serialise downloads; keep one slot free for playback |
-| Library download is admin-gated | Pull local may be unavailable entirely | Check `download/access` and hide the affordance |
+| Library download is admin-gated | Pull to device may be unavailable entirely | Check `download/access` and hide the affordance |
 | Track `file_id` changes on quality upgrade | Cached audio silently goes stale | MBID-based cache keys plus a staleness check on sync |
 | Companion bearer expires hard at 30 days | Search and pulls stop working, with no silent renewal | Degrade to player-only; warn from day 25 |
 | Requests from role `user` need approval | A pull may sit waiting with no visible progress | Render the server's returned status; show Waiting |
@@ -1039,6 +1140,10 @@ Ten things in the server, and eight in the design pack, constrain what Needler c
 | 05 | "Dropped Needle picks the best Soulseek source" | Source-aware copy; the server also supports Usenet |
 | 12 | "Device storage limit" with GB presets | **Dropped.** There is no user-facing limit — see "Storage, and why there is no budget" |
 | 12 | "Remove all from device" is drawn in the accent blue | Added a destructive colour, `#e8908a`, so data loss is not styled as the primary action |
+| 03, 10 | `Pulling` is drawn in the positive green, which is also the on-device colour | **Settled.** A transition takes the hue of where it is going, so `Pulling` is accent and the new `Pulling to device` is positive — see "Album states" |
+| 03, 13 | `In library` and `On device` are told apart by words alone, both in a text colour | **Settled.** Each takes its state's own hue, permanently — see "Vocabulary" |
+| 07, 09 | The quality tag pair gives the emphasised colour to whichever tag applies | **Settled.** Hue names the source and never moves; the chip and the label's weight carry "in force" |
+| 03 | A full-width "Downloading to this device" banner under the artwork | **Dropped.** Progress is on the badge of the album that is changing — see "The download in flight is a badge, not a banner" |
 
 "Prefer FLAC" is the one worth explaining. The request body carries no quality field: `POST /api/v1/requests/new` accepts only the MBIDs, title hints and the two artist-monitoring flags. Quality is a server-side policy under `/api/v1/download-clients/policy`, which is admin-only to change.
 
@@ -1124,7 +1229,7 @@ Recorded so the reasoning is not re-litigated. Each is now specified in the sect
 
 | Question | Answer | Section |
 | --- | --- | --- |
-| What happens to a part-delivered album? | It reads as in library, plays what arrived, and greys the rest with a retry | Partial content is a normal state |
+| What happens to a part-delivered album? | It reads as **server**, plays what arrived, and greys the rest with a retry | Partial content is a normal state |
 | Does a revoked app-password force re-onboarding? | No. With a live bearer a replacement is minted silently; only two dead credentials re-onboard | Expiry, and why playback survives it |
 | What is the storage budget, and its default? | There is none. Downloads are unlimited; the listening cache is bounded by device free space | Storage, and why there is no budget |
 | Should the muted grey be lightened? | No. `#6f7a68` is kept as drawn, with the alternative documented | Accessibility |

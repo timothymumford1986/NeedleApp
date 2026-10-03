@@ -23,6 +23,16 @@ import app.needler.core.domain.model.ReleaseGroupMbid
  * are callbacks, because both are navigation and navigation is the host's
  * business.
  *
+ * ## The lanes need no route registering
+ *
+ * Pulls, History and Wanted are tabs **inside** this one destination — see
+ * [PullsLane] — so `app/src/main/kotlin/app/needler/ui/navigation` is untouched
+ * and this composable's contract with `:app` is unchanged but for nothing. A
+ * host that was calling `PullsRoute(widthSizeClass, onOpenAlbum)` before still
+ * is. Selecting a lane, refreshing one and paging history are all ViewModel
+ * methods, because all three are repository calls whose result the screen has to
+ * render; none of them leaves this destination.
+ *
  * ## Why playback is a callback rather than a `PlaybackController`
  *
  * `:feature:library` injects `Optional<PlaybackController>` and declares a
@@ -57,6 +67,10 @@ fun PullsRoute(
         onCancel = viewModel::onCancel,
         onRetry = viewModel::onRetry,
         onDismissNotice = viewModel::onDismissNotice,
+        onSelectLane = viewModel::onSelectLane,
+        onRefreshLane = viewModel::onRefreshLane,
+        onLoadMoreHistory = viewModel::onLoadMoreHistory,
+        onRetryRequest = viewModel::onRetryRequest,
         modifier = modifier,
     )
 }

@@ -10,6 +10,7 @@ import app.needler.core.domain.model.CastAvailability
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OutputTarget
 import app.needler.core.domain.model.SleepTimer
+import app.needler.core.domain.model.StreamFormat
 import app.needler.feature.player.fake.PlayerFixtures
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -152,6 +153,67 @@ class PlayerFormatTest {
         assertEquals("MP3", PlayerFormat.formatBadge(AudioQuality(AudioFormat.MP3, null)))
         assertNull(PlayerFormat.formatBadge(AudioQuality.Unknown))
         assertNull(PlayerFormat.formatBadge(null))
+    }
+
+    // ---- the quality tag pair -----------------------------------------------
+
+    /**
+     * The two spoken tags, which are the whole of what a screen-reader user gets from a pair whose
+     * on-screen distinction is a chip border and a font weight.
+     *
+     * Both sentences now open with the state's own word, so the three words learned from the badges
+     * are the three words heard here. REQUIREMENTS.md "Vocabulary".
+     */
+    @Test
+    fun `each spoken quality tag opens with its state's word`() {
+        assertEquals(
+            "Device, FLAC, playing from here",
+            PlayerFormat.spokenPulledBadge(AudioQuality(AudioFormat.FLAC, 1_411)),
+        )
+        assertEquals(
+            "Server, streaming MP3 320, original quality",
+            PlayerFormat.spokenServerBadge(
+                format = StreamFormat.Original,
+                source = AudioQuality(AudioFormat.MP3, 320),
+                inUse = true,
+            ),
+        )
+    }
+
+    /**
+     * The chip says "this one applies" and says nothing at all to TalkBack, so the sentence has to.
+     * This is the half of the emphasis that colour is no longer allowed to carry.
+     */
+    @Test
+    fun `the dormant server tag says why it is not in use`() {
+        assertEquals(
+            "Server, MP3 320, not in use while this is on the device",
+            PlayerFormat.spokenServerBadge(
+                format = StreamFormat.Original,
+                source = AudioQuality(AudioFormat.MP3, 320),
+                inUse = false,
+            ),
+        )
+    }
+
+    /** A transcode is the one case where the server's rate is not the library's, and it is said. */
+    @Test
+    fun `a transcoded stream says it is re-encoded and not kept`() {
+        assertEquals(
+            "Server, streaming Opus 128, re-encoded and not kept on this device",
+            PlayerFormat.spokenServerBadge(
+                format = StreamFormat.Transcoded(codec = "opus", maxBitrateKbps = 128),
+                source = AudioQuality(AudioFormat.FLAC, 1_411),
+                inUse = true,
+            ),
+        )
+    }
+
+    /** No tag at all rather than an empty one, for a track the server has said nothing about. */
+    @Test
+    fun `a tag with nothing to report is absent`() {
+        assertNull(PlayerFormat.spokenPulledBadge(null))
+        assertNull(PlayerFormat.spokenServerBadge(format = null, source = null, inUse = true))
     }
 
     @Test

@@ -142,7 +142,7 @@ enum class LibraryTab(val label: String) {
  *
  * ## One control, two vocabularies
  *
- * The same five options drive the Albums tab and the Songs tab, and three of
+ * The same four options drive the Albums tab and the Songs tab, and three of
  * them mean measurably different things on each: Title is the record's title in
  * one list and the song's in the other, Artist groups records in one and
  * gathers an artist's whole shelf in the other, Starred reads two different
@@ -153,12 +153,38 @@ enum class LibraryTab(val label: String) {
  * record in track order — a bug that only exists if a songs ordering is allowed
  * to be an album ordering wearing a different hat.
  *
- * `Played` is the one option neither vocabulary can serve exactly: play counts
- * are computed server-side and the mirror carries no column that reproduces
- * them, so both `AlbumListKind.FREQUENT` and `TrackListKind.FREQUENT` fall back
- * to recently-added in `:core:data`. The control still offers it, because the
- * design pack draws it and the fallback is a defensible order rather than an
- * empty list; `LibraryRepository.observeTracks` documents exactly what happens.
+ * ## Why there is no "Played"
+ *
+ * There was one, and it lied. `Played` mapped to `AlbumListKind.FREQUENT` and
+ * `TrackListKind.FREQUENT`, both of which fall through to recently-added in
+ * `:core:data` — REQUIREMENTS.md, on the Songs tab: "'Played' cannot be
+ * honoured, because play counts are computed server-side and the mirror holds no
+ * column reproducing them, so it falls back to recently-added exactly as the
+ * album list does." So choosing it produced the order the control had just been
+ * showing, under a control that then read "Played". The app told the user it had
+ * sorted by something it had not sorted by.
+ *
+ * That is the failure this codebase refuses elsewhere on principle.
+ * `FavouriteButton` explains why star ratings are not offered: `setRating`
+ * "would report success and silently lose the user's input, which is the worst
+ * failure a control can have". A sort that reports an order it did not apply is
+ * the same fault in a different control, and REQUIREMENTS.md "Playlists"
+ * resolves that one by removal — "Needler must not offer star ratings" — not by
+ * offering a star that does nothing.
+ *
+ * It was removed rather than disabled or relabelled. Nothing is lost: the order
+ * it produced is `Recent`, which is still in the menu and is still the default,
+ * so the only thing the user gives up is a word that was not true. A disabled
+ * row would be permanent dead space in a four-item menu, because no column that
+ * could enable it is coming from a server-side figure; a row reading "Played —
+ * unavailable, showing recent" would be honest and would also be the longest
+ * label in a menu opened from a one-word pill. The earlier note here claimed
+ * "the design pack draws it" as the reason to keep it — the pack draws no sort
+ * menu at all, on any of its 21 screens, and no screen in it contains the word.
+ *
+ * `AlbumListKind.FREQUENT` and `TrackListKind.FREQUENT` stay in `:core:domain`:
+ * they are the server's vocabulary, and `getAlbumList2` accepts `frequent`. What
+ * changed is that no control offers them.
  *
  * @property label what the control reads, which the pack keeps to one word.
  * @property spokenLabel what TalkBack announces. The pack's own `aria-label` is
@@ -188,7 +214,6 @@ enum class LibrarySort(
         AlbumListKind.ALPHABETICAL_BY_ARTIST,
         TrackListKind.ALPHABETICAL_BY_ARTIST,
     ),
-    PLAYED("Played", "most played", AlbumListKind.FREQUENT, TrackListKind.FREQUENT),
     FAVOURITES("Starred", "recently starred", AlbumListKind.STARRED, TrackListKind.STARRED),
 }
 

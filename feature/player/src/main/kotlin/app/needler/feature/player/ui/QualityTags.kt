@@ -15,15 +15,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import app.needler.core.design.component.NeedlerAlbumSource
 import app.needler.core.design.component.NeedlerPillButton
 import app.needler.core.design.component.NeedlerQualityTag
 import app.needler.core.design.component.NeedlerQualityTagEmphasis
+import app.needler.core.design.component.tagLabel
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.StreamRung
 import app.needler.feature.player.PlayerUiState
 
 /**
- * The quality tag pair under the title: `Server: MP3 192` beside `Pulled: FLAC`.
+ * The quality tag pair under the title: `Server: MP3 192` beside `Device: FLAC`.
  *
  * ## Why two tags replaced one badge
  *
@@ -35,9 +37,15 @@ import app.needler.feature.player.PlayerUiState
  * record whose server copy has since been upgraded.
  *
  * **Whichever is in force reads as in force.** A local copy always wins - `ResolvePlayableSourceUseCase`
- * checks local bytes before it makes any streaming decision - so when a track is pulled, `Pulled:` is
- * the active tag and `Server:` is dimmed. That is not decoration: drawing them as equals implies the
- * server rate is what is playing, which it is not.
+ * checks local bytes before it makes any streaming decision - so when a track is on the device,
+ * `Device:` is the active tag and `Server:` is dormant. That is not decoration: drawing them as equals
+ * implies the server rate is what is playing, which it is not.
+ *
+ * **The hue does not move with it.** `Server:` is the accent blue and `Device:` the positive green
+ * whichever one applies, because REQUIREMENTS.md "Vocabulary" makes hue a property of the state. The
+ * pair used to hand the green to whichever tag was active, so pulling an album moved the styling from
+ * one tag to the other and the colour meant "this one applies" rather than "this is the server". In
+ * force is carried by the chip and the value's weight instead; see `NeedlerQualityTagEmphasis`.
  *
  * ## What each tap does, and what it deliberately does not
  *
@@ -46,8 +54,15 @@ import app.needler.feature.player.PlayerUiState
  * spelled out rather than being a second tap on the selected chip: a toggle whose off state is
  * indistinguishable from its on state is how a user ends up unable to get back to the default.
  *
- * Tapping **Pulled** does nothing here, and the tag is not drawn as a control. Downloading is an album
- * action - REQUIREMENTS.md's "Pull local" acquires a record, not a song - and the album screen already
+ * **The rung is a preference, not a transport command.** A tapped rung is written to
+ * `PlaybackSettingsRepository` and read back by `ResolvePlayableSourceUseCase` the next time the
+ * track is *loaded*, which is what the `Server:` tag then shows. It does not re-open the stream
+ * under a listener mid-track, and the ladder now says so in as many words - see
+ * [OVERRIDE_EXPLANATION], and `PlayerViewModel.overridePlayingTrackQuality` for the alternative that
+ * was rejected.
+ *
+ * Tapping **Device** does nothing here, and the tag is not drawn as a control. Downloading is an album
+ * action - REQUIREMENTS.md's **Pull to device** acquires a record, not a song - and the album screen already
  * offers it as a labelled button, where the thing being downloaded is named. A tap target in the
  * player that removed an album's worth of audio without saying which album is not a control worth
  * having.
@@ -67,7 +82,12 @@ internal fun QualityTags(
     // surface can act on, and it must close when the player is dismissed.
     var pickerOpen: Boolean by remember { mutableStateOf(false) }
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    // 6dp between the tags, the ladder and the caveat. The three used to butt straight into one
+    // another - a Column with no arrangement - which is half of why the open ladder read as crowded.
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -77,17 +97,20 @@ internal fun QualityTags(
         ) {
             if (pulledValue != null) {
                 NeedlerQualityTag(
-                    label = PULLED_LABEL,
+                    label = DEVICE_SOURCE.tagLabel(),
                     value = pulledValue,
+                    source = DEVICE_SOURCE,
                     emphasis = NeedlerQualityTagEmphasis.Active,
                     contentDescription = state.pulledTagDescription,
                 )
             }
             if (serverValue != null) {
                 NeedlerQualityTag(
-                    label = SERVER_LABEL,
+                    label = SERVER_SOURCE.tagLabel(),
                     value = serverValue,
-                    // Dimmed while a local copy exists, because the local copy is what plays.
+                    source = SERVER_SOURCE,
+                    // Dormant while a local copy exists, because the local copy is what plays. The
+                    // colour is unchanged by this; only the chip and the weight are.
                     emphasis = if (state.isPulled) {
                         NeedlerQualityTagEmphasis.Dormant
                     } else {
@@ -119,7 +142,12 @@ internal fun QualityTags(
                             select(rung)
                             pickerOpen = false
                         },
-                        contentDescription = "Stream this track at " + rungLabel(rung),
+                        // The caveat is spoken on the seven rungs it is true of and not on
+                        // `Original`, which costs no pixels at all and says it before the tap
+                        // rather than after it. Drawn, it is one line under the ladder - see
+                        // [TRANSCODE_CAVEAT].
+                        contentDescription = "Stream this track at " + rungLabel(rung) +
+                            if (rung.isTranscode) ". " + TRANSCODE_CAVEAT else "",
                     )
                 }
                 val clear: (() -> Unit)? = onClearRung
@@ -135,6 +163,16 @@ internal fun QualityTags(
                     )
                 }
             }
+        }
+        // Last, and outside the ladder, so it survives the ladder folding away on the tap that
+        // caused it. See [TRANSCODE_CAVEAT] for why it is drawn here and not above the pills.
+        if (state.isStreamingTranscoded) {
+            Text(
+                text = TRANSCODE_CAVEAT,
+                style = NeedlerTheme.typography.caption,
+                color = NeedlerTheme.colors.textMuted,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -159,16 +197,48 @@ private fun rungLabel(rung: StreamRung): String = when (rung) {
     StreamRung.MP3_128 -> "MP3 128"
 }
 
-private const val SERVER_LABEL: String = "Server:"
-private const val PULLED_LABEL: String = "Pulled:"
+// The words and the hues come from one place, so a tag cannot be labelled for one state and coloured
+// for another - which is the defect this pair had. REQUIREMENTS.md "Vocabulary".
+private val SERVER_SOURCE: NeedlerAlbumSource = NeedlerAlbumSource.Server
+private val DEVICE_SOURCE: NeedlerAlbumSource = NeedlerAlbumSource.Device
 
 /**
  * What the ladder does, said before it is used rather than discovered afterwards.
  *
- * The two facts a person needs are that the choice sticks to this record wherever they are, and that
- * anything the server re-encodes is not kept for offline - REQUIREMENTS.md "Why transcoded bytes are
- * never cached".
+ * Two facts in eight words: the choice follows this track onto every connection, and it takes effect
+ * from the track's next play rather than mid-stream. The second one is new and it is the honest half
+ * of the device report "hitting any of those buttons doesn't seem to make a difference anyway" - the
+ * override is read, but it is read by `NeedlerAudioDataSource.open`, which is to say when a track is
+ * *loaded*. An item already prepared keeps the stream it was opened with, and
+ * [app.needler.core.domain.playback.PlaybackController] has no command that would re-prepare it. See
+ * `PlayerViewModel.overridePlayingTrackQuality` for why that was left alone rather than fixed by
+ * re-buffering under the listener.
+ *
+ * It used to carry the retention caveat in a second sentence, above all eight rungs, whether or not
+ * any of them was in force. That is [TRANSCODE_CAVEAT] now.
  */
 private const val OVERRIDE_EXPLANATION: String =
-    "Applies to this track on every connection. Anything the server re-encodes is not kept on this " +
-        "device."
+    "This track, every connection, from its next play."
+
+/**
+ * The one fact a listener cannot guess, drawn where it bites.
+ *
+ * REQUIREMENTS.md "Why transcoded bytes are never cached" is the requirement behind it: a transcode's
+ * bytes are played and thrown away, every time, so a rung below the library's own quality never
+ * builds an offline copy. A listener who is not told will wonder why a track they played twice
+ * downloaded twice - the same cliff the Settings screen names beside its own picker - so this is not
+ * padding and was not deleted.
+ *
+ * What changed is where it costs room. It is drawn only while a transcode is actually in force for
+ * this track, which is the only state it is true in: on the default Wi-Fi rung - `Original`,
+ * REQUIREMENTS.md "Streaming" - nothing is drawn at all, and the open ladder is one short line
+ * instead of two sentences. Three placements were rejected. Above the pills, as it was, it is a
+ * paragraph the listener has to read past to reach the control, in the state where it is usually
+ * false. Under each transcoding pill it does not fit: the ladder is a horizontally scrolled row of
+ * eight chips. Inside the ladder it would be invisible exactly when it matters, because choosing a
+ * rung folds the ladder away - which is why this sits outside it and stays on screen afterwards.
+ *
+ * It is also spoken by every transcoding pill's own label, so TalkBack has it before the tap.
+ */
+private const val TRANSCODE_CAVEAT: String =
+    "Re-encoded bytes are not kept on this device."

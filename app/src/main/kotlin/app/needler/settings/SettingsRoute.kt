@@ -52,6 +52,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * @param onOpenLicences opens the licences and full terms, `app.needler.licences.LicencesRoute`.
  *   Register it as `composable("licences")` and pass `navController::navigate`. Null - the default -
  *   removes the link rather than drawing one that does nothing.
+ * @param onOpenDownloads opens the full downloaded-album list, [DownloadsRoute]. Register it as
+ *   `composable("downloads")` and pass `navController::navigate`. Null - the default - does **not**
+ *   remove anything: the list falls back to being drawn inline in the Storage section, which is
+ *   where it used to live. REQUIREMENTS.md "Storage, and why there is no budget" leaves no storage
+ *   limit in the product, so that list is the user's only lever on a full device and a missing route
+ *   may not take it away. See [SettingsCallbacks.onOpenDownloads].
  * @param onSignInAgain re-authenticates an expired companion session, which means returning to
  *   Connect for the account password: Needler never stores it, so there is no silent renewal and
  *   REQUIREMENTS.md requires the user be prompted. Null leaves the day-25 expiry warning as a
@@ -67,6 +73,7 @@ fun SettingsRoute(
     modifier: Modifier = Modifier,
     onOpenDiagnostics: (() -> Unit)? = null,
     onOpenLicences: (() -> Unit)? = null,
+    onOpenDownloads: (() -> Unit)? = null,
     onSignInAgain: (() -> Unit)? = null,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -103,6 +110,7 @@ fun SettingsRoute(
             onConfirmDestructiveAction = viewModel::onConfirmDestructiveAction,
             onOpenDiagnostics = onOpenDiagnostics,
             onOpenLicences = onOpenLicences,
+            onOpenDownloads = onOpenDownloads,
             onSignInAgain = onSignInAgain,
         ),
         widthSizeClass = widthSizeClass,

@@ -15,8 +15,8 @@ import app.needler.wear.store.WearStoredAlbum
  *
  * ## This screen is the "see and change" half of the sync policy
  *
- * The sync policy is stated on [WearPlaybackProtocol.PATH_SYNC_OFFER]: only the phone's **Downloaded**
- * tier is ever offered, the watch's tier is Downloaded too and is never evicted, and the bound is a
+ * The sync policy is stated on [WearPlaybackProtocol.PATH_SYNC_OFFER]: only the phone's **Device**
+ * tier is ever offered, the watch's tier is the Device tier too and is never evicted, and the bound is a
  * free-space floor that refuses rather than evicts. The requirement attached to that policy is that "the
  * watch's bound must be explicit and the user must be able to see and change what is on it", and this is
  * where both halves are met:
@@ -24,7 +24,7 @@ import app.needler.wear.store.WearStoredAlbum
  *  * **Explicit bound.** [freeBytes] and [floorBytes] are on screen, next to what the store is using, so
  *    the number that decides whether an album can be added is visible rather than implied.
  *  * **Change what is on it.** Every row can be added or removed, one album at a time. REQUIREMENTS.md
- *    makes per-album removal the user's only lever on a full phone - "Downloaded albums listed by size,
+ *    makes per-album removal the user's only lever on a full phone - "albums on the device listed by size,
  *    largest first, each removable on its own... it is the only view that can answer what is actually
  *    taking up the room" - and a watch has less room and fewer levers, so it needs the same thing more.
  */
@@ -39,7 +39,7 @@ data class WearOnWatchState(
     val usedBytes: Long,
     /** The room the volume reports now, and the floor it is held to. */
     val space: WearStoreSpace,
-    /** Downloaded albums the phone could not fit in its offer. */
+    /** Albums on the phone's device tier that it could not fit in its offer. */
     val notShown: Int,
 ) {
 

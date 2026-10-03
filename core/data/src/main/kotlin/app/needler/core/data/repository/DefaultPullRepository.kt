@@ -6,6 +6,7 @@ import app.needler.core.data.local.SortKeys
 import app.needler.core.data.local.dao.AlbumDao
 import app.needler.core.data.local.dao.PullDao
 import app.needler.core.data.local.entity.AlbumEntity
+import app.needler.core.data.local.entity.AlbumStateDb
 import app.needler.core.data.local.entity.PullEntity
 import app.needler.core.data.local.entity.PullStatusDb
 import app.needler.core.data.mapper.CatalogueMappers
@@ -753,6 +754,22 @@ public class DefaultPullRepository(
             .map { it.releaseGroupMbid }
         if (vanished.isEmpty()) return
         pullDao.deleteAll(vanished)
+
+        // And the album rows those pulls were the only evidence for. The state the request wrote
+        // outlives the `pull` row - nothing else rewrites it - so without this a task the server has
+        // forgotten leaves an album badged "Waiting" or "Pulling" for ever, with no row behind it to
+        // explain why and no pull for `EntityMappers.albumState` to correct it from. An album in the
+        // library keeps its state: it has audio on the server, whatever became of the task.
+        albumDao.getAlbums(vanished)
+            .filterNot { it.state.isInLibrary }
+            .forEach { row ->
+                albumDao.setState(
+                    releaseGroupMbid = row.releaseGroupMbid,
+                    state = AlbumStateDb.NOT_OWNED,
+                    inLibrary = false,
+                    updatedAt = now,
+                )
+            }
     }
 
     /**
@@ -1026,6 +1043,45 @@ public class DefaultPullRepository(
 
         val writes: List<AlbumEntity> = missing + repaired
         if (writes.isNotEmpty()) albumDao.upsertAll(writes)
+
+        alignAlbumStates(pulls, known, now)
+    }
+
+    /**
+     * Brings `album.state` back into step with the `pull` row the poll has just written.
+     *
+     * The column was only ever written when a request was *placed* - see [applyReceipt] - so it
+     * recorded what the receipt said and then stayed there for ever while the task moved on. On a
+     * device that meant a pull the Pulls screen listed correctly as "Searching" opened on an album
+     * screen still reading "Waiting for an administrator to approve this pull", from a receipt whose
+     * `pending` status an older mapping had read as an approval. `EntityMappers.albumState` now
+     * prefers the pull row wherever one is joined, which fixes the album screen; this fixes the
+     * screens that join no pull at all. The library grid and the artist screen map the `album` row
+     * alone, by design - "a grid needs the badge and not the percentage" - so for them the badge *is*
+     * the column, and a stale column is a stale badge.
+     *
+     * Two states are never written from here, for the reasons `EntityMappers.liveState` gives: an
+     * album already in the library is the sync's and the pin's business, and a finished pull does not
+     * get to promote an album into the library before its tracks are mirrored.
+     */
+    private suspend fun alignAlbumStates(
+        pulls: List<PullEntity>,
+        known: Map<String, AlbumEntity>,
+        now: Long,
+    ) {
+        pulls.forEach { pull ->
+            // A row written as a placeholder moments ago is not in `known`, and is `NOT_OWNED`.
+            val current: AlbumStateDb = known[pull.releaseGroupMbid]?.state ?: AlbumStateDb.NOT_OWNED
+            if (current.isInLibrary) return@forEach
+            val implied: AlbumStateDb = EntityMappers.albumStateFor(pull.status)
+            if (implied.isInLibrary || implied == current) return@forEach
+            albumDao.setState(
+                releaseGroupMbid = pull.releaseGroupMbid,
+                state = implied,
+                inLibrary = false,
+                updatedAt = now,
+            )
+        }
     }
 
     /**

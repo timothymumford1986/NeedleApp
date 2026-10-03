@@ -229,7 +229,54 @@ data class PlayingSectionState(
      * nothing.
      */
     val transcodingAvailable: Boolean = false,
+
+    /**
+     * Whether the server has actually been asked, as opposed to having answered no.
+     *
+     * **This is the field that was missing, and its absence made the whole control disappear.**
+     * `SessionRepository.observeCapabilities` is documented as "the negotiated capability set, or
+     * null before the first negotiation", and `DefaultSessionRepository` holds it in an in-memory
+     * `MutableStateFlow(null)` that only `negotiateCapabilities()` ever fills. Nothing calls that on
+     * launch - the two callers are onboarding and the app-password mint - so after any restart the
+     * capability set is null for the life of the process, [transcodingAvailable] reads false, and
+     * Settings drew the "this server cannot transcode" row on a server that can. Reported from the
+     * device as a Stream quality row that does nothing.
+     *
+     * Collapsing null into false is the mistake [SettingsFormat] names at the top of its own file:
+     * "**Unknown is not zero.**" The fix in this module is to tell the two apart; the fix in
+     * `:core:data` is to persist or re-negotiate the capability set, which is not this module's to
+     * make. See [streamQuality].
+     */
+    val transcodingNegotiated: Boolean = true,
 ) {
+
+    /**
+     * What the Stream quality control can honestly offer right now.
+     *
+     * Three cases, because there are three different facts:
+     *
+     *  * the server **can** transcode, so both rungs mean something;
+     *  * the server has **said it cannot**, which REQUIREMENTS.md rule 3 of "Streaming" says to
+     *    answer by hiding the setting entirely - "a greyed row invites a user to go hunting for the
+     *    thing that would enable it, and on a server with no ffmpeg there is nothing to find";
+     *  * the server **has not been asked**, which used to be treated as the second case and is the
+     *    defect this parameter exists for.
+     *
+     * The unasked case offers the pickers. That is safe, and it is not a guess: a rung is a local
+     * preference and a **ceiling**, resolved per track by `ResolvePlayableSourceUseCase`, so setting
+     * one can never produce a request a server rejects - at worst it has no effect, which is already
+     * true of any rung at or above a record's own quality. Refusing to draw it, by contrast, makes a
+     * finished feature unreachable, which is the worse of the two failures by a wide margin.
+     *
+     * @param serverConfigured whether there is a saved server at all. A fresh install has nothing to
+     *   ask, so it gets the statement rather than a line about a server that does not exist yet.
+     */
+    fun streamQuality(serverConfigured: Boolean): StreamQualityAffordance = when {
+        transcodingAvailable -> StreamQualityAffordance.PICKERS
+        transcodingNegotiated || !serverConfigured -> StreamQualityAffordance.STATEMENT
+        else -> StreamQualityAffordance.PICKERS_UNCONFIRMED
+    }
+
     /** `Off`, `4 s`, `6 s`, `12 s` - the four stops screen 20 offers. */
     val crossfadeLabel: String
         get() = when (crossfade) {
@@ -320,6 +367,36 @@ data class PlayingSectionState(
         } else {
             null
         }
+}
+
+/**
+ * Which of the three Stream quality shapes the Playing section draws.
+ *
+ * An enum rather than two booleans at the call site, because the three cases are not two independent
+ * facts and reading them as such is exactly how the unasked case came to be drawn as the refusal.
+ * See [PlayingSectionState.streamQuality].
+ */
+enum class StreamQualityAffordance {
+
+    /** Both rung pickers, with no caveat. The server advertises transcoding and reports it enabled. */
+    PICKERS,
+
+    /**
+     * Both rung pickers, with one line saying the server has not been asked since Needler started.
+     *
+     * The settings are saved and take effect as soon as the answer arrives, so the line reports the
+     * uncertainty rather than withholding the control over it.
+     */
+    PICKERS_UNCONFIRMED,
+
+    /**
+     * One row reading `Original`, with no chevron and nothing behind it.
+     *
+     * The truth on a server without ffmpeg, where every rung resolves to original bytes - and on a
+     * fresh install, where there is no server to ask. Deliberately not a disabled picker:
+     * REQUIREMENTS.md rule 3 of "Streaming" says to hide the setting rather than grey it out.
+     */
+    STATEMENT,
 }
 
 // ---------------------------------------------------------------------------
@@ -424,10 +501,81 @@ data class StorageSectionState(
                 " to get back above the line."
         }
 
-    /** `12 albums · 4.8 GB`, on the right of the downloaded-albums header. */
+    /**
+     * `12 albums · 4.8 GB`, on the right of the downloaded-albums header.
+     *
+     * Counts and totals **every** downloaded album, not the handful the section draws inline. The
+     * header is the answer to "how much is downloaded and in how many pieces", so truncating the
+     * rows under it must not change the figure above them - a count that agreed with what happened
+     * to be on screen would make the section's own total depend on where the user had scrolled to.
+     */
     val downloadedAlbumsTrailing: String
         get() = SettingsFormat.plural(downloadedAlbums.size.toLong(), "album") +
             " · " + SettingsFormat.bytes(downloadedAlbums.sumOf { it.sizeBytes })
+
+    /**
+     * The albums the Storage section draws in place, which on most devices is all of them.
+     *
+     * The section used to draw an `items()` with no ceiling, which is the defect reported from the
+     * device: "it's just a huge list. It seems like a poor UI choice." The list cannot be dropped -
+     * REQUIREMENTS.md "Storage, and why there is no budget" makes it "the only view that can answer
+     * 'what is actually taking up the room'" - so it is bounded instead, and the overflow goes to
+     * [DownloadsScreen].
+     *
+     * **This is a function on the state rather than a `take` at the call site**, and that is the
+     * whole reason it is here: the Storage section sits below the fold on the design pack's 390x844
+     * phone artboard, so no screenshot of Settings can see it. A rule that cannot be photographed has
+     * to be assertable, and here it is a pure function of a list and a boolean.
+     *
+     * @param destinationRegistered whether the host has registered the Downloaded albums route. False
+     *   draws every album, because there is then nowhere for an overflow to go and a list the user
+     *   cannot finish reading is worse than a long one. See `SettingsCallbacks.onOpenDownloads`.
+     */
+    fun downloadedAlbumsInline(destinationRegistered: Boolean): List<DownloadedAlbum> =
+        if (downloadedAlbumsTruncated(destinationRegistered)) {
+            downloadedAlbums.take(INLINE_DOWNLOADED_ALBUMS)
+        } else {
+            downloadedAlbums
+        }
+
+    /**
+     * Whether anything was left off the Storage section, and therefore whether "See all" is drawn.
+     *
+     * The `+ 1` is not an off-by-one. A device with seven albums draws all seven: putting a single
+     * album behind a tap is the same poor trade as putting fifty in the middle of Settings, in
+     * miniature, and a "See all 7 albums" row that reveals one more row is a row that has to justify
+     * itself and cannot.
+     */
+    fun downloadedAlbumsTruncated(destinationRegistered: Boolean): Boolean =
+        destinationRegistered && downloadedAlbums.size > INLINE_DOWNLOADED_ALBUMS + 1
+
+    /** `See all 14 albums`: the row under the truncated list, counting the whole library. */
+    val seeAllDownloadedAlbumsLabel: String
+        get() = "See all " + SettingsFormat.plural(downloadedAlbums.size.toLong(), "album")
+
+    companion object {
+        /**
+         * How many downloaded albums the Storage section draws before it offers the rest on their
+         * own screen.
+         *
+         * Six, which is a judgement about the screen rather than about the data. A row is at least
+         * `listRowMinHeight` plus its padding, so six of them is around 380dp - about half of the
+         * pack's 390x844 phone artboard, and roughly what the rest of the Storage section already
+         * occupies. Past that the section stops being a part of Settings and becomes the screen,
+         * which is the complaint this number answers.
+         *
+         * Not tuned to any one device, though it is worth recording that the device the defect was
+         * reported from holds five downloaded albums: it sees no truncation and loses no tap. The
+         * threshold is for the library that grows, which is the case an unbounded `items()` had no
+         * answer for.
+         *
+         * Largest first throughout, so the rows that survive truncation are the ones worth removing.
+         * REQUIREMENTS.md "Storage, and why there is no budget" specifies "**Downloaded albums
+         * listed by size, largest first**" precisely because that is the order a person reclaiming
+         * space reads in.
+         */
+        const val INLINE_DOWNLOADED_ALBUMS: Int = 6
+    }
 }
 
 // ---------------------------------------------------------------------------

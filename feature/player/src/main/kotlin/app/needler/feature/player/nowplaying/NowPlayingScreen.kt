@@ -4,10 +4,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -102,8 +107,21 @@ fun NowPlayingScreen(
                 .weight(1f)
                 // Scrolls so that the screen still works at 200% font scale, where the title,
                 // the subtitle and the timecodes together are taller than the space the pack
-                // leaves them. At the default scale nothing scrolls.
+                // leaves them. At the default scale nothing scrolls - until the sleep timer's
+                // choices unfold, which is why [SessionControls] asks to be scrolled to.
                 .verticalScroll(rememberScrollState())
+                // Inside the scroll, so the inset is trailing *content* that can be scrolled
+                // clear rather than a band carved out of the viewport, and so the pack's own
+                // 36dp gap below the chips is preserved on top of it.
+                //
+                // This screen is the one that has to read the inset for itself. Every other
+                // destination sits inside `NeedlerNavigationScaffold`, which pads the bottom
+                // safe area with its own chrome and then calls `consumeWindowInsets` so a
+                // descendant's `safeDrawingPadding()` contributes nothing - Now Playing is a
+                // sibling of Home in the *outer* nav graph, with no scaffold and no bottom bar
+                // under it, so nothing had reserved the navigation bar's height and the last
+                // row of the column was drawn beneath it.
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
                 .padding(start = 32.dp, end = 32.dp, top = 8.dp, bottom = 36.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {

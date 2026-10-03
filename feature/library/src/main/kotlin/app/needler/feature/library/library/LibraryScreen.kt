@@ -4,7 +4,6 @@ package app.needler.feature.library.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,7 +21,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -33,7 +31,6 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
@@ -48,11 +45,11 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -61,7 +58,9 @@ import app.needler.core.design.component.CRATE_LONG_PRESS_LABEL
 import app.needler.core.design.component.NeedlerAlbumGridCell
 import app.needler.core.design.component.NeedlerAlbumRow
 import app.needler.core.design.component.NeedlerChevronDownIcon
+import app.needler.core.design.component.NeedlerChevronRightIcon
 import app.needler.core.design.component.NeedlerCrateControl
+import app.needler.core.design.component.NeedlerDropdownMenu
 import app.needler.core.design.component.NeedlerHairline
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerOnDeviceIcon
@@ -69,6 +68,8 @@ import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerSearchFieldButton
 import app.needler.core.design.component.NeedlerSegmentedTabs
 import app.needler.core.design.component.NeedlerStrokeIcon
+import app.needler.core.design.component.NeedlerToolbarIconPill
+import app.needler.core.design.component.NeedlerToolbarPill
 import app.needler.core.design.component.NeedlerTrackRow
 import app.needler.core.design.component.PathClose
 import app.needler.core.design.component.PathPlay
@@ -131,6 +132,8 @@ fun LibraryScreen(
     onSortSelect: (LibrarySort) -> Unit,
     onViewModeToggle: () -> Unit,
     onSearchClick: () -> Unit,
+    onOpenPlaylists: () -> Unit,
+    onOpenGenres: () -> Unit,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onAlbumPlay: (ReleaseGroupMbid) -> Unit,
     onArtistClick: (ArtistMbid) -> Unit,
@@ -171,6 +174,10 @@ fun LibraryScreen(
                 onTabSelect = onTabSelect,
                 onSortSelect = onSortSelect,
                 onViewModeToggle = onViewModeToggle,
+            )
+            LibraryBrowseRow(
+                onOpenPlaylists = onOpenPlaylists,
+                onOpenGenres = onOpenGenres,
             )
             if (state.offline) OfflineNote()
             // Under the controls rather than over the list: it is the answer to a tap that
@@ -336,7 +343,12 @@ private fun LibraryControls(
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(spacing.step4),
-        verticalAlignment = Alignment.CenterVertically,
+        // Top, not centre. At 100% every control is one 48dp line and the two
+        // agree; at 200% the FlowRow beside this is two lines tall, and
+        // centring would float the toggle in the gap between them, level with
+        // nothing. Top keeps it on the tabs' line, which is the line it belongs
+        // to — the pack puts the three controls side by side.
+        verticalAlignment = Alignment.Top,
     ) {
         // FlowRow rather than Row: at 200% text scale the tabs and the sort
         // control no longer fit across a 390dp phone, and wrapping to a second
@@ -371,11 +383,100 @@ private fun LibraryControls(
 }
 
 /**
+ * Playlists and Genres: the browse screens that are not albums, artists or songs.
+ *
+ * ## Why they are here at all
+ *
+ * They were reachable from nowhere. `NeedlerNavHost` registers `playlists` and
+ * `genres`, and the only navigation into either came from inside those screens,
+ * so four finished screens — Playlists, one playlist, Genres, one genre — could
+ * not be opened by any sequence of taps. Every test exercised the screens
+ * themselves and none asserted that anyone could get to them, which is how that
+ * survived; [LibraryControlsTest] now asserts the entry point instead.
+ *
+ * ## Why not two more segments
+ *
+ * Because they are not peers of Albums, Artists and Songs. REQUIREMENTS.md
+ * states the app's own browse shape where it describes the Auto tree, which
+ * "mirrors the app": "Library with albums, artists and songs; Recently added;
+ * Playlists; Favourites; Device." Albums, artists and songs are one thing, and
+ * playlists sit beside that thing rather than inside it. The tablet structure
+ * agrees — "segmented tabs, a sort control and a grid/list toggle", four items
+ * on that row, not six — and a five-segment control is also the one that stops
+ * fitting a 390dp phone first, which is the pressure the row was already under.
+ *
+ * ## Why a pill with a right chevron
+ *
+ * The pack draws no playlists or genres screen on any of its 21 artboards, so
+ * there is no drawn entry point to transcribe and the idiom was chosen. It is
+ * [NeedlerToolbarPill], the same control the sort wears, because a third pill
+ * shape on one screen is the defect this screen was just fixed for. What
+ * separates it from its neighbours is the chevron, and the pack has exactly the
+ * two glyphs needed: the sort carries `PathChevronDown`, which the design
+ * system calls "the disclosure chevron on a sort or output control" — a menu
+ * drops here — and these carry `PathChevronRight`, "the row chevron" — a screen
+ * opens there. The tabs carry neither, because they change this screen.
+ *
+ * **The alternatives, rejected.** A fifth and sixth segment, for the reason
+ * above. A nav-rail or bottom-bar entry, because screen 09 fixes the rail at
+ * Library, Search, Pulls and Settings, and a phone-only tab that vanishes on a
+ * tablet is worse than none — this row is inside the content pane, so it is
+ * identical at both widths. Full-width rows in the pack's list style, because
+ * two of them cost 96dp of a phone's first screen where two pills cost 48dp.
+ *
+ * The spoken label says the action rather than the noun: "Open playlists"
+ * rather than "Playlists", so a TalkBack user hears that this opens something
+ * instead of hearing the same word the tabs use. REQUIREMENTS.md
+ * "Accessibility" asks for a content description on every control, and a
+ * description that is only the visible word adds nothing.
+ */
+@Composable
+private fun LibraryBrowseRow(
+    onOpenPlaylists: () -> Unit,
+    onOpenGenres: () -> Unit,
+) {
+    val spacing = NeedlerTheme.spacing
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(spacing.step4),
+        verticalArrangement = Arrangement.spacedBy(spacing.step4),
+        itemVerticalAlignment = Alignment.CenterVertically,
+    ) {
+        NeedlerToolbarPill(
+            text = "Playlists",
+            contentDescription = "Open playlists",
+            onClick = onOpenPlaylists,
+            trailingIcon = { tint -> NeedlerChevronRightIcon(tint = tint) },
+        )
+        NeedlerToolbarPill(
+            text = "Genres",
+            contentDescription = "Open genres",
+            onClick = onOpenGenres,
+            trailingIcon = { tint -> NeedlerChevronRightIcon(tint = tint) },
+        )
+    }
+}
+
+/**
  * `Recent ⌄`, opening the list of sorts.
  *
  * The visible label is one word, as the pack draws it; the spoken label is the
  * pack's own `aria-label`, "Sort: recently added", because "Recent" alone does
- * not say what it sorts or that it is a control.
+ * not say what it sorts or that it is a control. [LibrarySort] carries the two
+ * strings side by side so neither can be edited without seeing the other.
+ *
+ * The pill itself is [NeedlerToolbarPill], the pack's own control, rather than
+ * the private one this used to draw. REQUIREMENTS.md "Tablet layout" calls the
+ * row "segmented tabs, a sort control and a grid/list toggle" — three peers —
+ * and two of the three being local composables beside a pack component is how
+ * the row came to look like three different apps on the device.
+ *
+ * ## The menu is part of the control
+ *
+ * [NeedlerDropdownMenu], not Material's, for the reason that component gives: an
+ * undressed menu takes a 2dp radius and one of Material's own dark greys, so a
+ * pill opened a square in the wrong colour. A user judges a sort control by the
+ * list it produces, which is the part they are looking at while they choose.
  */
 @Composable
 private fun SortControl(
@@ -387,42 +488,37 @@ private fun SortControl(
     val typography = NeedlerTheme.typography
 
     Box {
-        ToolbarPill(
+        NeedlerToolbarPill(
+            text = sort.label,
             contentDescription = "Sort: " + sort.spokenLabel,
             onClick = { expanded = true },
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = sort.label,
-                    style = typography.metaStrong,
-                    color = colors.textSecondary,
-                    maxLines = 1,
-                )
-                NeedlerChevronDownIcon(tint = colors.textSecondary)
-            }
-        }
-        DropdownMenu(
+            trailingIcon = { tint -> NeedlerChevronDownIcon(tint = tint) },
+        )
+        NeedlerDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false },
         ) {
             LibrarySort.entries.forEach { option ->
+                val chosen: Boolean = option == sort
                 DropdownMenuItem(
                     text = {
                         Text(
                             text = option.label,
                             style = typography.body,
-                            color = if (option == sort) colors.accent else colors.textPrimary,
+                            color = if (chosen) colors.accent else colors.textPrimary,
                         )
                     },
                     onClick = {
                         expanded = false
                         onSortSelect(option)
                     },
+                    // The accent on the chosen row is colour alone, which
+                    // REQUIREMENTS.md "Accessibility" does not accept as the
+                    // only carrier of a state. `selected` is what TalkBack
+                    // announces instead of asking the user to see the blue.
                     modifier = Modifier.semantics {
                         contentDescription = "Sort by " + option.spokenLabel
+                        selected = chosen
                     },
                 )
             }
@@ -430,21 +526,31 @@ private fun SortControl(
     }
 }
 
-/** The grid/list switch on the right of the controls row (screens 02, 09, 13). */
+/**
+ * The grid/list switch on the right of the controls row (screens 02, 09, 13).
+ *
+ * [NeedlerToolbarIconPill] is the same pack pill the sort control wears, in its
+ * icon-only 44x36 form, so the two controls at the right of the row cannot
+ * drift apart again.
+ *
+ * The spoken label names the destination rather than the pack's own
+ * `aria-label="Switch view"`, which says neither which way it is about to go nor
+ * which way it is now. REQUIREMENTS.md "Accessibility" requires a content
+ * description on every control; one that leaves a TalkBack user guessing which
+ * of two layouts a tap produces is a description in name only.
+ */
 @Composable
 private fun ViewModeToggle(
     viewMode: LibraryViewMode,
     onToggle: () -> Unit,
 ) {
-    val colors = NeedlerTheme.colors
-    ToolbarPill(
+    NeedlerToolbarIconPill(
         contentDescription = when (viewMode) {
             LibraryViewMode.GRID -> "Switch to list view"
             LibraryViewMode.LIST -> "Switch to grid view"
         },
         onClick = onToggle,
-        width = 44.dp,
-    ) {
+    ) { tint ->
         NeedlerStrokeIcon(
             pathData = when (viewMode) {
                 // Showing the grid offers the list, and the other way round —
@@ -452,51 +558,8 @@ private fun ViewModeToggle(
                 LibraryViewMode.GRID -> PATH_LIST_VIEW
                 LibraryViewMode.LIST -> PATH_GRID_VIEW
             },
-            tint = colors.textSecondary,
+            tint = tint,
         )
-    }
-}
-
-/**
- * A 36dp-tall pill with a 48dp touch target.
- *
- * The pack draws these controls 36px tall and REQUIREMENTS.md asks for 48dp
- * targets. Both are satisfiable at once — the *drawn* pill stays 36dp and the
- * *clickable* box around it is 48dp — which is why this is a local composable
- * rather than `NeedlerPillButton`, whose clickable area is the pill itself.
- * Worth lifting into `:core:design`; see the handover notes.
- */
-@Composable
-private fun ToolbarPill(
-    contentDescription: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    width: Dp? = null,
-    content: @Composable () -> Unit,
-) {
-    val colors = NeedlerTheme.colors
-    val sizes = NeedlerTheme.sizes
-    val shape = NeedlerTheme.shapes.pill
-    Box(
-        modifier = modifier
-            .defaultMinSize(minHeight = sizes.minTouchTarget)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics(mergeDescendants = true) {
-                this.contentDescription = contentDescription
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .then(if (width != null) Modifier.width(width) else Modifier)
-                .defaultMinSize(minHeight = sizes.pillMinHeight)
-                .clip(shape)
-                .border(sizes.hairlineThickness, colors.hairline, shape)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            content()
-        }
     }
 }
 

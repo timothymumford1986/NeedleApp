@@ -19,7 +19,7 @@ public data class Pin(
 
 /** Why an album is pinned. */
 public enum class PinSource {
-    /** The user tapped "Pull local". */
+    /** The user tapped **Pull to device**. */
     MANUAL,
 
     /**
@@ -72,6 +72,27 @@ public sealed interface OfflineDownloadState {
     public data class Failed(
         val error: NeedlerError,
     ) : OfflineDownloadState
+
+    /**
+     * True while bytes are still expected: the three states the user can stop, and no others.
+     *
+     * ## Why this predicate exists rather than a `when` at each call site
+     *
+     * It is what decides whether the album screen draws "Pulling to device" with a percentage or the
+     * plain "Device" badge, whether Cancel is offered, and - through [AlbumState.Pinned.offeredActions]
+     * - what a widget, the car tree and a Wear tile each believe about the same album. A device audit
+     * found the previous arrangement drawing a full-width "Downloading to this device" banner that
+     * never cleared, and the reason it never cleared was that *completion* was computed in one place
+     * and *in flight* was inferred in another. One predicate, read from the pin row on every emission,
+     * means the thing that ends the state and the thing that draws it are the same fact.
+     *
+     * [Partial] and [Failed] are deliberately **not** in flight. Both are what the downloader leaves
+     * behind when it stops, so a UI that treated them as progress would be the un-exitable state
+     * again: nothing further is coming, and the album is either partly on the device and playing or
+     * wholly absent and retryable.
+     */
+    public val isInFlight: Boolean
+        get() = this is Queued || this is Downloading || this is WaitingForUnmeteredNetwork
 }
 
 /**
@@ -82,12 +103,33 @@ public sealed interface OfflineDownloadState {
  * There is no user-facing storage limit. The two tiers are bounded by completely different things,
  * and neither of them is a number the user picks:
  *
- *  * **Downloaded** ([downloadedBytes]) is what the user explicitly asked to keep. It has no limit
+ *  * **Device** ([downloadedBytes]) is what the user explicitly asked to keep. It has no limit
  *    and is never evicted automatically. The user sees the figure and removes albums by hand.
- *  * **Cached while listening** ([cachedBytes]) fills up silently as a side effect of streaming, so
+ *  * **Temporary** ([cachedBytes]) fills up silently as a side effect of streaming, so
  *    it cannot be unbounded or the app quietly eats the device. It is bounded by [deviceFreeBytes]
  *    against [freeSpaceFloorBytes] instead: bytes are only retained while retaining them leaves
  *    the device at least that much room.
+ *
+ * ## Why the tiers keep two names when the states went down to three
+ *
+ * REQUIREMENTS.md "Vocabulary" now fixes three words for where a *record* is, and only one of them is
+ * "device". These two figures are not records, they are **bytes under two retention policies**, and
+ * the policies are what the eviction planner is built on: one is never touched, the other is evicted
+ * to hold the free-space floor. Collapsing them would make the Storage screen promise permanence for
+ * 5 MB it is about to delete.
+ *
+ * They are renamed rather than kept, because "Downloaded" and "Cached while listening" read as states
+ * a record could be in, and a user who had just learned three state words would reasonably look for
+ * those two among them. **Device** is the one state word that *is* a retention policy - a pinned
+ * album is exactly the device state - and **Temporary** says the only thing about the other tier that
+ * the user can act on, which is that it goes away.
+ *
+ * The conflation the rename is accused of cannot reach a badge, which is the thing that would have
+ * made it a real problem: every on-device signal in the app is gated on the album being pinned, so
+ * nothing draws "Device" for bytes in the temporary tier. The predicates are
+ * `Album.isFullyOnDevice` (`AlbumState.Pinned` plus a complete download) and, in the player,
+ * `cached.pinned && cached.isComplete && !stale`. The listening cache is per track and has no
+ * album-level reader at all.
  *
  * A device-free-space floor is the right bound because it measures the thing the user actually cares
  * about - "is my phone full" - and it needs no preference, no default to argue about and no
@@ -98,9 +140,9 @@ public sealed interface OfflineDownloadState {
  * it.
  */
 public data class StorageUsage(
-    /** The Downloaded tier: bytes of pinned albums. Never evicted automatically. */
+    /** The Device tier: bytes of pinned albums. Never evicted automatically. */
     val downloadedBytes: Long,
-    /** The Cached-while-listening tier: re-fetchable bytes retained as a side effect of streaming. */
+    /** The Temporary tier: re-fetchable bytes retained as a side effect of streaming. */
     val cachedBytes: Long,
     /** Artwork at display sizes, on its own small LRU. */
     val artworkBytes: Long,
@@ -163,7 +205,7 @@ public data class StorageUsage(
 
     /**
      * Bytes a "Clear cached music" would free. Safe to offer behind a single tap: these bytes are
-     * re-fetchable and were never explicitly requested, unlike the downloaded tier.
+     * re-fetchable and were never explicitly requested, unlike the Device tier.
      */
     public val reclaimableWithoutLossBytes: Long get() = cachedBytes
 
@@ -248,16 +290,16 @@ public data class RemovedDownload(
  * [StorageUsage.MINIMUM_FREE_SPACE_FLOOR_BYTES]), which is invisible and self-managing.
  *
  * [downloadToDeviceOnWifiOnly] is the corrected form of the design pack's "Pull on Wi-Fi only": what
- * consumes mobile data is downloading audio to the device, not asking the server to acquire an album.
+ * consumes mobile data is pulling audio to the device, not asking the server to acquire an album.
  */
 public data class StoragePreferences(
-    /** "Keep pulled albums on device": auto-pin anything this device successfully pulled. */
+    /** "Keep pulled albums on the device": auto-pin anything this device successfully pulled. */
     val keepPulledAlbumsOnDevice: Boolean = false,
     val downloadToDeviceOnWifiOnly: Boolean = true,
 )
 
 /**
- * The outcome of one pass over the cached-while-listening tier.
+ * The outcome of one pass over the Temporary tier.
  *
  * Only that tier is ever touched, so a pass can legitimately fall short of the free-space floor: see
  * [floorStillUnmet].
@@ -268,7 +310,7 @@ public data class EvictionReport(
     /**
      * True when the device is still below [StorageUsage.freeSpaceFloorBytes] after the pass.
      *
-     * What remains is downloaded albums and whatever else is on the device, and the app evicts
+     * What remains is the Device tier and whatever else is on the device, and the app evicts
      * neither. The UI warns and offers removal; it must never read this flag as licence to delete a
      * download.
      */

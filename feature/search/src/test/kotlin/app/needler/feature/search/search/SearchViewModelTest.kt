@@ -1,7 +1,10 @@
 package app.needler.feature.search.search
 
 import app.cash.turbine.test
+import app.needler.core.domain.model.CatalogueLaneState
+import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.LocalSearchResults
+import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.model.Track
 import app.needler.feature.search.FakeLibraryRepository
@@ -206,6 +209,93 @@ class SearchViewModelTest {
             model.onQueryChange("yussef")
             advanceUntilIdle()
             assertNull(expectMostRecentItem().notice)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The whole offline lane, from the connectivity the use case reads to the
+     * sentence the screen draws.
+     *
+     * [SearchUiStateTest] asserts the copy from a literal state, which is where
+     * the fault was. This asserts that the real wiring reaches that state, so a
+     * change to `UnifiedSearchUseCase.catalogueLaneBlocker` cannot leave the
+     * screen settled, empty and claiming a lookup again. Both halves are needed:
+     * the fixture test would pass over a use case that reported the lane as
+     * `Ready` offline, and this one would pass over copy that read the wrong
+     * signal.
+     */
+    @Test
+    fun `offline with nothing matching reaches the state that claims no lookup`() = runTest {
+        sessions.connectivityFlow.value = ConnectivityState.Offline
+        search.localResults.value = LocalSearchResults(query = "beastiedido")
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onQueryChange("beastiedido")
+            advanceUntilIdle()
+            val state = expectMostRecentItem()
+
+            assertTrue("the lane has to settle or the screen draws skeletons", state.showEmptyResult)
+            assertEquals(
+                CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+                state.catalogue,
+            )
+            assertFalse("MusicBrainz was never asked", state.catalogueAnswered)
+            assertFalse(
+                state.emptyResultDetail.contains("MusicBrainz catalogue matches"),
+            )
+            assertEquals(CATALOGUE_OFFLINE, state.catalogueNote)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /** The same query with a connection: the lane ran, so the claim is allowed. */
+    @Test
+    fun `online with nothing matching is allowed to report the catalogue`() = runTest {
+        search.localResults.value = LocalSearchResults(query = "beastiedido")
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onQueryChange("beastiedido")
+            advanceUntilIdle()
+            val state = expectMostRecentItem()
+
+            assertTrue(state.showEmptyResult)
+            assertTrue(state.catalogueAnswered)
+            assertTrue(state.emptyResultDetail.contains("MusicBrainz catalogue matches"))
+            assertNull("nothing went wrong, so there is nothing to say", state.catalogueNote)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The path that works today and is the easiest to regress: offline, the
+     * mirror answers, and the screen is a results screen rather than an empty
+     * one.
+     */
+    @Test
+    fun `offline with cached results still draws them`() = runTest {
+        sessions.connectivityFlow.value = ConnectivityState.Offline
+        search.localResults.value = LocalSearchResults(
+            query = "beastie",
+            tracks = listOf(song),
+        )
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onQueryChange("beastie")
+            advanceUntilIdle()
+            val state = expectMostRecentItem()
+
+            assertFalse(state.showEmptyResult)
+            assertFalse(state.searching)
+            assertEquals(1, state.tracks.size)
+            assertEquals(CATALOGUE_OFFLINE, state.catalogueNote)
+            assertFalse("no page of a catalogue that cannot be reached", state.canPageCatalogue)
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -316,7 +316,10 @@ private fun NowPlayingContent(
  * One of the two ways off this screen: [CrateScreen] and [OnWatchScreen].
  *
  * "In the crate" is REQUIREMENTS.md "Vocabulary" for the play queue, and "On watch" is the narrowing of
- * its "On device" to the device in front of the user. Both are labels rather than glyphs for two
+ * its **device** state to the device in front of the user. The Wear words stay two - "On watch" and
+ * "On phone" - because they answer a question the phone never has to ask, which of two devices holds
+ * the bytes; REQUIREMENTS.md "Vocabulary" records them as that narrowing rather than as a fourth and
+ * fifth state. Both are labels rather than glyphs for two
  * reasons: this module draws its icons from the design pack's own path data and the pack has neither a
  * queue nor a storage icon, and a lone unlabelled symbol on a watch is a guess.
  *

@@ -94,8 +94,22 @@ public object EntityMappers {
         )
     }
 
+    /**
+     * The state to show for one album, given whatever rows the caller was able to join.
+     *
+     * [pull] is not only the payload for a percentage: when it is present it **decides** the
+     * acquisition state, because it is the row the 2 s poll keeps current while `album.state` is a
+     * snapshot written when the request was placed. A device showed exactly what that costs - a pull
+     * the queue correctly listed as "Searching" opened on an album screen reading "Waiting for an
+     * administrator to approve this pull", because the receipt had written `pending_approval` and
+     * nothing afterwards ever rewrote it. REQUIREMENTS.md "Placing a request" requires the status the
+     * server returned to be rendered rather than inferred, and a column nobody has refreshed since
+     * the tap is not what the server returned.
+     *
+     * See [liveState] for the two cases where the column still wins.
+     */
     public fun albumState(row: AlbumEntity, pin: PinEntity?, pull: PullEntity?): AlbumState =
-        when (row.state) {
+        when (liveState(row, pull)) {
             AlbumStateDb.NOT_OWNED -> AlbumState.NotOwned
             AlbumStateDb.PENDING_APPROVAL -> AlbumState.PendingApproval(
                 requestedAt = WireTime.fromEpochMillis(pull?.createdAt),
@@ -116,6 +130,32 @@ public object EntityMappers {
                 failedAt = WireTime.fromEpochMillis(pull?.updatedAt),
             )
         }
+
+    /**
+     * Which row decides: the live `pull` row, or the stored `album.state`.
+     *
+     * The `pull` row wins while an acquisition is running, for the reason [albumState] sets out. The
+     * column wins in two cases, and both are about membership of the library rather than about a
+     * pull:
+     *
+     *  * the album is [AlbumStateDb.isInLibrary] already - owned or pinned. The library sync and the
+     *    pin repository own that transition, and a pull row left over from the acquisition that
+     *    delivered the album would otherwise drag a playable record back to "Searching";
+     *  * the pull says it finished. [albumStateFor] reads `completed` and `partial` as owned, which
+     *    is true of the acquisition and not of the mirror: the tracks arrive with the next library
+     *    sync, and claiming the album before they do offers a Play button over an empty track list.
+     *    So the promotion is left to the sync, which is the only thing that knows.
+     *
+     * A pull the server has forgotten is not handled here but at the source:
+     * `DefaultPullRepository.refreshPulls` deletes the row and resets the album with it, because a
+     * read-time guess at "there used to be a pull" is exactly the kind of invention this function
+     * exists to remove.
+     */
+    private fun liveState(row: AlbumEntity, pull: PullEntity?): AlbumStateDb {
+        if (pull == null || row.state.isInLibrary) return row.state
+        val implied: AlbumStateDb = albumStateFor(pull.status)
+        return if (implied.isInLibrary) row.state else implied
+    }
 
     /**
      * Where this album's artwork comes from.

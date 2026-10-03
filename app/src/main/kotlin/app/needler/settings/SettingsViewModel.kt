@@ -140,9 +140,12 @@ class SettingsViewModel @Inject constructor(
             scrobbleTargets = scrobble.serverTargets,
             wifiRung = preferences.wifiQuality,
             dataRung = preferences.dataQuality,
-            // Pessimistic before negotiation has happened: the row stays hidden rather than
-            // appearing and then vanishing a moment later.
             transcodingAvailable = capabilities?.transcodingAvailable == true,
+            // The two are not the same thing, and treating them as one is what made the Stream
+            // quality row inert on the device. `observeCapabilities` emits null until something
+            // negotiates, nothing negotiates on launch, so after a restart a perfectly capable
+            // server read as one that had refused. See PlayingSectionState.transcodingNegotiated.
+            transcodingNegotiated = capabilities != null,
         )
     }
 
@@ -424,40 +427,19 @@ class SettingsViewModel @Inject constructor(
             " and " + SettingsFormat.plural(report.artistsUpdated.toLong(), "artist") + "."
     }
 
-    private fun describe(album: DownloadedAlbum, removed: RemovedDownload): String =
-        if (removed.removedTracks == 0) {
-            "Removed " + album.title + ". None of it was on this device."
-        } else {
-            "Removed " + album.title + ": " +
-                SettingsFormat.plural(removed.removedTracks.toLong(), "track") + ", " +
-                SettingsFormat.bytes(removed.freedBytes) + " freed."
-        }
-
     /**
-     * One sentence a person can act on, for each failure this screen can actually produce.
+     * What removing one album freed.
      *
-     * `NeedlerError.diagnostic` is deliberately not used: its own documentation says it is for the
-     * diagnostics log and is "never shown raw to the user". The `else` is not laziness either -
-     * most of the modelled errors belong to onboarding, streaming or pulls and cannot reach any
-     * control on this screen, so spelling them all out here would be inventing copy for states that
-     * are unreachable from it.
+     * The copy itself lives in [SettingsNotices] because [DownloadsViewModel] reports the same thing
+     * from the sub-screen that now holds the per-album list, and one sentence about what the app just
+     * deleted must not exist twice. This overload is kept so the call sites in this file read as they
+     * did.
      */
-    private fun describe(error: NeedlerError): String = when (error) {
-        is NeedlerError.Offline -> "There is no connection to the server right now."
-        NeedlerError.SessionExpired ->
-            "Your sign-in has expired. Sign in again to restore search and pulls."
+    private fun describe(album: DownloadedAlbum, removed: RemovedDownload): String =
+        SettingsNotices.removed(album, removed)
 
-        NeedlerError.SubsonicProtocolDisabled ->
-            "The server has the Subsonic protocol switched off. An administrator has to enable it."
-
-        NeedlerError.DownloadForbidden ->
-            "This server does not allow downloads for your account."
-
-        is NeedlerError.RateLimited -> "The server asked Needler to slow down. Try again shortly."
-        is NeedlerError.ServerError -> "The server had a problem. Try again shortly."
-        is NeedlerError.InsufficientStorage -> "This device has no room left."
-        else -> "Something went wrong. Try again."
-    }
+    /** Why a storage or sync action could not run. Copy in [SettingsNotices], for the same reason. */
+    private fun describe(error: NeedlerError): String = SettingsNotices.failure(error)
 
     /**
      * The standing warning about the session, if there is one.

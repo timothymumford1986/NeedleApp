@@ -2,8 +2,10 @@
 
 package app.needler.feature.pulls.common
 
+import app.needler.core.domain.model.Pull
 import app.needler.core.domain.model.PullFailureReason
 import app.needler.core.domain.model.PullProgress
+import app.needler.core.domain.model.PullState
 import app.needler.core.domain.model.PullStatus
 import app.needler.core.domain.model.RequestHistoryEntry
 import app.needler.core.domain.model.RequestOutcome
@@ -68,6 +70,78 @@ class PullsFormatTest {
             PullsFormat.subtitle(SamplePulls.failed, now),
         )
     }
+
+    // ---- one line per state, and only one of them names a person -------------
+    //
+    // A device reported a pull that said it was "waiting on the admin" when
+    // nobody was waiting on an administrator. The defect was two screens away
+    // from this formatter — the album screen was reading a `pending_approval`
+    // the request lane had written from the server's ordinary `pending` — but the
+    // pull lane has now shipped three silent defects of this shape: blank
+    // titles, an accepted 202 decoded as a rejection, and this. So the wording
+    // is pinned per state rather than per bug, and the rule the pin enforces is
+    // that one state names an administrator and the other nine do not.
+
+    /** Every state's drawn explanation, including the two derived client-side. */
+    @Test
+    fun `each state's line says what that state is`() {
+        assertEquals(
+            "waiting for an administrator",
+            PullsFormat.stateDetail(SamplePulls.pendingApproval),
+        )
+        assertEquals("asking slskd", PullsFormat.stateDetail(SamplePulls.searching))
+        assertEquals(
+            "looking for a source",
+            PullsFormat.stateDetail(SamplePulls.searching.copy(source = null)),
+        )
+        assertEquals(
+            "a source needs picking on the server",
+            PullsFormat.stateDetail(SamplePulls.awaitingSourceReview),
+        )
+        assertEquals("waiting for a download slot", PullsFormat.stateDetail(queued))
+        assertEquals("12 of 19 files", PullsFormat.stateDetail(SamplePulls.downloading))
+        assertEquals("importing", PullsFormat.stateDetail(processing))
+        assertEquals("7 of 10 files", PullsFormat.stateDetail(SamplePulls.partial))
+        assertEquals("no source found", PullsFormat.stateDetail(SamplePulls.failed))
+
+        // The badge is these two states' whole account; see `stateDetail`.
+        assertNull(PullsFormat.stateDetail(SamplePulls.landedToday))
+        assertNull(PullsFormat.stateDetail(SamplePulls.cancelled))
+    }
+
+    /**
+     * No state invents an administrator, and the one that reports one is the one the server parked.
+     *
+     * Asserted over every state rather than over the states that happen to be suspect: a mapper that
+     * reached for "waiting for approval" as its fallback would be caught here by whichever state it
+     * swallowed, which is how this class of defect reaches a device at all.
+     */
+    @Test
+    fun `only a request the server parked names an administrator`() {
+        val states: List<Pull> = SamplePulls.everyState + queued + processing
+        assertEquals(PullState.entries.toSet(), states.map { it.state }.toSet())
+
+        states.filterNot { it.state == PullState.PENDING_APPROVAL }.forEach { pull ->
+            val lines: List<String> = listOf(
+                PullsFormat.stateDetail(pull).orEmpty(),
+                PullsFormat.subtitle(pull, now),
+                PullsFormat.spokenRow(pull, now),
+            )
+            lines.forEach { line -> assertFalse(line, line.contains("admin")) }
+        }
+
+        assertTrue(
+            PullsFormat.stateDetail(SamplePulls.pendingApproval)!!.contains("administrator"),
+        )
+    }
+
+    /** `queued` with a candidate already chosen: waiting for a slot, not for a person. */
+    private val queued: Pull = SamplePulls.downloading.copy(
+        status = PullStatus.QUEUED,
+        progress = PullProgress.Unknown,
+    )
+
+    private val processing: Pull = SamplePulls.downloading.copy(status = PullStatus.PROCESSING)
 
     // ---- unknown is not zero ------------------------------------------------
 

@@ -1154,12 +1154,15 @@ private fun LazyListScope.idleBlock(
 }
 
 /**
- * Both lanes answered and neither had anything.
+ * A search settled and neither lane had anything — which, offline, means the
+ * mirror settled and the other lane never ran.
  *
- * The copy differs by connectivity because the way out differs: a connected
- * search that found nothing really has found nothing, while an offline one has
- * searched half of what it normally would and the missing half is the likelier
- * home of the answer.
+ * The copy differs by what was actually searched, and that is
+ * [SearchUiState.emptyResultDetail]'s decision rather than this block's: the
+ * sentence here claimed a MusicBrainz lookup on a device that had no network,
+ * so it is the thing under test and belongs on the state where a test can reach
+ * it without rendering a screen. See [SearchUiState.catalogueAnswered] for which
+ * signal that decision reads and which one it refuses to.
  */
 private fun LazyListScope.emptyResultBlock(
     state: SearchUiState,
@@ -1178,15 +1181,7 @@ private fun LazyListScope.emptyResultBlock(
                 modifier = Modifier.semantics { heading() },
             )
             Text(
-                text = if (state.offline) {
-                    "Nothing in your library matches \"" + state.query.trim() + "\". The " +
-                        "MusicBrainz catalogue could not be searched without a connection, and " +
-                        "it is the half that holds everything you do not own yet."
-                } else {
-                    "Nothing in your library or in the MusicBrainz catalogue matches \"" +
-                        state.query.trim() + "\". A shorter query, or the artist's name on its " +
-                        "own, usually finds more."
-                },
+                text = state.emptyResultDetail,
                 style = typography.body,
                 color = colors.textSecondary,
             )

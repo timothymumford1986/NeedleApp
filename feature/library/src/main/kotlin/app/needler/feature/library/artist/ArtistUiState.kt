@@ -105,6 +105,31 @@ data class ArtistUiState(
      */
     val artistNotInCatalogue: Boolean = false,
 
+    /**
+     * True once the catalogue lookup has answered, whatever it answered.
+     *
+     * The missing third fact. [catalogueAlbums] being empty was doing double duty for "nothing came
+     * back" and "nothing has come back yet", and the screen therefore said nothing in either case —
+     * which on a device read as an artist whose entire output is the four records you own. See
+     * [discographyEmpty], which is the sentence this flag makes sayable.
+     *
+     * Defaults false so that a state built by hand — a screenshot test, a preview — draws no claim
+     * about a lookup it never ran.
+     */
+    val discographySettled: Boolean = false,
+
+    /**
+     * True when the last catalogue lookup failed, whatever is on screen.
+     *
+     * [discographyError] is deliberately suppressed once there are un-owned rows to draw, because
+     * "the discography is unavailable" printed under a discography is a contradiction. This is the
+     * fact that survives that suppression, and it carries the legitimate half of the same message:
+     * the rows on screen came out of the mirror, the lane that refreshes them did not answer, so the
+     * list may be short. The user needs that; they do not need to be told the lane is unavailable
+     * while reading what it fetched last time.
+     */
+    val discographyFetchFailed: Boolean = false,
+
     val offline: Boolean = false,
 
     val busy: Boolean = false,
@@ -113,6 +138,25 @@ data class ArtistUiState(
 
     /** The pull sheet, open, or null. Same sheet the album screen opens. */
     val requestSheet: RequestSheetState? = null,
+
+    /**
+     * Catalogue artists of this name that *do* have MusicBrainz ids, for a name-derived artist.
+     *
+     * The way out of the one screen in the app that was accurate and useless at the same time. See
+     * `ArtistViewModel.onFindInCatalogue`, which explains why these are offered rather than resolved
+     * automatically. Empty until the user asks, which is what [namesakeSearchDone] distinguishes
+     * from "asked, and there are none".
+     */
+    val catalogueNamesakes: List<Artist> = emptyList(),
+
+    /** That look-up is in flight. */
+    val searchingCatalogue: Boolean = false,
+
+    /** It failed, which is worth another tap where an empty answer is not. */
+    val namesakeSearchFailed: Boolean = false,
+
+    /** It finished. Without this an empty result is indistinguishable from never having asked. */
+    val namesakeSearchDone: Boolean = false,
 
     /**
      * Tracks of every owned album, in the order the owned list is drawn, for Play
@@ -139,6 +183,49 @@ data class ArtistUiState(
 ) {
 
     val discographyUnavailable: Boolean get() = discographyError != null || artistNotInCatalogue
+
+    /**
+     * The catalogue answered, and it had nothing this artist does not already own.
+     *
+     * A different fact from [discographyUnavailable] and the one that was missing. "The lookup
+     * failed" and "the lookup succeeded and the catalogue holds nothing more" are two answers a
+     * listener needs told apart, and until this existed the screen gave the second one no
+     * representation at all: with owned albums present, [hasNothing] is false, so the one empty-state
+     * line on the screen was unreachable and the catalogue half simply vanished.
+     *
+     * Deliberately false while the lookup is in flight, which is what [discographySettled] is for.
+     * Announcing an empty catalogue and replacing it with a discography a moment later would be
+     * worse than the silence it replaces.
+     */
+    val discographyEmpty: Boolean
+        get() = discographySettled && !discographyUnavailable && catalogueAlbums.isEmpty()
+
+    /**
+     * There is a discography on screen, and it is the cached one: the lane that refreshes it failed.
+     *
+     * The signal that has to survive [discographyError]'s suppression. A reader looking at nine
+     * un-owned records has no way to know whether that is the artist's catalogue or the part of it
+     * the mirror happened to keep, and the difference is the whole reason the catalogue lane exists.
+     * Drawn as a quiet line under the section rather than as the unavailable sentence, which would
+     * be claiming the lane produced nothing while its output is on the screen.
+     */
+    val discographyIncomplete: Boolean
+        get() = discographyFetchFailed && catalogueAlbums.isNotEmpty()
+
+    /**
+     * Whether to offer the one action a name-derived artist can actually take.
+     *
+     * Gated on [artistNotInCatalogue] and nothing else: that flag is exactly "this artist's id can
+     * never reach the catalogue", which is exactly the situation the name is the only usable key in.
+     * A name is required because the name *is* the query - an artist the mirror has no row for and
+     * the route gave no name to has nothing to search for, and the button would open a dead search.
+     */
+    val canFindInCatalogue: Boolean
+        get() = artistNotInCatalogue && (artist?.name ?: knownName)?.isNotBlank() == true
+
+    /** The look-up ran and the catalogue had nobody else of this name either. */
+    val noNamesakesFound: Boolean
+        get() = namesakeSearchDone && catalogueNamesakes.isEmpty() && !searchingCatalogue
 
     /**
      * Truly nothing to show: no mirror row, no name from the caller, and no albums of
@@ -206,9 +293,28 @@ data class ArtistUiState(
      *
      * Drives the retry. An artist whose id can never reach the catalogue is excluded:
      * retrying that is retrying a `400`.
+     *
+     * It used to require [hasNothing], and that is what hid the retry from the case it is most
+     * needed in. An artist with four owned albums and no catalogue half has plenty on screen, so
+     * `hasNothing` is false — and yet the half that is missing is exactly the one a retry could
+     * fetch. The gate is now the missing half itself: nothing un-owned to show, and a reason to
+     * believe asking again might change that.
+     *
+     * "A reason to believe" is the lookup having answered, which is also what keeps the button from
+     * flashing on and off: the catalogue half is empty for the first few frames of every artist
+     * screen, and an offer to try again that appears before the first attempt has finished is an
+     * offer to abandon it.
+     *
+     * [discographyIncomplete] qualifies too, and it is the one case where the discography is on
+     * screen and the retry is still offered. It has to be: the line drawn under that list tells the
+     * reader the list may be short and to try again, and a sentence naming a control that is not
+     * there is worse than no sentence.
      */
     val canRetryDiscography: Boolean
-        get() = hasNothing && !artistNotInCatalogue && !loading
+        get() = !loading && !artistNotInCatalogue && (
+            discographyIncomplete ||
+                (catalogueAlbums.isEmpty() && (discographySettled || discographyError != null))
+            )
 
     /**
      * True when there is something to press Play on.

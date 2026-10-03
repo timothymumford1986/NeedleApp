@@ -55,15 +55,15 @@ import app.needler.wear.sync.WearOnWatchState
  *
  * ## The vocabulary is REQUIREMENTS.md's, not a new one
  *
- * "Vocabulary" fixes the product's words, and two of them do the work here. **On device** is "cached
- * locally, plays without a network", which is what an album on the watch is - so the screen says "On
- * watch", which is the same word narrowed to the device the user is looking at. **Downloaded** is "kept
- * on device because the user asked for it; never evicted automatically", which is exactly what the
- * watch's tier is, and it is why nothing on this screen offers to free space automatically: the only
- * thing that removes an album is the user.
+ * "Vocabulary" fixes the product's words, and two of them do the work here. **Device** is the state
+ * "on the server and on the device, plays with no network", which is what an album on the watch is - so
+ * the screen says "On watch", the same word narrowed to the device the user is looking at. The
+ * **Device** retention tier is "kept because the user asked for it; never evicted automatically", which
+ * is exactly what the watch's tier is, and it is why nothing on this screen offers to free space
+ * automatically: the only thing that removes an album is the user.
  *
- * Nothing here says "cached", because nothing on the watch is cached while listening. That distinction is
- * the whole sync policy and it would be undone by one loose label.
+ * Nothing here says "temporary", because nothing on the watch is held as a side effect of streaming.
+ * That distinction is the whole sync policy and it would be undone by one loose label.
  *
  * ## Removal takes two taps
  *
@@ -206,7 +206,7 @@ private fun OnWatchList(
                 Text(
                     // The honest form of the offer's cap. The alternative to saying this is a picker that
                     // silently omits a user's older albums.
-                    text = "+ " + state.notShown + " more downloaded on your phone",
+                    text = "+ " + state.notShown + " more on your phone",
                     modifier = Modifier.padding(top = 8.dp),
                     color = NeedlerWearColours.textMuted,
                     fontSize = 10.sp,

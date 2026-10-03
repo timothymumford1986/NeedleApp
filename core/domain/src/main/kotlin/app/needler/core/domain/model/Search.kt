@@ -87,6 +87,11 @@ public data class UnifiedSearchResults(
      * Owned and un-owned albums in one list, merged on release-group MBID. Where both lanes returned
      * the same release group, this holds the *local* record - it knows the true [AlbumState], track
      * count, size and format - and the catalogue copy is discarded.
+     *
+     * One record appears here **once**, and that is a guarantee about this list rather than about any
+     * screen that filters it. The two lanes do not always agree on a record's id, so the MBID join is
+     * not sufficient on its own; `UnifiedSearchUseCase.mergeAlbums` documents the rule that catches
+     * the rest and the device duplication that made it necessary.
      */
     val albums: List<Album> = emptyList(),
     val tracks: List<Track> = emptyList(),

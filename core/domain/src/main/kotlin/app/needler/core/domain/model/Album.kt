@@ -79,7 +79,14 @@ public sealed interface AlbumState {
     /** The actions the design pack offers in this state (the state/badge/action table). */
     public val offeredActions: Set<AlbumAction>
 
-    /** Not in the library. Found only in the MusicBrainz catalogue. Offers **Pull**. */
+    /**
+     * **Not retrieved**: not on the server and not on the device. Found only in the MusicBrainz
+     * catalogue, and offers **Pull**.
+     *
+     * REQUIREMENTS.md "Vocabulary" fixes the three words for where a record is, and this is the first
+     * of them. No badge is drawn for it - the Pull button is the whole signal - so the word is for
+     * prose and for content descriptions.
+     */
     public data object NotOwned : AlbumState {
         override val offeredActions: Set<AlbumAction> get() = setOf(AlbumAction.PULL)
     }
@@ -106,17 +113,35 @@ public sealed interface AlbumState {
             get() = if (stage.isCancellable) setOf(AlbumAction.CANCEL) else emptySet()
     }
 
-    /** In the library, streams on demand. Badged "In library"; offers Play and **Pull local**. */
+    /**
+     * **Server**: on the server, not on the device. Streams on demand.
+     *
+     * Badged "Server" in the accent blue; offers Play and **Pull to device**. REQUIREMENTS.md
+     * "Vocabulary" retired the badge word "In library" and the action "Pull local" together: the
+     * state is now named for where the record is, and the action for where it is going.
+     */
     public data object Owned : AlbumState {
         override val offeredActions: Set<AlbumAction>
             get() = setOf(AlbumAction.PLAY, AlbumAction.PULL_LOCAL)
     }
 
     /**
-     * Pinned for offline: kept on device and exempt from LRU eviction.
+     * **Device**: on the server and on the device. Exempt from LRU eviction.
      *
-     * Badged "On device" with a green check on the artwork once [download] is
+     * Badged "Device" in the positive green, with a check on the artwork once [download] is
      * [OfflineDownloadState.Complete].
+     *
+     * ## Why a download in flight offers Cancel
+     *
+     * Pinning is instant and the bytes are not, so this state covers both "on the device" and "on its
+     * way there". While it is on its way the album is already pinned - the pin row exists and nothing
+     * will evict it - and REQUIREMENTS.md "Album states" offers Cancel for the *other* transition, the
+     * server's acquisition, so offering none here was an asymmetry with nothing behind it.
+     *
+     * Cancel is **not** [AlbumAction.REMOVE_FROM_DEVICE]. REQUIREMENTS.md "Offline and caching" makes
+     * removal delete the bytes and report what it freed; stopping a download leaves what has already
+     * landed as a part-downloaded pin, which plays. Two different actions with two different outcomes,
+     * so the state offers whichever one can still apply rather than one that does both badly.
      */
     public data class Pinned(
         val download: OfflineDownloadState,
@@ -124,7 +149,11 @@ public sealed interface AlbumState {
         val source: PinSource = PinSource.MANUAL,
     ) : AlbumState {
         override val offeredActions: Set<AlbumAction>
-            get() = setOf(AlbumAction.PLAY, AlbumAction.REMOVE_FROM_DEVICE)
+            get() = if (download.isInFlight) {
+                setOf(AlbumAction.PLAY, AlbumAction.CANCEL)
+            } else {
+                setOf(AlbumAction.PLAY, AlbumAction.REMOVE_FROM_DEVICE)
+            }
     }
 
     /** Acquisition finished without usable audio. Badged "no source found"; offers Retry. */
@@ -144,13 +173,22 @@ public sealed interface AlbumState {
  * apart on which action a state allows.
  */
 public enum class AlbumAction {
-    /** Ask the server to acquire this album. */
+    /** Ask the server to acquire this album. Labelled **Pull**. */
     PULL,
 
-    /** Download an owned album to this device (pin it). */
+    /**
+     * Download an album the server has to this device (pin it). Labelled **Pull to device**.
+     *
+     * The name is the old vocabulary's "Pull local"; the label is not. REQUIREMENTS.md "Vocabulary"
+     * keeps **Pull** as the one verb and lets the state words name its destination, so the two
+     * acquisitions read as the same act onto different stores rather than as two idioms.
+     */
     PULL_LOCAL,
 
-    /** Cancel an in-flight acquisition. Only legal while searching, queued or downloading. */
+    /**
+     * Cancel an acquisition in flight: the server's, while searching, queued or downloading, or this
+     * device's, while the download is queued, held for Wi-Fi or running.
+     */
     CANCEL,
 
     /** Play from the library, streaming or from cache. */

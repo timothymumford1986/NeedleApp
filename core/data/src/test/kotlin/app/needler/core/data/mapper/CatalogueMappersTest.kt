@@ -1,6 +1,9 @@
 package app.needler.core.data.mapper
 
 import app.needler.core.data.fake.RG
+import app.needler.core.data.fake.albumRow
+import app.needler.core.data.fake.pullRow
+import app.needler.core.data.local.entity.AlbumStateDb
 import app.needler.core.data.local.entity.PullEntity
 import app.needler.core.data.local.entity.PullStatusDb
 import app.needler.core.domain.model.Album
@@ -167,6 +170,76 @@ public class CatalogueMappersTest {
             app.needler.core.data.local.entity.AlbumStateDb.OWNED,
             EntityMappers.albumStateFor(PullStatusDb.PARTIAL),
         )
+    }
+
+    // ------------------------------------- the album state a live pull implies
+    //
+    // A device opened a pull the Pulls screen correctly listed as "Searching" and was told
+    // "Waiting for an administrator to approve this pull". Nobody had been asked to approve
+    // anything: `album.state` was a snapshot written when the request was placed, from a receipt
+    // whose `pending` an older mapping read as an approval, and nothing afterwards ever rewrote it.
+    // REQUIREMENTS.md "Placing a request" requires the status the server returned to be rendered
+    // rather than inferred, so the row that the 2 s poll keeps current is the one that decides.
+
+    @Test
+    public fun `a searching pull is not an album waiting for an administrator`() {
+        val state: AlbumState = EntityMappers.albumState(
+            row = albumRow(state = AlbumStateDb.PENDING_APPROVAL),
+            pin = null,
+            pull = pullRow(status = PullStatusDb.SEARCHING, taskId = "t1", searchJobId = null, candidateIndex = null),
+        )
+
+        assertEquals(AlbumState.Acquiring::class, state::class)
+        assertEquals(PullState.SEARCHING, (state as AlbumState.Acquiring).stage)
+    }
+
+    @Test
+    public fun `a pull parked for a source pick reads as that on the album too`() {
+        val state: AlbumState = EntityMappers.albumState(
+            row = albumRow(state = AlbumStateDb.PENDING_APPROVAL),
+            pin = null,
+            pull = pullRow(status = PullStatusDb.NEEDS_ATTENTION, candidateIndex = null),
+        )
+
+        assertEquals(PullState.AWAITING_SOURCE_REVIEW, (state as AlbumState.Acquiring).stage)
+    }
+
+    @Test
+    public fun `an album waits for an administrator exactly while its pull does`() {
+        val state: AlbumState = EntityMappers.albumState(
+            row = albumRow(state = AlbumStateDb.PENDING_APPROVAL),
+            pin = null,
+            pull = pullRow(status = PullStatusDb.PENDING_APPROVAL, taskId = null),
+        )
+
+        assertEquals(AlbumState.PendingApproval::class, state::class)
+    }
+
+    @Test
+    public fun `a stale pull never drags an album back out of the library`() {
+        // The acquisition that delivered this album is still in the mirror. Library membership is the
+        // sync's and the pin's to say, not a finished task's.
+        val owned: AlbumState = EntityMappers.albumState(
+            row = albumRow(state = AlbumStateDb.OWNED),
+            pin = null,
+            pull = pullRow(status = PullStatusDb.SEARCHING, searchJobId = null, candidateIndex = null),
+        )
+
+        assertEquals(AlbumState.Owned, owned)
+    }
+
+    @Test
+    public fun `a finished pull does not promote an album the sync has not mirrored`() {
+        // `albumStateFor` reads `completed` as owned, which is true of the task and not of the
+        // mirror: the tracks arrive with the next library sync, and Play over an empty track list is
+        // the failure this avoids.
+        val state: AlbumState = EntityMappers.albumState(
+            row = albumRow(state = AlbumStateDb.NOT_OWNED),
+            pin = null,
+            pull = pullRow(status = PullStatusDb.COMPLETED),
+        )
+
+        assertEquals(AlbumState.NotOwned, state)
     }
 
     // ------------------------------------------- the kind, and the id it implies
@@ -338,6 +411,92 @@ public class CatalogueMappersTest {
 
         assertEquals(RequestStatus.PENDING_APPROVAL, absent.status)
         assertEquals(RequestStatus.ACCEPTED, explicitNull.status)
+    }
+
+    /**
+     * `pending` is the server's ordinary answer, not a statement about an administrator.
+     *
+     * `RequestAcceptedDto.status` even *defaults* to it, because that is what the lane sends when it
+     * has the request and has not finished with it; the token for an administrator is
+     * `awaiting_approval`. Reading the first as the second recorded every pull every role placed as
+     * parked for approval, and the album screen then told the user to wait for an approval nobody
+     * had been asked for.
+     */
+    @Test
+    public fun `pending is an acceptance, because the approval token is a different word`() {
+        val pending = CatalogueMappers.receipt(RequestAcceptedDto(musicbrainzId = RG, status = "pending"))
+        val unstated = CatalogueMappers.receipt(RequestAcceptedDto(musicbrainzId = RG))
+
+        assertEquals(RequestStatus.ACCEPTED, pending.status)
+        assertEquals(RequestStatus.ACCEPTED, unstated.status)
+        assertEquals(
+            RequestStatus.PENDING_APPROVAL,
+            CatalogueMappers.receipt(
+                RequestAcceptedDto(musicbrainzId = RG, status = "awaiting_approval"),
+            ).status,
+        )
+    }
+
+    /**
+     * A status this client has never heard of claims no administrator either.
+     *
+     * [RequestStatus.PENDING_APPROVAL] used to be the `else` branch, so every unmapped token became
+     * a sentence about somebody having to approve something. A 202 is an acceptance and nothing more,
+     * and what the server does next arrives from `/api/v1/downloads` within one poll.
+     */
+    @Test
+    public fun `an unreadable status is not read as an approval`() {
+        assertEquals(RequestStatus.ACCEPTED, RequestStatus.fromServerToken("library_queued"))
+        assertEquals(RequestStatus.ACCEPTED, RequestStatus.fromServerToken(""))
+        assertEquals(RequestStatus.ACCEPTED, RequestStatus.fromServerToken(null))
+
+        // And the tokens the lanes do document still land where they belong.
+        assertEquals(RequestStatus.ALREADY_PRESENT, RequestStatus.fromServerToken("already_requested"))
+        assertEquals(RequestStatus.ALREADY_PRESENT, RequestStatus.fromServerToken("already_in_library"))
+        assertEquals(RequestStatus.REJECTED, RequestStatus.fromServerToken("failed"))
+        assertEquals(RequestStatus.PENDING_APPROVAL, RequestStatus.fromServerToken("pending_approval"))
+    }
+
+    // ------------------------------------------------- the active-requests lane
+
+    @Test
+    public fun `an active request the server calls pending is not stored as an approval`() {
+        val row: PullEntity = CatalogueMappers.pendingApprovalEntity(
+            app.needler.core.network.v1.dto.ActiveRequestItemDto(musicbrainzId = RG, status = "pending"),
+            now,
+        )!!
+
+        // Derived like any other `queued` request with no search job: the server is looking.
+        assertEquals(PullStatusDb.SEARCHING, row.status)
+        assertEquals(PullState.SEARCHING, EntityMappers.pullState(row))
+    }
+
+    @Test
+    public fun `an active request the server is already downloading is past any approval`() {
+        val row: PullEntity = CatalogueMappers.pendingApprovalEntity(
+            app.needler.core.network.v1.dto.ActiveRequestItemDto(
+                musicbrainzId = RG,
+                status = "pending",
+                downloadStatus = "downloading",
+            ),
+            now,
+        )!!
+
+        assertEquals(PullStatusDb.DOWNLOADING, row.status)
+    }
+
+    @Test
+    public fun `an approval the server named is stored as one`() {
+        val row: PullEntity = CatalogueMappers.pendingApprovalEntity(
+            app.needler.core.network.v1.dto.ActiveRequestItemDto(
+                musicbrainzId = RG,
+                status = "awaiting_approval",
+            ),
+            now,
+        )!!
+
+        assertEquals(PullStatusDb.PENDING_APPROVAL, row.status)
+        assertEquals(PullState.PENDING_APPROVAL, EntityMappers.pullState(row))
     }
 
     // -------------------------------------------------------------------- stats

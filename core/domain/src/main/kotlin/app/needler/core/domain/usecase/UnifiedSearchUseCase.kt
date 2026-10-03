@@ -1,6 +1,7 @@
 package app.needler.core.domain.usecase
 
 import app.needler.core.domain.model.Album
+import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.CatalogueLaneState
 import app.needler.core.domain.model.CatalogueSearchPage
@@ -36,8 +37,10 @@ import kotlinx.coroutines.sync.withLock
  * 2. After [DefaultCatalogueDebounce], the catalogue lane is queried through the server.
  * 3. Results are merged on release-group MBID. **An album present locally takes the local record** -
  *    it knows the real [app.needler.core.domain.model.AlbumState], track count, size and format - and
- *    the catalogue copy is discarded, so nothing appears twice. Artists get the same treatment with
- *    the artist MBID as the join key, plus the name-collapse [mergeArtists] explains.
+ *    the catalogue copy is discarded, so nothing appears twice. Where the two lanes disagree about
+ *    the id of one record - which a device proved they do - [mergeAlbums] has a second rule for it.
+ *    Artists get the same treatment with the artist MBID as the join key, plus the name-collapse
+ *    [mergeArtists] explains.
  * 4. Offline, or with an expired session, only library results are shown and
  *    [UnifiedSearchResults.catalogue] says why the other lane is missing.
  *
@@ -264,10 +267,56 @@ public class UnifiedSearchUseCase(
          * Albums from both lanes, merged on release-group MBID per REQUIREMENTS.md rule 3, owned
          * first.
          *
-         * Deliberately **not** deduplicated on title the way [mergeArtists] deduplicates on name. Two
-         * release groups with the same title are the normal case in MusicBrainz - a live record, a
-         * reissue, a soundtrack that shares its film's name - and collapsing them would hide albums
-         * that really are different records. An artist's name carries no such distinction.
+         * The MBID is the join key and it is tried first, exactly as rule 3 says. What follows is the
+         * net under it, and the reason there has to be one.
+         *
+         * ## The MBID is not always the same MBID
+         *
+         * Observed on a device at v0.0.12. A library holding four Dido albums, searched for `dido`,
+         * drew all four under "Albums - in your library" and then **all four again** under "Albums to
+         * pull - from MusicBrainz", each with a Pull button offering to acquire a record the server
+         * already had. The merge had not failed: the two keys were genuinely different UUIDs, so
+         * nothing a client can normalise - case, the `al-` prefix, whitespace - would have brought
+         * them together. The corroborating evidence is on the same screen: every one of those four
+         * catalogue rows carried `in_library: false`, which is the *server's* own answer about its own
+         * library, computed from the id it was returning. A server that holds an album and says it
+         * does not hold the id it just sent is a server sending a different id - a release MBID where
+         * the mirror holds a release group, or a release group MusicBrainz search picked over the one
+         * the import matched. Either way the key cannot be repaired here.
+         *
+         * ## So a record the server already has is also matched on title and artist
+         *
+         * A catalogue row is dropped when a row the server **already holds** - owned, pinned,
+         * acquiring or awaiting approval - has the same case-folded title and the same case-folded
+         * artist. Title alone would be wrong and is not used: two release groups with the same title
+         * are the normal case in MusicBrainz, a live record beside a studio one, a reissue, a
+         * soundtrack named after its film, and collapsing those would hide albums that really are
+         * different records. Adding the artist is what makes the pair specific enough to be one
+         * record, and it is still only applied against music the server has: two *catalogue* rows
+         * that share a title and an artist are both kept, because neither is a record the user owns
+         * and either might be the one they want.
+         *
+         * **The year is deliberately not part of the key.** It was the obvious third term and the
+         * device ruled it out: the mirror's row for *Safe Trip Home* carried no year at all, so its
+         * row read as a bare title while the catalogue copy beside it read "Dido - 2008". A key that
+         * required them to agree would have failed on exactly the row that proves the bug.
+         *
+         * The one weak rule, stated rather than hidden: an owned row with a **blank artist name** is
+         * matched on its title alone, because there is nothing else on it to compare. *Safe Trip
+         * Home* was that row too. The risk is real - an unrelated record with the same title would be
+         * dropped from the catalogue block - and it is the better of two bad outcomes, since the
+         * alternative is an invitation to re-acquire music the server already holds, which costs the
+         * user a download and the server a search. A row with no artist name is also already
+         * unrenderable: `SearchFormat.albumRowSubtitle` drops blanks, which is why that row drew no
+         * subtitle at all.
+         *
+         * ## Rejected
+         *
+         * Filtering the catalogue block by title against the owned block in the UI. It would have
+         * made the screen look right while leaving two records for one album in
+         * [UnifiedSearchResults.albums], where paging, the pull sheet and every future reader of the
+         * merged list would still see both. Rule 3 is a statement about the merged list, not about
+         * one screen's filter.
          */
         public fun mergeAlbums(local: List<Album>, catalogue: List<Album>): List<Album> {
             val seen: MutableSet<ReleaseGroupMbid> = HashSet(local.size + catalogue.size)
@@ -275,13 +324,63 @@ public class UnifiedSearchUseCase(
             for (album in local) {
                 if (seen.add(album.releaseGroupMbid)) merged.add(album)
             }
+            val held: Set<String> = heldRecordKeys(merged)
             for (album in catalogue) {
+                if (isHeldAlready(album, held)) continue
                 // Also catches a release group the catalogue half returned twice, which one upstream
                 // response genuinely can.
                 if (seen.add(album.releaseGroupMbid)) merged.add(album)
             }
             return merged
         }
+
+        /**
+         * The title-and-artist keys of every album in [albums] the server already holds.
+         *
+         * Only the states that mean the server has it or is getting it - which is the same set
+         * `SearchUiState.libraryAlbums` draws, and the same question: offering to pull an album that
+         * is mid-acquisition or waiting for an administrator is as wrong as offering to pull one that
+         * has already landed.
+         *
+         * An album with a blank title contributes nothing. A key built from an empty string would
+         * match every other untitled record the catalogue returned, and `SearchFormat.albumTitle`
+         * exists precisely because a blank title is a thing this server sends.
+         */
+        private fun heldRecordKeys(albums: List<Album>): Set<String> {
+            val keys: MutableSet<String> = HashSet(albums.size)
+            for (album in albums) {
+                if (album.state == AlbumState.NotOwned) continue
+                val title: String = nameKey(album.title)
+                if (title.isEmpty()) continue
+                val artist: String = nameKey(album.artistName)
+                keys.add(if (artist.isEmpty()) title else title + RecordKeySeparator + artist)
+            }
+            return keys
+        }
+
+        /**
+         * True when [candidate] is a record [heldKeys] says the server already has.
+         *
+         * The title-only lookup comes first and answers the blank-artist row [mergeAlbums]
+         * documents; the title-and-artist lookup is the ordinary case. Both are plain set hits, so
+         * this stays linear in the catalogue half however long the owned half is.
+         */
+        private fun isHeldAlready(candidate: Album, heldKeys: Set<String>): Boolean {
+            if (heldKeys.isEmpty()) return false
+            val title: String = nameKey(candidate.title)
+            if (title.isEmpty()) return false
+            if (heldKeys.contains(title)) return true
+            val artist: String = nameKey(candidate.artistName)
+            return artist.isNotEmpty() && heldKeys.contains(title + RecordKeySeparator + artist)
+        }
+
+        /**
+         * What separates a title from an artist inside one key.
+         *
+         * A NUL, because it cannot occur in either half: any printable separator is a string a real
+         * title or artist could contain, and "A - B" by "C" would then key the same as "A" by "B - C".
+         */
+        private const val RecordKeySeparator: String = "\u0000"
 
         /**
          * Folds one more page of a single catalogue bucket into an already merged result.
@@ -317,8 +416,12 @@ public class UnifiedSearchUseCase(
                 SearchBucket.ALBUMS -> {
                     val known: MutableSet<ReleaseGroupMbid> =
                         base.albums.mapTo(HashSet()) { it.releaseGroupMbid }
+                    // The same two rules [mergeAlbums] applies, and for the same reason: a later
+                    // page is the same catalogue answering the same query, so it carries the same
+                    // mismatched ids for records the server already holds.
+                    val held: Set<String> = heldRecordKeys(base.albums)
                     val added: List<Album> = page.albums.filter { candidate ->
-                        known.add(candidate.releaseGroupMbid)
+                        !isHeldAlready(candidate, held) && known.add(candidate.releaseGroupMbid)
                     }
                     base.copy(albums = base.albums + added, catalogue = lane)
                 }

@@ -186,6 +186,17 @@ public class AlbumDownloader(
         // partial whose track is not on the device, which is what makes it safe to call at all.
         sweepOrphanedParts(keys)
 
+        // Against `tracks`, not `fetchable`, and that is a decision rather than an oversight. A
+        // part-delivered pull leaves tracks the server has no file for, `onDeviceCount` can never
+        // include one, and so an album missing a track on the server can never reach COMPLETE -
+        // deliberately, because COMPLETE is what draws the check that says this record is whole on
+        // this device, and it is not whole anywhere. `AlbumDownloadTest` pins that.
+        //
+        // The cost is that PARTIAL is then permanent for such an album, and the album screen used to
+        // draw that as a full-width banner, which a device reported as a progress indicator that never
+        // cleared. The fix is at the drawing end - REQUIREMENTS.md "The download in flight is a badge,
+        // not a banner" - because PARTIAL here is a true resting statement and the fault was rendering
+        // a resting statement in the shape of an operation.
         val onDevice: Int = onDeviceCount(releaseGroupMbid)
         val everyTrackLanded: Boolean = onDevice >= tracks.size && tracks.isNotEmpty()
         recordProgress(

@@ -28,6 +28,11 @@ import androidx.compose.ui.unit.dp
  * that need icons the design system does not own (nav glyphs, shuffle, the tonearm) can draw them
  * the same way with [NeedlerStrokeIcon].
  *
+ * That claim is why the favourite heart is not in this file even though two feature modules draw it:
+ * the pack draws no favourite control anywhere, so the shape has no `d` attribute to transcribe. It
+ * lives in `FavouriteButton.kt` beside the control that uses it, in a file that says so. A shape with
+ * no pack source added here would cost the sentence above its meaning for every other shape.
+ *
  * These are decorative by default: they carry no semantics of their own, because in the pack an icon
  * always sits inside a control or beside a label that names it. Where an icon is the *only* content
  * of a control, the control - not the icon - carries the content description.

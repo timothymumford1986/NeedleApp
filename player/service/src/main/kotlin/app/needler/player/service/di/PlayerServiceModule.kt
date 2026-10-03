@@ -1,5 +1,8 @@
 package app.needler.player.service.di
 
+import android.content.Context
+import android.media.AudioManager
+import android.os.Build
 import androidx.annotation.OptIn
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -8,6 +11,7 @@ import app.needler.core.data.diagnostics.SessionDiagnosticsSink
 import app.needler.core.domain.cache.AudioCacheWriter
 import app.needler.core.domain.model.StreamFormat
 import app.needler.core.domain.model.TrackFetchHandle
+import app.needler.core.domain.playback.OutputRouter
 import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.PinRepository
@@ -20,6 +24,10 @@ import app.needler.core.network.media.SubsonicMediaUrls
 import app.needler.core.network.subsonic.SubsonicApi
 import app.needler.player.service.audio.EqualiserAudioProcessor
 import app.needler.player.service.controller.Media3PlaybackController
+import app.needler.player.service.output.AndroidAudioOutputDevices
+import app.needler.player.service.output.AudioOutputDevices
+import app.needler.player.service.output.OutputNames
+import app.needler.player.service.output.OutputRouteMonitor
 import app.needler.player.service.source.AudioUrls
 import app.needler.player.service.source.NeedlerAudioDataSource
 import dagger.Binds
@@ -27,6 +35,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Singleton
 
 /**
@@ -51,6 +60,65 @@ public object PlayerServiceModule {
     @Provides
     @Singleton
     public fun provideEqualiser(): EqualiserAudioProcessor = EqualiserAudioProcessor()
+
+    /**
+     * The platform's output device list, behind the module's own port.
+     *
+     * REQUIREMENTS.md "Output" assigns Bluetooth enumeration here rather than to a repository. The
+     * implementation needs no manifest permission - checked against the installed SDK's
+     * `data/annotations.zip` rather than assumed; see [AndroidAudioOutputDevices] for the four entries
+     * that were read.
+     */
+    @Provides
+    @Singleton
+    public fun provideAudioOutputDevices(
+        @ApplicationContext context: Context,
+    ): AudioOutputDevices = AndroidAudioOutputDevices(
+        audioManager = context.getSystemService(AudioManager::class.java),
+    )
+
+    /**
+     * What this device and its model are called, for the picker's labels.
+     *
+     * REQUIREMENTS.md "Output" prints "This tablet" in its own example of naming the current output, so
+     * the form factor is told apart here rather than hard-coded. The signal is
+     * `smallestScreenWidthDp`, not the window's width, and the difference matters: the window is what
+     * decides whether the sidebar is drawn, and a phone in landscape gets that sidebar without becoming a
+     * tablet. The name has to follow the hardware, or a listener turning their phone sideways watches
+     * the output rename itself.
+     *
+     * 600 dp is the Material window-size-class boundary the app's own layout switch is built on, reused
+     * here so the number has one origin.
+     *
+     * [OutputNames.localProductName] is this device's own model, and it is carried for one purpose: a
+     * Bluetooth sink whose name the framework could not read reports *this* phone's model instead, and
+     * the mapper has to be able to recognise and reject it.
+     */
+    @Provides
+    @Singleton
+    public fun provideOutputNames(@ApplicationContext context: Context): OutputNames = OutputNames(
+        thisDevice = if (context.resources.configuration.smallestScreenWidthDp >= TABLET_WIDTH_DP) {
+            "This tablet"
+        } else {
+            "This phone"
+        },
+        localProductName = Build.MODEL,
+    )
+
+    /**
+     * One route monitor for the process, because it is one `AudioDeviceCallback` for the process.
+     *
+     * Provided by hand rather than `@Inject`-constructed so that the sharing scope stays a constructor
+     * parameter with a default: a test hands in its own scope and keeps the flow on the test dispatcher.
+     * See [OutputRouteMonitor] for why the subscription is reference-counted rather than tied to the
+     * session's lifetime.
+     */
+    @Provides
+    @Singleton
+    public fun provideOutputRouteMonitor(
+        devices: AudioOutputDevices,
+        names: OutputNames,
+    ): OutputRouteMonitor = OutputRouteMonitor(devices = devices, names = names)
 
     @Provides
     @Singleton
@@ -112,6 +180,9 @@ public object PlayerServiceModule {
         // it a graph type would need a qualifier per source for no gain.
         diagnostics = SessionDiagnosticsSink.forPlayback(),
     )
+
+    /** The Material window-size-class boundary, reused so "tablet" means one thing in this app. */
+    private const val TABLET_WIDTH_DP: Int = 600
 }
 
 /** Interface bindings, which Dagger wants on an abstract type rather than an object. */
@@ -128,6 +199,18 @@ public abstract class PlayerServiceBindings {
     @Binds
     @Singleton
     public abstract fun bindPlaybackController(impl: Media3PlaybackController): PlaybackController
+
+    /**
+     * The same singleton, bound again as the discovery half of the picker.
+     *
+     * Two interfaces on one object, not two objects: `:feature:player`'s output picker injects
+     * [OutputRouter] and gets the thing that owns the session, with no Media3 on its own classpath.
+     * `@Singleton` on both bindings is what keeps it one instance - and therefore one shared
+     * `AudioDeviceCallback` - rather than a second route monitor watching the same devices.
+     */
+    @Binds
+    @Singleton
+    public abstract fun bindOutputRouter(impl: Media3PlaybackController): OutputRouter
 }
 
 /**
