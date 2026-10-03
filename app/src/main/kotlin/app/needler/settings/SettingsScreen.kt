@@ -216,7 +216,15 @@ fun SettingsScreen(
                 )
             }
 
-            item(key = "server") { ServerSection(state = state.server, callbacks = callbacks) }
+            item(key = "server") {
+                ServerSection(
+                    state = state.server,
+                    // Read from the screen rather than the section, as the Storage block's own
+                    // confirmation is: one action is armed at a time across the whole screen.
+                    armedAction = state.armedAction,
+                    callbacks = callbacks,
+                )
+            }
 
             item(key = "playing") {
                 PlayingSection(
@@ -248,7 +256,7 @@ fun SettingsScreen(
                 item(key = "downloaded-albums-header") {
                     Column(modifier = Modifier.padding(top = spacing.sectionGap)) {
                         NeedlerSectionHeader(
-                            title = "Downloaded albums",
+                            title = "Albums on this device",
                             // Every album, not the ones drawn below it. See
                             // StorageSectionState.downloadedAlbumsTrailing.
                             trailing = state.storage.downloadedAlbumsTrailing,
@@ -338,12 +346,41 @@ fun SettingsScreen(
  * The row is drawn only when [SettingsCallbacks.onOpenDiagnostics] is non-null, which keeps this
  * block's original rule intact: a chevron on a row that goes nowhere is the same lie as an inert tap
  * target.
+ *
+ * ## The certificate row, and why it is here rather than on Connect
+ *
+ * The Connect screen is where a self-signed certificate is trusted, and until now it was also the
+ * only place the fact existed: the fingerprint was shown once, the user tapped Trust, and from then on
+ * no surface in the application said what had been trusted or offered to undo it. REQUIREMENTS.md
+ * "Self-signed certificates" scopes a pin to "the one host", and a scope nobody can inspect is a scope
+ * taken on faith.
+ *
+ * Settings is the right home for the *standing* fact. Connect answers "can I reach this server"; it is
+ * a transient screen a user visits twice, and the pin outlives both visits. The Server block is
+ * already where the standing facts about the server live - its address, when it last synced, and the
+ * log of what it has been saying - so the question "what is this app trusting" belongs beside them.
+ *
+ * The fingerprint goes on its own line rather than in the row's value slot, because it is 95 characters
+ * and the value slot is a right-aligned fragment. See
+ * [ServerSectionState.trustedCertificateFingerprint] for why it is drawn in full.
  */
 @Composable
-private fun ServerSection(state: ServerSectionState, callbacks: SettingsCallbacks) {
+private fun ServerSection(
+    state: ServerSectionState,
+    armedAction: DestructiveSettingsAction?,
+    callbacks: SettingsCallbacks,
+) {
     SettingsSection(title = "Server") {
         NeedlerSettingsRow(label = state.hostLabel, value = state.username)
         NeedlerSettingsRow(label = "Last synced", value = state.lastSyncedLabel)
+
+        if (state.showCertificateRow) {
+            TrustedCertificateBlock(
+                state = state,
+                armed = armedAction == DestructiveSettingsAction.ForgetCertificate,
+                callbacks = callbacks,
+            )
+        }
 
         val openDiagnostics: (() -> Unit)? = callbacks.onOpenDiagnostics
         if (openDiagnostics != null) {
@@ -377,6 +414,55 @@ private fun ServerSection(state: ServerSectionState, callbacks: SettingsCallback
         if (syncNotice != null) NoticeLine(text = syncNotice)
 
         NeedlerTextButton(text = "Change server", onClick = callbacks.onChangeServer)
+    }
+}
+
+/**
+ * The trusted certificate, its fingerprint, and the way to stop trusting it.
+ *
+ * Three parts because the row alone cannot carry them: the row states *which host* has an exception,
+ * the line under it is the fingerprint the user checks against their own server, and the action is
+ * behind the two-tap confirmation every consequence of this size in this screen is behind. See
+ * [DestructiveSettingsAction.ForgetCertificate] for why two taps rather than one, given that a pin can
+ * be granted again.
+ *
+ * The forget action is absent, not disabled, when nothing is pinned. There is no certificate to forget
+ * and a disabled control would invite the user to work out why.
+ */
+@Composable
+private fun TrustedCertificateBlock(
+    state: ServerSectionState,
+    armed: Boolean,
+    callbacks: SettingsCallbacks,
+) {
+    val colors = NeedlerTheme.colors
+    NeedlerSettingsRow(
+        label = "Trusted certificate",
+        value = state.trustedCertificateValue,
+    )
+
+    val fingerprint: String? = state.trustedCertificateFingerprint
+    if (fingerprint != null) {
+        NoticeLine(text = fingerprint, tone = colors.textMuted)
+    }
+
+    val notice: String? = state.certificateNotice
+    if (notice != null) NoticeLine(text = notice)
+
+    if (armed) {
+        DestructiveConfirmation(
+            action = DestructiveSettingsAction.ForgetCertificate,
+            onConfirm = callbacks.onConfirmDestructiveAction,
+            onCancel = callbacks.onCancelDestructiveAction,
+        )
+    } else if (state.canForgetCertificate) {
+        NeedlerTextButton(
+            text = "Forget this certificate",
+            onClick = {
+                callbacks.onArmDestructiveAction(DestructiveSettingsAction.ForgetCertificate)
+            },
+            color = colors.destructive,
+        )
     }
 }
 
@@ -608,8 +694,10 @@ private fun NotificationsSection(state: NotificationSectionState, callbacks: Set
  *
  * REQUIREMENTS.md replaced screen 12's "Music kept on device: 2.1 GB" and "Device storage limit:
  * 4 GB" with a split, because the two tiers obey opposite rules and one figure could not describe
- * both: downloads are unlimited and never evicted, while the listening cache is bounded by the
- * device's free space. Artwork gets its own line "because it has its own small LRU and is usually
+ * both: **Device** is unlimited and never evicted, while **Temporary** - what listening left
+ * behind - is bounded by the device's free space. The two words are REQUIREMENTS.md
+ * "Vocabulary" again: the tier a user chose is the same word the album screen badges, and the
+ * one they did not choose says how long it lasts. Artwork gets its own line "because it has its own small LRU and is usually
  * tiny; a user hunting for gigabytes should not spend a tap on it", and free space sits beside them
  * because with no limit in the product it is the only thing left to compare against.
  *
@@ -621,8 +709,8 @@ private fun NotificationsSection(state: NotificationSectionState, callbacks: Set
 @Composable
 private fun StorageSection(state: StorageSectionState, callbacks: SettingsCallbacks) {
     SettingsSection(title = "Storage") {
-        NeedlerSettingsRow(label = "Downloaded", value = state.downloadedLabel)
-        NeedlerSettingsRow(label = "Cached while listening", value = state.cachedLabel)
+        NeedlerSettingsRow(label = "Device", value = state.downloadedLabel)
+        NeedlerSettingsRow(label = "Temporary", value = state.cachedLabel)
         NeedlerSettingsRow(label = "Artwork", value = state.artworkLabel)
         NeedlerSettingsRow(label = "Free on this device", value = state.deviceFreeLabel)
 
@@ -632,10 +720,12 @@ private fun StorageSection(state: StorageSectionState, callbacks: SettingsCallba
         }
 
         NeedlerToggleRow(
-            label = "Keep pulled albums on device",
+            label = "Keep pulled albums on the device",
             checked = state.keepPulledAlbumsOnDevice,
             onCheckedChange = callbacks.onKeepPulledAlbumsChange,
-            subtitle = "Anything this device pulls is downloaded straight away.",
+            // Reads the switch rather than describing one of its two states and hoping. See
+            // StorageSectionState.keepPulledAlbumsSubtitle.
+            subtitle = state.keepPulledAlbumsSubtitle,
         )
         NeedlerToggleRow(
             label = "Download to device on Wi-Fi only",

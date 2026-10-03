@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NamedNavArgument
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraph
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -102,7 +103,34 @@ internal val PLAYER_LAYER_ROUTES: Set<String> = setOf(ROUTE_NOW_PLAYING, ROUTE_C
 private const val ARG_ALBUM_ID = "albumId"
 private const val ARG_ARTIST_ID = "artistId"
 private const val ROUTE_ALBUM = "album/{$ARG_ALBUM_ID}"
-private const val ROUTE_ARTIST = "artist/{$ARG_ARTIST_ID}"
+
+/**
+ * The artist name and subtitle the caller already knew, carried as optional
+ * query arguments.
+ *
+ * `ArtistViewModel` has read both from its `SavedStateHandle` since the screen
+ * was written - `ARTIST_NAME_ARG` and `ARTIST_SUBTITLE_ARG` - and `ArtistRoute`'s
+ * KDoc says this file is supposed to supply them. It never did, and the cost was
+ * a real screen: an artist reached from the artist screen's own "Search the
+ * catalogue" rows has no row in the mirror, so the header read "Unknown artist"
+ * and the frames before the discography landed read "That artist is not here".
+ * The names are spelt here to match the view model's constants; `ArtistRouteTest`
+ * asserts the two spellings against those constants, so they cannot drift apart
+ * silently.
+ *
+ * Query arguments and not path segments. A path segment would have to be present
+ * in every artist URL, so `artist/{artistId}` would stop matching and every
+ * caller that has only an MBID - the library, search, an album's artist link, a
+ * notification tap through [NotificationDestination.Artist] - would navigate to a
+ * destination the graph no longer holds. As query arguments with
+ * `nullable = true` and a declared default they are genuinely optional, which is
+ * what [artistArguments] exists to keep in one place.
+ */
+internal const val ARG_ARTIST_NAME = "artistName"
+internal const val ARG_ARTIST_SUBTITLE = "artistSubtitle"
+internal const val ROUTE_ARTIST =
+    "artist/{$ARG_ARTIST_ID}?$ARG_ARTIST_NAME={$ARG_ARTIST_NAME}" +
+        "&$ARG_ARTIST_SUBTITLE={$ARG_ARTIST_SUBTITLE}"
 
 /**
  * Screens 19 and 20, the two sub-screens Settings links to.
@@ -153,7 +181,86 @@ private fun returnToConnect(navController: NavHostController) {
 
 private fun albumRoute(mbid: String): String = "album/$mbid"
 
-private fun artistRoute(mbid: String): String = "artist/$mbid"
+/**
+ * An artist by MBID alone, which is all most callers have.
+ *
+ * Unchanged, and deliberately so: the library, search, an album's artist link,
+ * the player sidebar and a notification tap all reach an artist the mirror has a
+ * row for, and that row is where the name comes from. Carries no query string at
+ * all, so the URL this produces is the same string it has always produced.
+ */
+internal fun artistRoute(mbid: String): String = "artist/$mbid"
+
+/**
+ * An artist the mirror has never heard of, with the name - and only the name the
+ * catalogue actually supplied - carried along.
+ *
+ * ### What this is for
+ *
+ * The artist screen's "Search the catalogue" rows. REQUIREMENTS.md "Placing a
+ * request" gives an artist whose id the server derived from a name no discography
+ * to look up, so the screen offers MusicBrainz's artists of that name instead;
+ * tapping one opens this same destination for an MBID that has no `artist` row
+ * behind it. `refreshArtistDiscography` writes album rows and never an artist
+ * row, so no amount of waiting produces a name. The caller already had one, and
+ * this is how it gets there.
+ *
+ * ### Why the name is encoded
+ *
+ * Artist names carry every character that would otherwise end the route: "AC/DC"
+ * ends the path segment, "Simon & Garfunkel" starts a second query argument,
+ * "Alice?" starts the query early and "#1 Crush" starts a fragment. [Uri.encode]
+ * is the same answer [genreRoute] gives for the same problem, and the navigation
+ * library decodes the value on the way back out - see `GenreViewModel`'s own
+ * KDoc - so nothing is done to it in the view model. A name that broke the route
+ * would be worse than "Unknown artist": the destination would not match at all.
+ *
+ * ### Why a blank name produces no argument
+ *
+ * `?artistName=` reads back as an empty string, and an empty header is the defect
+ * this fixes wearing different clothes. With nothing to say, this falls back to
+ * [artistRoute] and the screen shows "Unknown artist" exactly as before.
+ *
+ * @param subtitle MusicBrainz's disambiguation comment, or null. Null when the
+ *   catalogue sent none - no count and no wording is invented here, because
+ *   `ArtistUiState.subtitle` already has an honest fallback for the case and a
+ *   subtitle minted in the navigation layer would be a claim no source made.
+ */
+internal fun catalogueArtistRoute(mbid: String, name: String, subtitle: String?): String {
+    if (name.isBlank()) return artistRoute(mbid)
+    val withName: String = artistRoute(mbid) + "?" + ARG_ARTIST_NAME + "=" + Uri.encode(name)
+    return if (subtitle.isNullOrBlank()) {
+        withName
+    } else {
+        withName + "&" + ARG_ARTIST_SUBTITLE + "=" + Uri.encode(subtitle)
+    }
+}
+
+/**
+ * The artist destination's arguments, in one place because the optionality is the
+ * whole point of them.
+ *
+ * `nullable = true` **and** `defaultValue = null` on both optional arguments.
+ * Either alone is not enough to make the navigation library treat a query
+ * argument as absent-but-fine, and an argument it considers required is an
+ * argument whose absence stops `artist/{artistId}` matching - which would break
+ * every caller that has only an MBID, the notification tap included. Extracted so
+ * `ArtistRouteTest` asserts the arguments the graph really registers rather than
+ * a copy of them.
+ */
+internal fun artistArguments(): List<NamedNavArgument> = listOf(
+    navArgument(ARG_ARTIST_ID) { type = NavType.StringType },
+    navArgument(ARG_ARTIST_NAME) {
+        type = NavType.StringType
+        nullable = true
+        defaultValue = null
+    },
+    navArgument(ARG_ARTIST_SUBTITLE) {
+        type = NavType.StringType
+        nullable = true
+        defaultValue = null
+    },
+)
 
 private fun playlistRoute(id: String): String = "playlist/$id"
 
@@ -643,10 +750,7 @@ private fun NeedlerHome(
                 )
             }
 
-            composable(
-                route = ROUTE_ARTIST,
-                arguments = listOf(navArgument(ARG_ARTIST_ID) { type = NavType.StringType }),
-            ) {
+            composable(route = ROUTE_ARTIST, arguments = artistArguments()) {
                 ArtistRoute(
                     widthSizeClass = widthSizeClass,
                     onBack = { navController.popBackStack() },
@@ -656,6 +760,14 @@ private fun NeedlerHome(
                     // still belongs to whichever tab it started in, which
                     // [owningTab] reads off the stack rather than off the route.
                     onOpenArtist = { navController.navigate(artistRoute(it.value)) },
+                    // The namesake rows, and the one caller that knows something
+                    // the mirror does not. Same destination, same push, same tab:
+                    // only the two optional arguments differ. See
+                    // [catalogueArtistRoute] for why the name is encoded and why a
+                    // missing subtitle is left missing.
+                    onOpenCatalogueArtist = { mbid, name, subtitle ->
+                        navController.navigate(catalogueArtistRoute(mbid.value, name, subtitle))
+                    },
                 )
             }
 

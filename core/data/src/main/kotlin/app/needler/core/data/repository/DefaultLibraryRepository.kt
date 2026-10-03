@@ -26,10 +26,12 @@ import app.needler.core.data.sync.AlbumSyncer
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumListKind
 import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.ArtistDiscographyPage
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.Genre
 import app.needler.core.domain.model.LibraryStats
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.map
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.StatsSource
 import app.needler.core.domain.model.Track
@@ -39,6 +41,7 @@ import app.needler.core.domain.model.TrackListKind
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.network.v1.V1Api
 import app.needler.core.network.v1.dto.ArtistReleasesDto
+import app.needler.core.network.v1.dto.ReleaseItemDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -351,7 +354,10 @@ public class DefaultLibraryRepository(
     // ------------------------------------------------------------------ refreshes
 
     /**
-     * Fetches the artist's catalogue discography and merges it into the mirror.
+     * Fetches the first page of the artist's catalogue discography and merges it into the mirror.
+     *
+     * The body is [refreshArtistDiscographyPage], which this is the no-cursor entry point to; see it
+     * for the paging and this for what gets written.
      *
      * Merging means **inserting only what the mirror does not already have**. An owned album's row
      * knows its state, its track count, its size and its format; the catalogue copy knows none of
@@ -414,11 +420,65 @@ public class DefaultLibraryRepository(
      * owned row's artist id comes from Subsonic sync, which is authoritative about the server's own
      * credit, and two writers for one column is how they come to disagree.
      */
-    override suspend fun refreshArtistDiscography(mbid: ArtistMbid): Outcome<Unit> {
+    override suspend fun refreshArtistDiscography(mbid: ArtistMbid): Outcome<Unit> =
+        refreshArtistDiscographyPage(mbid, offset = 0).map { }
+
+    /**
+     * One page of the discography, written into the mirror, with the cursor reported back.
+     *
+     * Everything [refreshArtistDiscography] documents about *what is written* applies here unchanged -
+     * this is the body that one now delegates to - and what follows is only about the paging.
+     *
+     * ## The pages that were never asked for
+     *
+     * `v1.artistReleases` was called with its own defaults, `limit = 50, offset = 0`, and the
+     * response's `has_more`, `next_offset`, `returned_count` and `source_total_count` were all
+     * discarded. A prolific artist therefore got the first fifty release groups across all three
+     * buckets and the screen above this had no way to know that, so it drew them and then said, in
+     * `CATALOGUE_COMPLETE`, that this was the artist's whole discography. A quietly truncated list
+     * presented as a complete one is worse than a visibly short one.
+     *
+     * The page size stays at the endpoint's own default of fifty, named here rather than inherited so
+     * that the figure is visible beside the paging that depends on it. REQUIREMENTS.md "Performance
+     * budgets" is the reason it is not raised to swallow a discography whole: every page of this
+     * endpoint is resolved upstream against MusicBrainz, which is what the `warming` flag exists to
+     * report, so a bigger page is a longer wait for the first row rather than a cheaper fetch.
+     *
+     * ## Why this does not walk the pages itself
+     *
+     * The tempting version loops until `has_more` is false and hands the caller a complete
+     * discography. Rejected: the loop's length is set by the artist, not by the user - a composer with
+     * four hundred release groups is eight round trips through MusicBrainz, started by opening a
+     * screen and cancellable only by leaving it - and the mirror would fill with rows nobody scrolled
+     * to. Returning the cursor instead puts the decision where REQUIREMENTS.md "Library browse" puts
+     * the discography, on the screen, and the rows that have arrived are already drawn while the next
+     * page is asked for.
+     *
+     * ## `has_more` is believed only when it comes with somewhere to go
+     *
+     * The wire can say `has_more: true` with no `next_offset` and nothing returned to advance past,
+     * and a caller that trusted the flag alone would ask for the same offset for ever. The cursor is
+     * resolved here, once: the server's `next_offset` when it advances, else this offset plus what
+     * this page returned, else nothing - the page reports no more. [ArtistDiscographyPage] then has no
+     * way to express "more, somewhere", which is the state that would have hung the list.
+     *
+     * ## An empty page is the end, except on the first one
+     *
+     * A `warming` response with nothing in it is a failure, which is the fix [refreshArtistDiscography]
+     * documents and which stands - but only for the first page. Past that, rows have already landed in
+     * the mirror and are on the screen, so an empty page is simply where the discography stopped;
+     * reporting it as a capability failure would retract a discography the user is reading.
+     */
+    override suspend fun refreshArtistDiscographyPage(
+        mbid: ArtistMbid,
+        offset: Int,
+    ): Outcome<ArtistDiscographyPage> {
         if (!mbid.isCatalogueIdentifier) {
             return Outcome.Failure(NeedlerError.CapabilityUnavailable(NAME_DERIVED_ARTIST))
         }
-        val call: Outcome<ArtistReleasesDto> = networkCall { v1.artistReleases(mbid.value) }
+        val call: Outcome<ArtistReleasesDto> = networkCall {
+            v1.artistReleases(mbid.value, limit = DISCOGRAPHY_PAGE_SIZE, offset = offset)
+        }
         val releases: ArtistReleasesDto = when (call) {
             is Outcome.Failure -> return call
             is Outcome.Success -> call.value
@@ -426,13 +486,13 @@ public class DefaultLibraryRepository(
         val artist: ArtistEntity? = artistDao.getArtist(mbid.value)
         val artistName: String = artist?.name.orEmpty()
         val now: Long = nowMillis()
-        val incoming: List<Album> = (releases.albums + releases.eps + releases.singles)
-            .mapNotNull { CatalogueMappers.album(it, artistName, mbid) }
+        val wire: List<ReleaseItemDto> = releases.albums + releases.eps + releases.singles
+        val incoming: List<Album> = wire.mapNotNull { CatalogueMappers.album(it, artistName, mbid) }
         if (incoming.isEmpty()) {
-            return if (releases.warming) {
+            return if (releases.warming && offset == 0) {
                 Outcome.Failure(NeedlerError.CapabilityUnavailable(DISCOGRAPHY_WARMING))
             } else {
-                Outcome.Ok
+                Outcome.Success(pageOf(releases, offset = offset, returnedOnWire = wire.size))
             }
         }
 
@@ -449,7 +509,36 @@ public class DefaultLibraryRepository(
         if (artist != null && releases.sourceTotalCount != null) {
             artistDao.upsert(artist.copy(updatedAt = now))
         }
-        return Outcome.Ok
+        return Outcome.Success(pageOf(releases, offset = offset, returnedOnWire = wire.size))
+    }
+
+    /**
+     * What this response says about the rest of the discography.
+     *
+     * [returnedOnWire] is counted before mapping, because it is the figure the *offset* has to advance
+     * by: a release group the server sent and `CatalogueMappers.album` dropped - one with no id - still
+     * occupies a place in the sequence being paged, and skipping it would re-request a page shifted by
+     * however many were unusable. The server's own `returned_count` is preferred where it sent one,
+     * and it is only ever absent as the field's zero default.
+     */
+    private fun pageOf(
+        releases: ArtistReleasesDto,
+        offset: Int,
+        returnedOnWire: Int,
+    ): ArtistDiscographyPage {
+        val returned: Int = if (releases.returnedCount > 0) releases.returnedCount else returnedOnWire
+        val named: Int? = releases.nextOffset
+        return ArtistDiscographyPage(
+            offset = offset,
+            returned = returned,
+            nextOffset = when {
+                !releases.hasMore -> null
+                named != null && named > offset -> named
+                returned > 0 -> offset + returned
+                else -> null
+            },
+            sourceTotal = releases.sourceTotalCount,
+        )
     }
 
     /**
@@ -511,6 +600,15 @@ public class DefaultLibraryRepository(
          * names the wire field so that the next reader of a log line can find the flag that produced
          * it. Unlike that one it is worth asking again about; see [refreshArtistDiscography].
          */
+        /**
+         * How many release groups one page of a discography asks for.
+         *
+         * The endpoint's own default, named here rather than inherited from `V1Api.artistReleases`
+         * because the paging in [refreshArtistDiscographyPage] is written against this figure and a
+         * default that moved underneath it would change where the cursor lands.
+         */
+        const val DISCOGRAPHY_PAGE_SIZE: Int = 50
+
         const val DISCOGRAPHY_WARMING: String =
             "catalogue discography: the server is still resolving this artist upstream (warming)"
 

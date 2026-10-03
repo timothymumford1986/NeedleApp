@@ -6,8 +6,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -47,6 +50,22 @@ import app.needler.core.design.theme.NeedlerTheme
  *
  * `FlowRow`, not `Row`: a long artist and a long album title do not fit one line at 200% text scale, and
  * REQUIREMENTS.md asks that text scale to 200% without clipping.
+ *
+ * ## Why the link reserves 48dp of height it does not draw into
+ *
+ * REQUIREMENTS.md "Accessibility" puts the floor for any control at 48dp. One line of the player's byline
+ * type measures about 20dp, so the link was a little under half the legal target - and because the glyph
+ * it replaced was dead text, nothing in the pack ever drew a control that small for anyone to notice.
+ * [androidx.compose.foundation.layout.defaultMinSize] is applied **before** the `clickable`, so the 48dp
+ * belongs to the node that takes the gesture and the semantics rather than to a parent that merely
+ * surrounds it; a floor set after the gesture raises the layout and leaves the target where it was.
+ *
+ * The text is then re-centred inside that height with `wrapContentHeight`, and the row aligns its two
+ * halves on the centre line for the same reason: without both, the artist would sit at the top of a
+ * 48dp box with 28dp of nothing under it, and the album half beside it would read as a separate line.
+ * The alternative was `minimumInteractiveComponentSize`, which `NeedlerToolbarPill` uses and which costs
+ * the same 48dp of layout - rejected here only because it expands the pointer bounds rather than the
+ * node, so the guarantee becomes one a semantics assertion cannot see.
  */
 @Composable
 fun TrackByline(
@@ -62,6 +81,9 @@ fun TrackByline(
     FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(DOT_GAP),
+        // The artist half is 48dp tall when it is a link and 20dp when it is not; centring keeps the
+        // album half on the same line as the artist in both cases.
+        itemVerticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = artistName,
@@ -73,8 +95,11 @@ fun TrackByline(
                 Modifier
             } else {
                 Modifier
+                    // REQUIREMENTS.md "Accessibility": 48dp, on the node that takes the gesture.
+                    .defaultMinSize(minHeight = NeedlerTheme.sizes.minTouchTarget)
                     .clickable(role = Role.Button, onClick = onOpenArtist)
                     .semantics { contentDescription = "Go to " + artistName }
+                    .wrapContentHeight(Alignment.CenterVertically)
             },
         )
         if (album != null) {

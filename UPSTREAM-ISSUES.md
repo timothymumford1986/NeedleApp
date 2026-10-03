@@ -44,11 +44,25 @@ unambiguous MusicBrainz entry — renders:
 > Your server matched this artist by name rather than to MusicBrainz, so there is no full
 > discography to look up. Everything you own by them is listed above.
 
-With no artist MBID there is no key to request a discography with, so "show me this artist's other
-records" is impossible for that artist no matter what the client does.
+With no artist MBID there is no key to request a discography with, so that *entry* can never have a
+discography fetched for it. The route answers
+`400 Use the local library artist route for a DroppedNeedle artist ID`, and Needler no longer makes
+the call: `ArtistMbid.isNameDerived` is true for a UUID v3 or v5, which only the server can have
+minted, so the refusal is known before the round trip.
+
+**What Needler does about it meanwhile.** The *name* is still a usable catalogue query even when the
+id is not, so the artist screen offers **Search the catalogue**, which asks
+`GET /api/v1/search` for the artists bucket under that name and lists the candidates that came back
+with real MusicBrainz ids. Tapping one opens the artist screen for that id, where the discography
+does load and every un-owned record carries a Pull. The candidates are shown rather than resolved
+automatically and bound to the library's artist: the server declined to assert that identity, and
+MusicBrainz holds several artists per name - the reporting device found three further Didos - so
+guessing would put a stranger's discography under the user's own records.
 
 **What would fix it upstream:** resolve artists to MusicBrainz IDs at import, or expose an endpoint
-that resolves a name to candidate artist MBIDs so a client can offer the user a choice.
+that resolves a name to candidate artist MBIDs so a client can offer the user a choice. Either would
+remove a detour the user currently has to take by hand, for an artist MusicBrainz knows perfectly
+well.
 
 ## 3. Items held for review can only be released from the web interface
 

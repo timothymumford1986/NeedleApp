@@ -159,6 +159,50 @@ data class ArtistUiState(
     val namesakeSearchDone: Boolean = false,
 
     /**
+     * The catalogue has more release groups for this artist than have been fetched.
+     *
+     * `ArtistDiscographyPage.hasMore`, which is the server's `has_more` reduced to "there is an
+     * offset we could ask for". The defect this closes was silent: the fetch asked for the
+     * endpoint's first fifty release groups and nothing anywhere knew there were more, so a
+     * prolific artist's screen listed fifty and then claimed, in [CATALOGUE_COMPLETE]'s own words,
+     * that this was their whole discography.
+     */
+    val discographyHasMore: Boolean = false,
+
+    /** The next page is in flight. */
+    val loadingMoreDiscography: Boolean = false,
+
+    /**
+     * The next page did not arrive.
+     *
+     * Separate from [discographyFetchFailed], which is about the list already on screen being a
+     * cached one. This is about the *next* page, it is answered by tapping the same row again, and
+     * conflating them would put two sentences on the screen that each tell the reader to use a
+     * different control.
+     */
+    val moreDiscographyFailed: Boolean = false,
+
+    /**
+     * How many release groups the catalogue has been asked for so far, summed over the pages fetched.
+     *
+     * Not `catalogueAlbums.size`. The response counts every release group it holds for the artist,
+     * owned and un-owned alike, and the owned ones are dropped on the join with the mirror - so the
+     * rows on screen are fewer than the catalogue has answered with, and comparing them against
+     * [discographyTotal] would report a shortfall that is really the user's own library.
+     */
+    val discographyFetched: Int = 0,
+
+    /**
+     * How many release groups the catalogue holds for this artist, or null when the server did not
+     * say.
+     *
+     * `source_total_count`, which this endpoint sends and which `GET /api/v1/downloads` - blind by
+     * REQUIREMENTS.md "Queue screen requirements" - does not. It is null while the artist is still
+     * warming upstream, so every use of it has to survive not having it.
+     */
+    val discographyTotal: Int? = null,
+
+    /**
      * Tracks of every owned album, in the order the owned list is drawn, for Play
      * and Shuffle.
      *
@@ -198,7 +242,57 @@ data class ArtistUiState(
      * worse than the silence it replaces.
      */
     val discographyEmpty: Boolean
-        get() = discographySettled && !discographyUnavailable && catalogueAlbums.isEmpty()
+        get() = discographySettled &&
+            !discographyUnavailable &&
+            !discographyHasMore &&
+            catalogueAlbums.isEmpty()
+
+    /**
+     * The one row under the discography: show more, looking, a failure, or nothing.
+     *
+     * One type for the three states because they occupy one place and only one can be true, which is
+     * the shape `SearchUiState.moreRow` already settled on for the same problem in the search lane -
+     * and there the alternative is recorded too: the screen must not be the thing that decides which,
+     * or the two screens drift into offering a page differently.
+     *
+     * A name-derived artist is excluded before anything else. Nothing was ever fetched for them and
+     * nothing ever will be, so the only row they get is the catalogue search the notice names; see
+     * [canFindInCatalogue].
+     *
+     * A failure outranks the offer and stays tappable, because tapping it asks for the same page
+     * again. The end of the discography is not a row at all: there is nothing left to ask for, and
+     * [discographyEmpty]'s sentence covers the case where there never was anything.
+     */
+    val discographyMoreRow: DiscographyMoreRow?
+        get() = when {
+            artistNotInCatalogue -> null
+            loadingMoreDiscography -> DiscographyMoreRow(label = LOOKING_UP_MORE_RELEASES, enabled = false)
+            moreDiscographyFailed -> DiscographyMoreRow(
+                label = MORE_RELEASES_FAILED,
+                isProblem = true,
+            )
+            discographyHasMore -> DiscographyMoreRow(label = showMoreLabel())
+            else -> null
+        }
+
+    /**
+     * `Show more · 50 of 212 releases looked up`, or just `Show more from the catalogue`.
+     *
+     * The figures are the server's own: [discographyFetched] is what the pages returned and
+     * [discographyTotal] is `source_total_count`. It is a running count and deliberately not a page
+     * number - REQUIREMENTS.md's paging note for `GET /api/v1/downloads` rules out "page 3 of 7" where
+     * the server reports no total, and this endpoint reporting one still does not make its offset
+     * cursor into a page index.
+     *
+     * The total is dropped when it does not exceed what has been fetched. A server that answers
+     * `has_more` with a total already reached is contradicting itself, and "50 of 50 releases looked
+     * up" next to an offer of more would make the screen look broken rather than the response.
+     */
+    private fun showMoreLabel(): String {
+        val total: Int = discographyTotal?.takeIf { it > discographyFetched }
+            ?: return SHOW_MORE_RELEASES
+        return "Show more · " + discographyFetched + " of " + total + " releases looked up"
+    }
 
     /**
      * There is a discography on screen, and it is the cached one: the lane that refreshes it failed.
@@ -353,3 +447,18 @@ data class ArtistUiState(
         const val NOT_IN_LIBRARY_YET: String = "Not in your library yet"
     }
 }
+
+/**
+ * The row under the discography.
+ *
+ * One type for the offer, the wait and the failure, because the list draws exactly one row there.
+ * See [ArtistUiState.discographyMoreRow], which decides which of the three it is; the screen only
+ * draws it and reports the tap.
+ */
+data class DiscographyMoreRow(
+    val label: String,
+    /** False while a page is in flight: there is nothing a second tap could do. */
+    val enabled: Boolean = true,
+    /** True when the label is bad news, which the screen tints differently. */
+    val isProblem: Boolean = false,
+)

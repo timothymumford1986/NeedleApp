@@ -55,8 +55,99 @@ public data class AudioQuality(
     public val isLossless: Boolean
         get() = format == AudioFormat.FLAC || format == AudioFormat.ALAC || format == AudioFormat.WAV
 
+    /**
+     * The bitrate as a badge should state it: [bitrateKbps] rounded to the nearest 10 kbps, or null
+     * when there is none worth stating.
+     *
+     * ## What this fixes
+     *
+     * The badges read `MP3 319` and `MP3 280`. Both numbers are true and neither is useful.
+     * [bitrateKbps] is the server's *average* over a variable-bitrate file, so its final digit is a
+     * property of which frames that particular encode happened to need and how long the track is - it
+     * is not a property of the music, it changes between two rips of the same CD at the same setting,
+     * and a user reading `319` means `320`.
+     *
+     * Rounding to the nearest 10 kbps moves a figure by at most 5 - 1.6% at 320, 3.9% at 128 - which
+     * is below the precision an average bitrate has in the first place. `319` and `321` both land on
+     * `320`, which is the number the user has in their head, and it is not a claim of constant 320:
+     * the badge has never said CBR or VBR and does not start now.
+     *
+     * ## 280 stays 280, and that is the whole point
+     *
+     * The obvious shortcut is to snap every lossy figure to the nearest rung of the ladder - 320, 256,
+     * 192, 128 - and it is rejected, because the only way to place 280 on that ladder is to call it
+     * something it is not. A 280 kbps average *is* audibly and measurably less than a 320 kbps one,
+     * and a badge that said otherwise would be the app lying about the quality of the user's own
+     * library to tidy up a row. Banding was the same idea with a prettier name and the same hole: the
+     * only honest band label for 280 is a range, which is longer than the badge and says less than the
+     * number.
+     *
+     * A `~` prefix on every lossy badge was the third option. It is honest, and it was rejected for
+     * being punctuation rather than information: it would appear on every lossy row in the library,
+     * so it would distinguish nothing, and it does not answer the question the user is actually asking
+     * - which is whether this is the 320 they ripped.
+     *
+     * ## The floor
+     *
+     * Anything from 1 to 4 kbps would round to zero, and `MP3 0` is a worse figure than the one this
+     * replaces. Such a file is a server bug or a truncated header rather than a real encode, so it is
+     * reported at the lowest figure the rounding can express rather than being hidden: a badge reading
+     * `MP3 10` on a file that cannot be right is a prompt to go and look.
+     */
+    public val badgeBitrateKbps: Int?
+        get() {
+            val raw: Int = bitrateKbps ?: return null
+            if (raw <= 0) return null
+            // A figure that is already a rung, or a hair off one, is reported as that rung. Rounding
+            // to ten alone turned 192 into 190 and 256 into 260, which is worse than the noise it was
+            // introduced to remove: 192 and 256 are exact, standard, and what the user's ripper
+            // actually wrote, while 190 and 260 are figures no encoder has ever produced. The cost of
+            // rounding was meant to be borne by averages, not by the exact values.
+            STANDARD_RUNGS_KBPS.firstOrNull { rung ->
+                // Within 2%, as integers: |raw - rung| / rung <= 1/50.
+                val delta: Int = if (raw > rung) raw - rung else rung - raw
+                delta * RUNG_SNAP_DIVISOR <= rung
+            }?.let { return it }
+            return ((raw + BADGE_ROUNDING / 2) / BADGE_ROUNDING * BADGE_ROUNDING)
+                .coerceAtLeast(BADGE_ROUNDING)
+        }
+
     public companion object {
         public val Unknown: AudioQuality = AudioQuality(format = null, bitrateKbps = null)
+
+        /**
+         * The step [badgeBitrateKbps] rounds to when no rung is near enough to snap to.
+         *
+         * 10 rather than 1 because the ones digit of an average is noise, and rather than 16 or 32 -
+         * the steps the MP3 and AAC tables actually move in - because a badge is read as a decimal
+         * number by a person and `MP3 272` is not an improvement on `MP3 280`.
+         */
+        public const val BADGE_ROUNDING: Int = 10
+
+        /**
+         * The figures an encoder actually writes, checked before the rounding runs.
+         *
+         * These are the MP3 and AAC constant-bitrate tables. A file encoded at one of them reports
+         * that figure exactly, and a variable-bitrate encode targeting one averages within a percent
+         * or so of it - so a value this close is evidence of that target rather than a coincidence.
+         *
+         * Descending, because the search takes the first match and the high end is where the rungs
+         * crowd together: 320 and 256 are 25% apart, but at the bottom 32 and 40 are close enough that
+         * a 2% window around each never overlaps either way.
+         */
+        public val STANDARD_RUNGS_KBPS: List<Int> =
+            listOf(320, 256, 224, 192, 160, 128, 112, 96, 80, 64, 56, 48, 40, 32)
+
+        /**
+         * How near a rung has to be to win: within `1 / 50`, i.e. 2%.
+         *
+         * Wide enough that a VBR encode targeting 192 and averaging 190 is reported as the 192 it
+         * was aiming at, and narrow enough that 280 cannot reach either 256 (9.4% away) or 320
+         * (12.5%) and so keeps its own figure - which is the case the whole property exists to
+         * protect. REQUIREMENTS.md's hazard table is explicit that the app must not report a quality
+         * the file does not have.
+         */
+        public const val RUNG_SNAP_DIVISOR: Int = 50
     }
 }
 

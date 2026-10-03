@@ -56,7 +56,15 @@ public class FakeV1Api : V1Api {
     public var searchBucketResponse: (SearchBucket, Int) -> SearchBucketResponseDto =
         { bucket, offset -> SearchBucketResponseDto(bucket = bucket.wire, offset = offset) }
     public var suggestResponse: (String) -> SuggestResponseDto = { SuggestResponseDto() }
-    public var artistReleasesResponse: (String) -> ArtistReleasesDto = { ArtistReleasesDto() }
+    /**
+     * What `GET /api/v1/artists/{mbid}/releases` answers, by artist MBID and requested offset.
+     *
+     * The offset is a parameter for the reason [searchBucketResponse]'s is: the endpoint is paged,
+     * and a fake that ignored the offset would answer a paging test's second request with its first
+     * page for ever.
+     */
+    public var artistReleasesResponse: (String, Int) -> ArtistReleasesDto =
+        { _, offset -> ArtistReleasesDto(offset = offset) }
     public var requestAlbumResponse: (AlbumRequestDto) -> RequestAcceptedDto =
         { RequestAcceptedDto(success = true, musicbrainzId = it.musicbrainzId, status = "pending") }
     public var requestAlbumsResponse: (BatchAlbumRequestDto) -> BatchRequestResponseDto =
@@ -193,8 +201,8 @@ public class FakeV1Api : V1Api {
         limit: Int,
         offset: Int,
     ): ArtistReleasesDto {
-        record("artistReleases(" + artistMbid + ")")
-        return artistReleasesResponse(artistMbid)
+        record("artistReleases(" + artistMbid + ", limit=" + limit + ", offset=" + offset + ")")
+        return artistReleasesResponse(artistMbid, offset)
     }
 
     override suspend fun requestAlbum(request: AlbumRequestDto): RequestAcceptedDto {

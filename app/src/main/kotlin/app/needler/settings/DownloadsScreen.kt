@@ -34,7 +34,7 @@ import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.DownloadedAlbum
 
 /**
- * The Downloaded albums screen: everything on this device, largest first, each one removable.
+ * The albums-on-this-device screen: everything on this device, largest first, each one removable.
  *
  * The design pack has no artboard for it - screen 12 drew this list inline - so every layout decision
  * here is an inference, framed with [SettingsSubScreenHeader] so it reads as a sibling of Licences,
@@ -253,7 +253,7 @@ internal fun DownloadedAlbumRow(
 }
 
 /** The screen's own title, which is also the label of the Settings row that opens it. */
-private const val DOWNLOADS_TITLE: String = "Downloaded albums"
+private const val DOWNLOADS_TITLE: String = "Albums on this device"
 
 /**
  * Why the list is ordered the way it is, and why nothing ever leaves it on its own.
@@ -272,9 +272,9 @@ private const val EXPLAINER: String =
  *
  * It names both ways music gets here, because a blank screen with no explanation reads as a fault
  * rather than as an empty state - and because the second way is a switch on the screen the reader
- * just came from. The control is called "Pull local" on an album, which is what it has to be called
- * here too.
+ * just came from. The control is called "Pull to device" on an album, which is what it has to be
+ * called here too.
  */
 private const val EMPTY: String =
-    "Nothing is downloaded to this device. \"Pull local\" on an album downloads it, and \"Keep " +
-        "pulled albums on device\" in Settings downloads anything this device pulls."
+    "Nothing is on this device yet. \"Pull to device\" on an album downloads it, and \"Keep " +
+        "pulled albums on the device\" in Settings downloads anything this device pulls."

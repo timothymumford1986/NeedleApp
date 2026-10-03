@@ -8,7 +8,7 @@ import app.needler.core.domain.model.ReleaseGroupMbid
  * One node of the tree Android Auto walks, decoded from a browse media id.
  *
  * REQUIREMENTS.md "Android Auto" fixes the shape and this type enumerates it: "The browse tree mirrors the
- * app: Library with albums, artists and songs; Recently added; Playlists; Favourites; On device." Each of
+ * app: Library with albums, artists and songs; Recently added; Playlists; Favourites; Device." Each of
  * those is a node, and so is each thing one of them opens - one album, one artist, one playlist, one genre.
  *
  * ## Why a type rather than the id string
@@ -55,7 +55,7 @@ public sealed interface BrowseNode {
     /**
      * Downloaded albums, which play with no network at all.
      *
-     * "On device" is the product's fixed word for this (REQUIREMENTS.md "Vocabulary"), and in a car it is the
+     * "Device" is the product's fixed word for this (REQUIREMENTS.md "Vocabulary"), and in a car it is the
      * node that matters most: a tunnel, a car park or a rural road is the normal condition, not the
      * exception.
      */

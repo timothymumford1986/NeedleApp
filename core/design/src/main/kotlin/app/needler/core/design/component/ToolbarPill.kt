@@ -1,7 +1,5 @@
 package app.needler.core.design.component
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,7 +12,6 @@ import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -86,6 +83,15 @@ private val ToolbarIconPillWidth: Dp = 44.dp
  * carrying the click — was what the local version did, and it puts the click on an unclipped
  * rectangle, so the press indication is a square around a pill. Clipping before the click is what
  * keeps the ripple the shape of the control.
+ *
+ * ## The press goes through the shared surface now
+ *
+ * The clip-fill-border-press sequence below was this file's own, and the paragraph above is the reason
+ * it was written out by hand. It is [needlerPressSurface]'s sequence now, which is what the note above
+ * said the end state should be — the merge it handed over, taken. The reason it matters beyond tidiness
+ * is REQUIREMENTS.md "Motion": press feedback is suppressed to an instant, held state when the system
+ * animator duration scale is zero, and a chain that composes its own press is a chain that does not
+ * hear about that. See [app.needler.core.design.motion.needlerPressIndication].
  *
  * @param contentDescription what a screen reader announces. Required, not nullable, and separate
  *   from [text]: the pack labels the sort control `aria-label="Sort: recently added"` while drawing
@@ -188,10 +194,22 @@ private fun Modifier.toolbarPillSurface(
         .minimumInteractiveComponentSize()
         .then(if (fixedWidth == null) Modifier else Modifier.width(fixedWidth))
         .defaultMinSize(minHeight = sizes.pillMinHeight)
-        .clip(shape)
-        .background(colors.surface)
-        .border(sizes.hairlineThickness, colors.hairline, shape)
-        .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        .needlerPressSurface(
+            shape = shape,
+            interaction = { source ->
+                Modifier.clickable(
+                    interactionSource = source,
+                    // Drawn by the helper, above this node and inside the clip. Not suppressed.
+                    indication = null,
+                    enabled = enabled,
+                    role = Role.Button,
+                    onClick = onClick,
+                )
+            },
+            background = colors.surface,
+            borderColor = colors.hairline,
+            borderWidth = sizes.hairlineThickness,
+        )
         // A merging node, so the pill is one target to a screen reader whatever it holds, and the
         // description below is the whole of what is announced.
         .semantics(mergeDescendants = true) { this.contentDescription = contentDescription }

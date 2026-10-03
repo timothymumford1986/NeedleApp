@@ -69,7 +69,7 @@ public object MediaId {
     /** Starred albums, artists and songs. */
     public const val BROWSE_FAVOURITES: String = BROWSE_PREFIX + "favourites"
 
-    /** Downloaded albums: REQUIREMENTS.md "Vocabulary" fixes the words "On device" for this tier. */
+    /** Downloaded albums: REQUIREMENTS.md "Vocabulary" fixes the word "Device" for this tier. */
     public const val BROWSE_ON_DEVICE: String = BROWSE_PREFIX + "on-device"
 
     /** Separates a crate row's sequence from the track it holds. */

@@ -30,9 +30,9 @@ import org.robolectric.annotation.GraphicsMode
  *
  * ## Why this file exists beside the screenshot test
  *
- * The row used to read Play, Shuffle, the crate menu, Pull local — an overflow sitting between two
+ * The row used to read Play, Shuffle, the crate menu, Pull to device — an overflow sitting between two
  * named actions, with the named one that downloads a whole record pushed out past the dots. It now
- * reads Play, Shuffle, Pull local, the crate menu. The reasoning is on `AlbumActions` under "Where
+ * reads Play, Shuffle, Pull to device, the crate menu. The reasoning is on `AlbumActions` under "Where
  * the overflow sits"; this is what stops the next edit undoing it.
  *
  * `album-crate-control-phone.png` cannot. A render with the dots in the middle is a PNG of exactly
@@ -69,7 +69,7 @@ class AlbumActionOrderTest {
     val compose = createComposeRule()
 
     @Test
-    fun `the overflow is last, after Pull local`() {
+    fun `the overflow is last, after Pull to device`() {
         showAlbum()
 
         assertEquals(
@@ -90,7 +90,7 @@ class AlbumActionOrderTest {
     }
 
     /**
-     * With downloads forbidden there is no Pull local, and the menu is still the last thing.
+     * With downloads forbidden there is no Pull to device, and the menu is still the last thing.
      *
      * The control is inside `if (state.downloadAllowed)`, so the order has to hold with it absent
      * as well as present — REQUIREMENTS.md requires every pin affordance hidden when the
@@ -190,7 +190,7 @@ class AlbumActionOrderTest {
     /**
      * The `PLAY` row, which is the only state that has four controls in it.
      *
-     * `AlbumState.Owned` rather than `Pinned`, so the download control reads "Pull local" — the
+     * `AlbumState.Owned` rather than `Pinned`, so the download control reads "Pull to device" — the
      * named action the overflow used to sit in front of.
      */
     private fun owned(downloadAllowed: Boolean): AlbumUiState = AlbumUiState(
@@ -213,7 +213,7 @@ class AlbumActionOrderTest {
 
         const val PLAY = "Play Submarine"
         const val SHUFFLE = "Shuffle Submarine"
-        const val PULL_LOCAL = "Pull local. Download Submarine to this device"
+        const val PULL_LOCAL = "Pull to device. Download Submarine to this device"
         const val CRATE_MENU = "Crate actions for Submarine. Add to the crate, or play next."
     }
 }

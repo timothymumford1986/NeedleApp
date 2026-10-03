@@ -1,6 +1,6 @@
 package app.needler.core.design.component
 
-import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.Indication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.needler.core.design.motion.needlerPressIndication
 import app.needler.core.design.theme.NeedlerTheme
 
 /**
@@ -97,43 +98,60 @@ enum class NeedlerButtonSize {
  * row's rectangular ripple is correct, because a list row is a rectangle - and it would still leave
  * every existing chain to be found and fixed one at a time.
  *
- * ## What it does not do
+ * ## It now also chooses the indication, and that is new
  *
- * It does not choose the indication. The press feedback stays whatever `LocalIndication` provides,
- * which under [app.needler.core.design.theme.NeedlerTheme] is the platform ripple; this function
- * only decides what shape that ripple is allowed to be. Nothing here suppresses feedback, and
- * nothing here invents any.
+ * It used to take whatever `LocalIndication` provided and only decide what shape that was allowed to
+ * be. The note that stood here recorded the consequence as a decision still to take: the platform
+ * ripple is Material's own animation, it does not consult
+ * [app.needler.core.design.motion.LocalReducedMotion], and so press feedback was the last animation
+ * in the application running outside the policy REQUIREMENTS.md "Motion" sets. That decision has been
+ * taken - under reduced motion the pressed state appears instantly and is held rather than animating
+ * in - and [needlerPressIndication] is where it lives and why.
  *
- * Note for REQUIREMENTS.md "Motion", which asks that animation be suppressed when the system
- * animator duration scale is zero: the ripple is the platform's own animation and it does **not**
- * consult [app.needler.core.design.motion.LocalReducedMotion]. That is the behaviour as it stands
- * and this change does not alter it either way - a control with no press feedback at all is worse
- * than one with an instant one, so the policy is a decision to take deliberately rather than a side
- * effect of fixing a shape.
+ * This function is where it is applied, because this is the one place in the product where press
+ * feedback is composed. Applying it anywhere else means applying it five times.
+ *
+ * ## Why the gesture arrives as a lambda rather than as a finished modifier
+ *
+ * Because an [Indication] cannot be attached to a node without the [MutableInteractionSource] the
+ * gesture reports into, and the gesture is the caller's to build. So this function creates the source,
+ * hands it to the caller to build the gesture around, and keeps the indication for itself. The caller
+ * passes `indication = null` to its own `clickable` - it has nothing to draw with and nowhere correct
+ * to draw it, since the indication belongs above the gesture and below the clip.
+ *
+ * The rejected alternative was a second parameter taking the source, leaving the caller to `remember`
+ * one and pass the same instance twice. It compiles when the two are different objects, and the
+ * symptom is a control that is pressed and never lights up - exactly the class of silent fault the
+ * ordering guarantee above was built to make impossible.
  *
  * @param shape the control's own shape - the same value its fill and outline are drawn with. Pass it
  *   even for a barely-rounded control: clipping to a 10dp radius costs nothing and says out loud
  *   that the press was meant to follow the control.
- * @param interaction the gesture node: `Modifier.clickable`, `selectable`, `toggleable` or
- *   `combinedClickable`. Handed in rather than built here so one helper serves all four, and
- *   *placed* here rather than by the caller, which is the entire point.
+ * @param interaction builds the gesture node - `Modifier.clickable`, `selectable`, `toggleable` or
+ *   `combinedClickable` - around the interaction source it is handed. One helper serves all four, and
+ *   the gesture is *placed* here rather than by the caller, which is the entire point.
  * @param background [Color.Transparent] for an outlined control. An outlined control still needs the
- *   clip - what is being shaped is the indication, not the fill.
- * @param borderColor `null` for no outline. Drawn before [interaction] so a press lands on top of
- *   the hairline rather than underneath it.
+ *   clip - what is being shaped is the indication, not the fill. It is also what decides whether the
+ *   reduced-motion press overlay is drawn pale or dark; see [needlerPressIndication].
+ * @param borderColor `null` for no outline. Drawn before the press so a press lands on top of the
+ *   hairline rather than underneath it.
  */
 @Composable
 fun Modifier.needlerPressSurface(
     shape: Shape,
-    interaction: Modifier,
+    interaction: (interactionSource: MutableInteractionSource) -> Modifier,
     background: Color = Color.Transparent,
     borderColor: Color? = null,
     borderWidth: Dp = NeedlerTheme.sizes.hairlineThickness,
-): Modifier = this
-    .clip(shape)
-    .background(background)
-    .then(if (borderColor != null) Modifier.border(borderWidth, borderColor, shape) else Modifier)
-    .then(interaction)
+): Modifier {
+    val interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
+    return this
+        .clip(shape)
+        .background(background)
+        .then(if (borderColor != null) Modifier.border(borderWidth, borderColor, shape) else Modifier)
+        .indication(interactionSource, needlerPressIndication(background))
+        .then(interaction(interactionSource))
+}
 
 /**
  * A filled button: the pack's primary action.
@@ -272,8 +290,16 @@ fun NeedlerPillButton(
             .defaultMinSize(minHeight = sizes.pillMinHeight)
             .needlerPressSurface(
                 shape = shape,
-                interaction = Modifier
-                    .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+                interaction = { source ->
+                    Modifier.clickable(
+                        interactionSource = source,
+                        // Drawn by the helper, above this node and inside the clip. Not suppressed.
+                        indication = null,
+                        enabled = enabled,
+                        role = Role.Button,
+                        onClick = onClick,
+                    )
+                },
                 background = if (selected) colors.inverseSurface else Color.Transparent,
                 // The chosen pill is a solid fill with no outline; the others are the reverse.
                 borderColor = if (selected) null else colors.hairline,
@@ -355,9 +381,10 @@ fun NeedlerTextButton(
  * [app.needler.core.design.theme.NeedlerSizes.minTouchTarget], and the control still answers a
  * press visibly.
  *
- * The indication itself is `LocalIndication.current`, which is exactly the object `clickable` would
- * have used had it been left to pick its own. Nothing is substituted; the feedback is the platform's
- * and only its bounds change.
+ * The indication itself comes from [needlerPressIndication], which is what `clickable` would have
+ * picked for itself everywhere except under reduced motion - where it is the instant, held press state
+ * rather than the platform's animated one. Only the bounds are decided here; which feedback is drawn is
+ * one decision taken in one place for the whole product.
  *
  * @param contentDescription required, not nullable: this control has no visible label, so a screen
  *   reader has nothing else to announce.
@@ -401,7 +428,7 @@ fun NeedlerIconButton(
                 .defaultMinSize(minWidth = visualSize, minHeight = visualSize)
                 .clip(shape)
                 .background(background)
-                .indication(interactionSource, LocalIndication.current),
+                .indication(interactionSource, needlerPressIndication(background)),
             contentAlignment = Alignment.Center,
         ) { icon() }
     }
@@ -456,8 +483,16 @@ private fun ButtonSurface(
             .defaultMinSize(minHeight = minHeight)
             .needlerPressSurface(
                 shape = shape,
-                interaction = Modifier
-                    .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+                interaction = { source ->
+                    Modifier.clickable(
+                        interactionSource = source,
+                        // Drawn by the helper, above this node and inside the clip. Not suppressed.
+                        indication = null,
+                        enabled = enabled,
+                        role = Role.Button,
+                        onClick = onClick,
+                    )
+                },
                 background = background,
                 borderColor = borderColor,
             )

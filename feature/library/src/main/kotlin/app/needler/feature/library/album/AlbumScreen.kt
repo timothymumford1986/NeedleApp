@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.horizontalScroll
@@ -46,6 +48,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.needler.core.design.component.NeedlerAlbumBadge
+import app.needler.core.design.component.NeedlerAlbumSource
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerButtonTone
 import app.needler.core.design.component.NeedlerCrateControl
@@ -66,10 +70,10 @@ import app.needler.core.design.component.PathClose
 import app.needler.core.design.component.PathPause
 import app.needler.core.design.component.PathPlay
 import app.needler.core.design.component.PathPull
+import app.needler.core.design.component.tagLabel
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
-import app.needler.core.domain.model.OfflineDownloadState
 import app.needler.core.domain.model.StreamRung
 import app.needler.feature.library.common.AlbumArtwork
 import app.needler.feature.library.common.FavouriteButton
@@ -95,7 +99,7 @@ import app.needler.feature.library.library.LibraryTrackRow
  * | `NotOwned` | **Pull this album**, with the line explaining what the server will do |
  * | `PendingApproval` | The Waiting badge, and why no progress is moving |
  * | `Acquiring` | Pulling with its percentage, a progress bar, and Cancel |
- * | `Owned` | The transport control, Shuffle, Pull local, and the track list |
+ * | `Owned` | The transport control, Shuffle, Pull to device, and the track list |
  * | `Pinned` | The same, with the on-device mark and Remove from device |
  * | `Failed` | What went wrong, in words, and Retry |
  *
@@ -294,9 +298,6 @@ private fun PhoneAlbum(
                     onDownloadToDevice = onDownloadToDevice,
                     onRemoveFromDevice = onRemoveFromDevice,
                 )
-                if (state.download != null && state.download != OfflineDownloadState.Complete) {
-                    DownloadProgress(state.download)
-                }
                 state.notice?.let { notice ->
                     NoticeCard(
                         notice = notice,
@@ -391,7 +392,6 @@ private fun TabletAlbum(
                 onDownloadToDevice = onDownloadToDevice,
                 onRemoveFromDevice = onRemoveFromDevice,
             )
-            DownloadProgress(state.download)
             state.notice?.let { notice ->
                 NoticeCard(
                     notice = notice,
@@ -612,7 +612,18 @@ private fun AlbumTitleBlock(
             modifier = Modifier
                 .then(
                     if (album.artistMbid != null) {
-                        Modifier.clickable(role = Role.Button, onClick = onOpenArtist)
+                        // REQUIREMENTS.md "Accessibility" puts the floor for any control at 48dp,
+                        // and one line of `bodyStrong` measures about 20dp - so this link was a
+                        // little under half the legal target. The floor goes on before the
+                        // `clickable` so that the node taking the gesture is the node that is 48dp
+                        // tall; applied afterwards it would raise a parent and leave the target
+                        // where it was. `wrapContentHeight` then re-centres the one line inside
+                        // that height, because a title block with 28dp of nothing under the artist
+                        // reads as a gap rather than as a target.
+                        Modifier
+                            .defaultMinSize(minHeight = NeedlerTheme.sizes.minTouchTarget)
+                            .clickable(role = Role.Button, onClick = onOpenArtist)
+                            .wrapContentHeight(Alignment.CenterVertically)
                     } else {
                         Modifier
                     },
@@ -630,11 +641,20 @@ private fun AlbumTitleBlock(
             modifier = Modifier.semantics { contentDescription = meta.replace(" · ", ", ") },
         )
         // Only the states whose action area does not already say it. An owned
-        // album's buttons read Play and Pull local, and a pinned one's read
-        // "On device"; repeating the badge above them would say the same thing
+        // album's buttons read Play and Pull to device, and a pinned one's read
+        // "Device"; repeating the badge above them would say the same thing
         // twice in the same eyeful.
+        //
+        // A download in flight is the exception, and it is why the full-width
+        // progress banner that used to sit under the actions could go. The
+        // buttons say where the record will end up, not that bytes are arriving
+        // now, so the badge is the only place that is said - and being derived
+        // from the pin row on every emission, it clears itself on success,
+        // failure, cancellation and a backgrounded app alike.
         val badge = albumBadge(album.state)
-        if (badge != null && !album.isOwned) {
+        val saidByTheActions: Boolean = album.isOwned &&
+            (badge == NeedlerAlbumBadge.InLibrary || badge == NeedlerAlbumBadge.OnDevice)
+        if (badge != null && !saidByTheActions) {
             Spacer(modifier = Modifier.height(2.dp))
             NeedlerStateBadge(badge = badge)
         }
@@ -649,7 +669,7 @@ private fun AlbumTitleBlock(
 /**
  * The quality tag pair, and the rung ladder behind the Server tag.
  *
- * `Server: MP3 192` beside `Pulled: FLAC`, with **whichever is in force drawn as in force**: a local
+ * `Server: MP3 192` beside `Device: FLAC`, with **whichever is in force drawn as in force**: a local
  * copy always wins, so a downloaded record dims the Server tag rather than showing the two as equals.
  * Showing them level would imply the server rate is what you would hear, which it is not.
  *
@@ -663,9 +683,9 @@ private fun AlbumTitleBlock(
  * Tapping **Server** opens the ladder and writes an override for this record, absolute across both
  * connections. Tapping the rung already in force clears it.
  *
- * Tapping **Pulled** does nothing, and it is not drawn as a control: the action area a few dp below
- * already offers "Pull local" and "Remove from device" as labelled buttons, with a confirmation on the
- * destructive one. A second, unlabelled way to delete an album's audio is not an improvement.
+ * Tapping **Device** does nothing, and it is not drawn as a control: the action area a few dp below
+ * already offers "Pull to device" and "Remove from device" as labelled buttons, with a confirmation
+ * on the destructive one. A second, unlabelled way to delete an album's audio is not an improvement.
  *
  * ## The cache-cliff line
  *
@@ -698,16 +718,18 @@ private fun AlbumQualityTags(
     ) {
         if (pulledValue != null) {
             NeedlerQualityTag(
-                label = PULLED_TAG_LABEL,
+                label = NeedlerAlbumSource.Device.tagLabel(),
                 value = pulledValue,
+                source = NeedlerAlbumSource.Device,
                 emphasis = NeedlerQualityTagEmphasis.Active,
                 contentDescription = state.pulledTagDescription,
             )
         }
         if (serverValue != null) {
             NeedlerQualityTag(
-                label = SERVER_TAG_LABEL,
+                label = NeedlerAlbumSource.Server.tagLabel(),
                 value = serverValue,
+                source = NeedlerAlbumSource.Server,
                 emphasis = if (state.isPulled) {
                     NeedlerQualityTagEmphasis.Dormant
                 } else {
@@ -789,17 +811,17 @@ private fun AlbumQualityTags(
  *
  * ## Where the overflow sits
  *
- * The `PLAY` row reads Play, Shuffle, Pull local, then the crate menu. The menu was third, between
- * Shuffle and Pull local, and moving it to the end is deliberate: an overflow is not a peer of the
+ * The `PLAY` row reads Play, Shuffle, Pull to device, then the crate menu. The menu was third, between
+ * Shuffle and Pull to device, and moving it to the end is deliberate: an overflow is not a peer of the
  * controls beside it. It is the place things go when they have nowhere else, so it belongs where
- * the eye stops rather than interrupting the run of named actions. Third, it also pushed Pull local
- * — a real, named action that downloads a whole record onto the device — out past the dots, where
- * a named action reads as an afterthought. Last, the row is three actions and then the place the
- * rest of them are kept.
+ * the eye stops rather than interrupting the run of named actions. Third, it also pushed Pull to
+ * device — a real, named action that downloads a whole record onto the device — out past the
+ * dots, where a named action reads as an afterthought. Last, the row is three actions and then the
+ * place the rest of them are kept.
  *
  * Composition order is the only order. [FlowRow] places its children in the order they are
  * declared, and nothing in this row sets a `traversalIndex`, so a screen reader walks Play,
- * Shuffle, Pull local, the menu — exactly the drawn sequence REQUIREMENTS.md "Accessibility"
+ * Shuffle, Pull to device, the menu — exactly the drawn sequence REQUIREMENTS.md "Accessibility"
  * requires it to match. The alternative, leaving the declarations alone and giving each control an
  * explicit traversal index, was rejected for making the spoken order and the drawn order two
  * separate facts that can drift: the next control added to the row would have to remember to
@@ -876,7 +898,7 @@ private fun AlbumActions(
                     // letting it fail on a 403 after the tap.
                     if (state.downloadAllowed) {
                         NeedlerSecondaryButton(
-                            text = if (pinned) "On device" else "Pull local",
+                            text = if (pinned) "Device" else "Pull to device",
                             onClick = if (pinned) onRemoveFromDevice else onDownloadToDevice,
                             size = NeedlerButtonSize.Medium,
                             enabled = !state.busy,
@@ -884,9 +906,9 @@ private fun AlbumActions(
                             reportSelection = true,
                             leadingIcon = { tint -> NeedlerOnDeviceIcon(tint = tint) },
                             contentDescription = if (pinned) {
-                                "On device. Remove " + label + " from this device"
+                                "Device. Remove " + label + " from this device"
                             } else {
-                                "Pull local. Download " + label + " to this device"
+                                "Pull to device. Download " + label + " to this device"
                             },
                         )
                     }
@@ -1007,42 +1029,6 @@ private fun AlbumActions(
 
             AlbumPrimaryAction.NONE -> Unit
         }
-    }
-}
-
-/** Progress of the download to *this device*, which is not the same as a pull. */
-@Composable
-private fun DownloadProgress(download: OfflineDownloadState?) {
-    val colors = NeedlerTheme.colors
-    val typography = NeedlerTheme.typography
-    val label: String = when (download) {
-        null, OfflineDownloadState.Complete -> return
-        OfflineDownloadState.Queued -> "Queued for download to this device."
-        OfflineDownloadState.WaitingForUnmeteredNetwork ->
-            "Waiting for Wi-Fi before downloading to this device."
-        is OfflineDownloadState.Downloading ->
-            "Downloading to this device, " + download.tracksComplete + " of " +
-                download.tracksTotal + " tracks."
-        is OfflineDownloadState.Partial ->
-            "On this device in part: " + download.tracksComplete + " of " +
-                download.tracksTotal + " tracks. The rest stream."
-        is OfflineDownloadState.Failed ->
-            "The download to this device did not finish."
-    }
-    val fraction: Float? = (download as? OfflineDownloadState.Downloading)?.fraction
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics(mergeDescendants = true) {
-                contentDescription = label
-                liveRegion = LiveRegionMode.Polite
-            },
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        if (fraction != null) {
-            NeedlerLinearProgress(progress = fraction, modifier = Modifier.fillMaxWidth())
-        }
-        Text(text = label, style = typography.caption, color = colors.textSecondary)
     }
 }
 
@@ -1239,8 +1225,6 @@ internal const val DOWNLOAD_DISABLED: String =
     "Downloading to this device is turned off for your account on this server. Streaming and " +
         "playback are unaffected."
 
-private const val SERVER_TAG_LABEL: String = "Server:"
-private const val PULLED_TAG_LABEL: String = "Pulled:"
 
 /**
  * What the rung ladder does, said before it is used rather than discovered afterwards.

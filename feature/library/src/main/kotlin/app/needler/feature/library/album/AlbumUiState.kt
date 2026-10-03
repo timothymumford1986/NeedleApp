@@ -148,7 +148,7 @@ data class AlbumUiState(
     // Two tags rather than one format badge, because the header answers two different questions and
     // they are frequently not the same: what is already here, and what a play would fetch. A local
     // copy always wins - `ResolvePlayableSourceUseCase` checks local bytes before any streaming
-    // decision - so when an album is downloaded, `Pulled:` is what is in force and `Server:` is not.
+    // decision - so when an album is downloaded, `Device:` is what is in force and `Server:` is not.
 
     /**
      * True when this record is fully downloaded, and therefore what plays.
@@ -172,7 +172,7 @@ data class AlbumUiState(
         get() {
             val value: String = serverTagValue ?: return null
             return when {
-                isPulled -> "From the server, " + value + ", not in use while this is on the device"
+                isPulled -> "Server, " + value + ", not in use while this is on the device"
                 serverFormat is StreamFormat.Transcoded ->
                     "Streaming " + value + ", re-encoded by the server and not kept on this device"
                 else -> "Streaming " + value + ", original quality"
@@ -183,7 +183,7 @@ data class AlbumUiState(
     val pulledTagDescription: String?
         get() {
             val value: String = pulledTagValue ?: return null
-            return "Downloaded to this device, " + value + ", playing from here"
+            return "Device, " + value + ", playing from here"
         }
 
     /**
@@ -284,7 +284,7 @@ data class AlbumTrack(
 
 /** The shape of the action area, which is the only thing that differs between screens 04 and 05. */
 enum class AlbumPrimaryAction {
-    /** Play, Shuffle and Pull local (screens 04, 11). */
+    /** Play, Shuffle and Pull to device (screens 04, 11). */
     PLAY,
 
     /** Pull this album, with the explanatory line (screen 05). */
@@ -492,9 +492,9 @@ sealed interface AlbumNotice {
             }
     }
 
-    /** Downloading to the device started. */
-    data object DownloadStarted : AlbumNotice {
-        override val message: String get() = "Downloading to this device."
+    /** The download to this device started. */
+    data class DownloadStarted(val title: String) : AlbumNotice {
+        override val message: String get() = "Pulling " + title + " to this device."
     }
 
     /**

@@ -162,7 +162,7 @@ class AlbumScreenshotTest {
     }
 
     @Test
-    fun `an administrator who forbids downloads hides Pull local`() {
+    fun `an administrator who forbids downloads hides Pull to device`() {
         capture(
             "album-download-forbidden",
             NeedlerDevice.Phone,
@@ -280,7 +280,7 @@ class AlbumScreenshotTest {
     // ---- the crate ----------------------------------------------------------
 
     /**
-     * The action row with its fourth control: Play, Shuffle, Pull local, the crate menu.
+     * The action row with its fourth control: Play, Shuffle, Pull to device, the crate menu.
      *
      * The placement decision in one image. The pack draws three controls here and no way to
      * queue anything; the fourth is an icon button rather than two more labelled buttons,
@@ -288,7 +288,7 @@ class AlbumScreenshotTest {
      * how that claim is checked rather than asserted.
      *
      * The menu is drawn **last**, which it was not: it used to sit third, between Shuffle and
-     * Pull local, interrupting the run of named actions and leaving a real one out past the
+     * Pull to device, interrupting the run of named actions and leaving a real one out past the
      * dots. `AlbumActions` records why under "Where the overflow sits", and
      * `AlbumActionOrderTest` is what holds the order, because this image and an image of the
      * old order are both 780 by 1688 pixels and [assertRendered] cannot tell them apart.

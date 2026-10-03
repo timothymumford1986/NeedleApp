@@ -78,6 +78,40 @@ public data class CertificateInfo(
 )
 
 /**
+ * A certificate the user has already trusted, as it exists on disk afterwards.
+ *
+ * ## Why this is not [CertificateInfo]
+ *
+ * Because [CertificateInfo] is what the prompt renders, and only two of its four fields are kept. The
+ * credential store writes a fingerprint and the host it was scoped to, in one commit, and nothing
+ * else: the subject, the issuer and the expiry were read off a live handshake to help the user decide
+ * and were never persisted. A type with those three fields on it would make a Settings row that
+ * reports them look like a reasonable thing to write, and the only way to fill them would be to dial
+ * the server again - which answers "what did I trust" with "whatever is answering now", the one
+ * substitution certificate pinning exists to prevent.
+ *
+ * So this says exactly what is known: a host, and the fingerprint trusted for it.
+ *
+ * ## There is at most one
+ *
+ * One server is configured at a time, and a pin is dropped when the saved address changes host, so
+ * this is a single value rather than a list. See `SecureCredentialStore.pinnedCertificates`, which
+ * returns the same fact as a one-entry map because the TLS layer's model is "a pin is something a
+ * *host* has".
+ */
+public data class PinnedCertificate(
+    /** Normalised and lower-cased, as `CertificatePinStore.normaliseHost` writes it. */
+    val host: String,
+    /**
+     * `22:2D:19:...` - colon-separated uppercase hex of the SHA-256 over the DER-encoded leaf, which
+     * is the single canonical rendering and the one the user compares against their server. There is
+     * deliberately no second encoding of it anywhere, because two renderings of one fingerprint is
+     * what once stopped a confirmed pin from ever matching.
+     */
+    val sha256Fingerprint: String,
+)
+
+/**
  * What the server can actually do, discovered once per connection.
  *
  * Needler targets no fixed DroppedNeedle version: it negotiates and then *disables features* rather

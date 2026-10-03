@@ -58,7 +58,7 @@ public enum class BrowseRowKind(
     /** A folder holding more than one kind of thing: the root, Library, Favourites. */
     FOLDER_MIXED(true, false),
 
-    /** A folder of albums: Albums, Recently added, On device. */
+    /** A folder of albums: Albums, Recently added, Device. */
     FOLDER_ALBUMS(true, false),
 
     /** A folder of artists. */

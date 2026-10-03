@@ -34,6 +34,7 @@ import app.needler.core.domain.repository.SessionRepository
 import app.needler.core.domain.usecase.PinAlbumForOfflineUseCase
 import app.needler.core.domain.usecase.RequestAlbumUseCase
 import app.needler.core.domain.usecase.ResolvePlayableSourceUseCase
+import app.needler.feature.library.common.LibraryFormat
 import app.needler.feature.library.common.RequestSheetState
 import app.needler.feature.library.common.addTracksToCrate
 import app.needler.feature.library.common.hasPlayableFile
@@ -433,7 +434,9 @@ class AlbumViewModel @Inject constructor(
                 is Outcome.Success -> when {
                     result.value.waitingForUnmeteredNetwork -> AlbumNotice.DownloadWaitingForWifi
                     result.value.willLeaveDeviceLowOnSpace -> AlbumNotice.DownloadWillFillDevice
-                    else -> AlbumNotice.DownloadStarted
+                    else -> AlbumNotice.DownloadStarted(
+                        LibraryFormat.albumLabel(state.value.album?.title),
+                    )
                 }
 
                 is Outcome.Failure -> AlbumNotice.Problem(problemMessage(result.error))

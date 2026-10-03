@@ -54,6 +54,36 @@ import app.needler.core.design.theme.NeedlerTheme
  * above the bar, so the bar is what stands between it and the gesture area, and
  * the pack's 8dp gap between the two is padding the bar's own card carries.
  *
+ * ## There is deliberately no offline marker here
+ *
+ * A phone in aeroplane mode drew the library exactly as it draws it online, and
+ * this was the obvious place to answer that: one chip in the chrome, visible on
+ * every tab. It is not here, and the reason is what the device session actually
+ * showed. The system status bar was already saying "no network" and the user
+ * read right past it, because the fact on its own is not what anybody needs. The
+ * questions are "will this album play", "will this pull be sent", "is this list
+ * all there is" - and the answers differ per screen, per row and per action. A
+ * marker in the chrome can answer none of them, and a second copy of a signal
+ * the platform already shows is not an answer either.
+ *
+ * So each surface states its own consequence where that consequence is:
+ * `:feature:search` captions the catalogue block with the source its rows really
+ * came from, says under the field that the catalogue lane was not searched, and
+ * labels the pull sheet's confirm button "Queue the pull"; a row that is not on
+ * the device already says so in its badge. REQUIREMENTS.md "Failure handling"
+ * asks for exactly that - "Offline is a first-class state, not an error" - and a
+ * banner over a library that is working perfectly would be an error's shape
+ * around a state that is not one.
+ *
+ * The rejected alternative is recorded here rather than in a parameter, because
+ * a parameter is how it would come back: an `offline: Boolean = false` on this
+ * function would need one line in `NeedlerNavHost`'s call to be anything at all,
+ * and defaulted to false it would ship as chrome that renders the online state
+ * for ever. This file has no repository access by design - everything it draws
+ * arrives as a parameter or a slot - and `NavigationScreenshotTest` renders it
+ * with no Hilt graph at all, so a connectivity read taken inside it would be a
+ * read that no test can see fail.
+ *
  * @param pullsBadgeCount the count on the Pulls item. REQUIREMENTS.md calls
  *   this "the reliable channel" for pull state - notifications are best-effort,
  *   this badge is not - so it is plumbed through the scaffold rather than being

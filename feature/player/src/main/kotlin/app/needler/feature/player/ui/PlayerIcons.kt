@@ -49,8 +49,28 @@ const val PathNextTriangle: String = "M6 5v14l9-7z"
 /** Next' trailing bar. */
 const val PathNextBar: String = "M18 5v14"
 
-/** The "add to queue" list glyph the pack uses for the crate, on 07, 08 and 09. */
-const val PathQueue: String = "M4 6h12M4 12h12M4 18h8M19 15v6M16 18h6"
+/**
+ * The three-line list glyph for the control that opens the crate, on 07, 08 and 09.
+ *
+ * ## The plus is deliberately gone, and the pack is the thing being corrected
+ *
+ * The pack draws this as a list **with a plus beside it** - `M19 15v6M16 18h6` - and then links it to
+ * `Queue.dc.html`, labelled `aria-label="Queue"`. So the glyph promises *add to the crate* and the
+ * control it is drawn on opens the crate instead. The device audit reported the pair as a
+ * disagreement, and it is one: the glyph and the label described two different actions, and only one
+ * of them was the one that happened.
+ *
+ * The control navigates. `NowPlayingRoute`'s `onOpenCrate` is a destination, nothing on this screen
+ * adds anything to anything, and adding is already served from everywhere a record is listed by
+ * `NeedlerCrateControl` with its two named menu items. So the glyph loses the plus and the label says
+ * "open" - the pack's own first path, kept character for character, with the promise it could not keep
+ * removed.
+ *
+ * The rejected alternative was to keep the plus and make the control add the current album to the
+ * crate. It reads as the smaller change and it is the larger one: it would delete the only route to
+ * the crate from the player, to duplicate an action two taps away on the album screen.
+ */
+const val PathQueue: String = "M4 6h12M4 12h12M4 18h8"
 
 /** The Bluetooth rune, from the output chip on 07 and the picker on 21. */
 const val PathBluetooth: String = "M7 7l10 10-5 5V2l5 5L7 17"

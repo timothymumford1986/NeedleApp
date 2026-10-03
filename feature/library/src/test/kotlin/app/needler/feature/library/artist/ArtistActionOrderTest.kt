@@ -11,6 +11,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.theme.NeedlerTheme
@@ -31,7 +32,7 @@ import org.robolectric.annotation.GraphicsMode
  * The order of the artist screen's action row, measured.
  *
  * The same defect, the same fix and the same reasoning as `AlbumActionOrderTest`, one screen later.
- * The album row used to read Play, Shuffle, the crate menu, Pull local; this one read Play, Shuffle,
+ * The album row used to read Play, Shuffle, the crate menu, Pull to device; this one read Play, Shuffle,
  * the crate menu, Pull all, Try again - an overflow third of up to five, with the one filled green
  * button on the screen pushed out past the dots. Both now put the overflow last.
  *
@@ -60,6 +61,12 @@ import org.robolectric.annotation.GraphicsMode
  * because there is nothing to queue), and in the name-derived case, which is the only state that
  * draws **Search the catalogue**.
  *
+ * ## And the one control that is not in that row
+ *
+ * The discography's more-row is asserted here too, for the reason this file exists at all: a
+ * screenshot cannot say whether a control is reachable or whether a tap on it arrives, and those
+ * are the two things the paging fix adds. It is the only interaction test this screen has.
+ *
  * `application = Application::class` keeps Hilt out of it, as in the screenshot tests: the screen
  * renders from a literal [ArtistUiState] with no view model and no player.
  */
@@ -70,6 +77,9 @@ class ArtistActionOrderTest {
 
     @get:Rule
     val compose = createComposeRule()
+
+    /** Every tap on the discography's more-row, so "it does something" is assertable. */
+    private val showMoreTaps: MutableList<Unit> = mutableListOf()
 
     @Test
     fun `the overflow is last, after Pull all`() {
@@ -185,6 +195,39 @@ class ArtistActionOrderTest {
         assertFalse("the overflow stayed on the first line", sameLine(PULL_ALL, CRATE_MENU))
     }
 
+    /**
+     * The discography's own row offers the next page, and tapping it asks for one.
+     *
+     * The second defect this screen had: `refreshArtistDiscography` fetched the endpoint's first
+     * fifty release groups and discarded `has_more`, so a prolific artist's list stopped there with
+     * no affordance anywhere to continue it. This asserts the affordance exists, is reachable by its
+     * spoken description, and reaches the callback - the same three things the old screen failed.
+     */
+    @Test
+    fun `the discography offers its next page, and the tap arrives`() {
+        show(loaded().copy(discographyHasMore = true, discographyFetched = 50, discographyTotal = 212))
+
+        compose.onNodeWithContentDescription(SHOW_MORE).performClick()
+
+        assertEquals(1, showMoreTaps.size)
+    }
+
+    /**
+     * A page in flight says so and cannot be asked for twice.
+     *
+     * A second tap on a row that is already fetching would spend another MusicBrainz round trip on
+     * the page it is waiting for, so the control is disabled rather than merely re-entrant - and the
+     * label changes, because a control that looks tappable and is not is worse than either.
+     */
+    @Test
+    fun `a page in flight is not tappable again`() {
+        show(loaded().copy(discographyHasMore = true, loadingMoreDiscography = true))
+
+        compose.onNodeWithContentDescription(LOOKING_UP_MORE).performClick()
+
+        assertTrue("a disabled row reported a tap", showMoreTaps.isEmpty())
+    }
+
     // ---- plumbing -----------------------------------------------------------
 
     /**
@@ -238,6 +281,7 @@ class ArtistActionOrderTest {
                             onPull = {},
                             onPullArtist = {},
                             onRetryDiscography = {},
+                            onShowMoreDiscography = { showMoreTaps += Unit },
                             onFindInCatalogue = {},
                             onOpenArtist = {},
                             onPlay = {},
@@ -315,5 +359,12 @@ class ArtistActionOrderTest {
             "Search the MusicBrainz catalogue for artists named " + NAME
         const val CRATE_MENU =
             "Crate actions for everything by " + NAME + ". Add to the crate, or play next."
+
+        /** The more-row's spoken description, which is its label plus what more is of. */
+        const val SHOW_MORE = "Show more · 50 of 212 releases looked up, more of " +
+            NAME + "'s releases from the catalogue"
+
+        const val LOOKING_UP_MORE = LOOKING_UP_MORE_RELEASES + ", more of " +
+            NAME + "'s releases from the catalogue"
     }
 }

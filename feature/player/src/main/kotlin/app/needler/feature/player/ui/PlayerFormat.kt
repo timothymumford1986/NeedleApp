@@ -165,11 +165,16 @@ object PlayerFormat {
      * Lossless formats carry no bitrate, because a bitrate on a FLAC badge tells a user nothing they
      * can act on; lossy ones are meaningless without it. Returns null when the server reported
      * neither, so the badge is left off rather than drawn empty.
+     *
+     * The figure is [AudioQuality.badgeBitrateKbps] and not the raw average. The server reports the
+     * mean bitrate of a variable-bitrate file, so the tags on this screen read `MP3 319` for a 320
+     * rip; that property documents the rounding and, more importantly, why a 280 average is **not**
+     * rounded up to 320.
      */
     fun formatBadge(quality: AudioQuality?): String? {
         val format: AudioFormat? = quality?.format
         val name: String? = format?.let(::formatName)
-        val bitrate: Int? = quality?.bitrateKbps?.takeIf { it > 0 }
+        val bitrate: Int? = quality?.badgeBitrateKbps
         return when {
             name == null && bitrate == null -> null
             name == null -> bitrate.toString() + " kbps"

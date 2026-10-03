@@ -166,11 +166,16 @@ private fun NavDestination(
             // across the item next to it. The ordering is the helper's, not this call site's.
             .needlerPressSurface(
                 shape = NeedlerTheme.shapes.extraLarge,
-                interaction = Modifier.selectable(
-                    selected = item.selected,
-                    role = Role.Tab,
-                    onClick = item.onClick,
-                ),
+                interaction = { source ->
+                    Modifier.selectable(
+                        selected = item.selected,
+                        interactionSource = source,
+                        // The helper draws it, clipped to the item's 18dp corners.
+                        indication = null,
+                        role = Role.Tab,
+                        onClick = item.onClick,
+                    )
+                },
                 background = if (item.selected) selectedBackground else Color.Transparent,
             )
             .semantics(mergeDescendants = true) { contentDescription = spoken }

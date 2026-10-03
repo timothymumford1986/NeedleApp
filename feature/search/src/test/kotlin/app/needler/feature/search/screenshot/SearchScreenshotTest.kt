@@ -127,6 +127,53 @@ class SearchScreenshotTest {
         )
     }
 
+    /**
+     * Offline with the un-owned half of the mirror in it, which is the screen
+     * the device actually drew and the one no image covered.
+     *
+     * Every other offline capture here holds owned albums only, so the "Albums
+     * to pull" block — and the caption over it — was never rendered offline. On
+     * the device that caption read "in your library" over three rows subtitled
+     * "Not in your library yet". It now names the source the rows came from.
+     */
+    @Test
+    fun `offline, with cached catalogue rows under the library half`() {
+        capture(
+            "search-offline-cached-catalogue",
+            NeedlerDevice.Phone,
+            RESULTS.copy(
+                offline = true,
+                results = SampleSearch.khruangbinResults.copy(
+                    catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+                ),
+            ),
+        )
+    }
+
+    /**
+     * The pull sheet with no connection: the button says which outcome the tap
+     * buys, and the caption says what becomes of the request.
+     *
+     * REQUIREMENTS.md "Failure handling" makes a queued pull a supported
+     * outcome, not a failure, which is why this image is the ordinary sheet with
+     * two lines changed rather than a warning.
+     */
+    @Test
+    fun `the request sheet with no connection`() {
+        capture(
+            "search-pull-sheet-offline",
+            NeedlerDevice.Phone,
+            RESULTS.copy(
+                offline = true,
+                results = SampleSearch.khruangbinResults.copy(
+                    catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+                ),
+                pullSheetAlbum = SampleSearch.buzz,
+            ),
+            autoFocus = false,
+        )
+    }
+
     /** Rule 4, stale session: the same shape, a different way out. */
     @Test
     fun `an expired session leaves the library searchable`() {

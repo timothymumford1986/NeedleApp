@@ -95,9 +95,11 @@ data class SearchUiState(
      * This answers "is there a network right now" and nothing else. It must not
      * be used to describe what a lane did or did not do — see
      * [catalogueAnswered] for why, and for the device report that forced the
-     * distinction. Its one legitimate use is [canPageCatalogue], which is a
-     * question about a call the screen is about to make rather than about one it
-     * already made.
+     * distinction. Its legitimate uses are the two questions about a call the
+     * screen is *about to make* rather than about one it already made:
+     * [canPageCatalogue], which decides whether another page may be asked for,
+     * and [pullConfirmLabel] with [pullSheetNote], which say what a **Pull**
+     * tapped right now will do.
      */
     val offline: Boolean = false,
 
@@ -303,16 +305,37 @@ data class SearchUiState(
      *
      * The pack writes "from MusicBrainz" (03, 10), and that is right whenever
      * the catalogue lane actually answered. When it did not — offline, stale
-     * session, still in flight — the list holds library rows only, and claiming
-     * MusicBrainz for them would be a small, constant lie on the one screen
-     * whose whole job is to be honest about which lane a result came from.
+     * session, still in flight — claiming MusicBrainz would be a small, constant
+     * lie on the one screen whose whole job is to be honest about which lane a
+     * result came from. What the block then holds is the un-owned catalogue
+     * records the mirror happens to carry, which arrived with a sync, so the
+     * caption names that source instead: [FROM_LAST_SYNC].
      *
-     * It captions the *to pull* block. The library block is captioned
-     * [FROM_LIBRARY] unconditionally, because that is what being in the library
-     * means.
+     * It captions the *to pull* block, which is why [FROM_LIBRARY] is no longer
+     * the fallback. A phone in aeroplane mode drew three rows under "Albums to
+     * pull", each subtitled "Not in your library yet", under a header captioned
+     * "in your library" — one half of a header contradicting the other. The
+     * caption was written as a claim about where the list came from and reads as
+     * a claim about the albums, and on this block that claim is the one thing it
+     * must not make. The library block above is captioned [FROM_LIBRARY]
+     * unconditionally, because there it is true of the rows as well as of the
+     * source.
+     *
+     * It also carries, quietly and where the consequence is, the half of
+     * REQUIREMENTS.md "Failure handling" — "Offline is a first-class state, not
+     * an error" — that this block owes an offline reader: the list is as old as
+     * the last sync, because the lane that would have refreshed it was not
+     * reachable. [catalogueNote] says that at length under the field; this is
+     * the one word of it that survives next to the rows themselves.
+     *
+     * Rejected: dropping the caption entirely when the lane has not answered.
+     * That header would then be the only one on the screen with nothing on its
+     * right, and a reader would be left to infer the missing lane from a blank
+     * space, which is the inference REQUIREMENTS.md "Search behaviour", rule 4
+     * asks the screen to make unnecessary.
      */
     val albumsSourceNote: String
-        get() = if (catalogue is CatalogueLaneState.Ready) FROM_CATALOGUE else FROM_LIBRARY
+        get() = if (catalogue is CatalogueLaneState.Ready) FROM_CATALOGUE else FROM_LAST_SYNC
 
     /**
      * Whether the catalogue can be asked for another page at all.
@@ -422,6 +445,63 @@ data class SearchUiState(
 
     /** True when the catalogue note is bad news rather than progress, which the screen tints. */
     val catalogueNoteIsProblem: Boolean get() = catalogue is CatalogueLaneState.Unavailable
+
+    /**
+     * The confirm button on the pull sheet: **Pull**, or **Queue the pull** with
+     * no connection.
+     *
+     * REQUIREMENTS.md "Failure handling": "Offline is a first-class state, not
+     * an error. When the server is unreachable, the app plays on-device music,
+     * browses the full mirror, and queues pulls, playlist edits, favourites and
+     * scrobbles for replay." A queued pull is therefore a supported outcome and
+     * not a failure — but it is a *different* outcome from one the server hears
+     * about now, and this button is the last thing read before the user chooses
+     * it.
+     *
+     * Said before the tap, which is the whole point. The app already words the
+     * outcome afterwards — `SearchNotice.forRequest` handles
+     * [RequestStatus.QUEUED_OFFLINE] — and a consequence announced only once it
+     * has happened is one the user had no chance to take into account.
+     *
+     * Rejected: changing the **Pull** button on every result row instead. There
+     * are up to eight of them on screen, the row button is the tap that opens
+     * this sheet rather than the one that writes anything, and relabelling all
+     * of them would turn one quiet statement into a column of them.
+     */
+    val pullConfirmLabel: String get() = if (offline) QUEUE_PULL_LABEL else PULL_LABEL
+
+    /**
+     * The caption line on the pull sheet: what will be downloaded, and — with no
+     * connection — when it will be asked for.
+     *
+     * The sheet has one caption slot. Online it carries the server's own
+     * `quality_snapshot_summary`, which `NeedlerRequestSheet` documents as the
+     * only version of what will be downloaded that is guaranteed to be true.
+     * Offline the queueing is put first and the snapshot follows it, because the
+     * snapshot describes a download nobody has been asked for yet; dropping the
+     * snapshot instead would lose the server's own words, and it is still the
+     * best account of what the request will fetch when it does go out.
+     *
+     * Rejected: a parameter of its own on the sheet. `:core:design` offers one
+     * caption there and has three callers — this screen and two in
+     * `:feature:library` — so a second slot would be a shared-component change
+     * made for one screen, and the two sentences read as one line.
+     */
+    val pullSheetNote: String?
+        get() {
+            // No sheet, nothing for the line to be about. Guarded rather than
+            // left to the screen, which only reads this inside the `!= null`
+            // branch that draws the sheet: a property that answered for a sheet
+            // that is not open would be true of nothing and assertable as such.
+            val album: Album = pullSheetAlbum ?: return null
+            val quality: String? = album.qualityPolicySummary?.takeIf { it.isNotBlank() }
+            if (!offline) return quality
+            return if (quality == null) {
+                PULL_QUEUED_OFFLINE
+            } else {
+                PULL_QUEUED_OFFLINE + " " + quality
+            }
+        }
 
     /**
      * `19 in the crate · 1 hr 14 min`, or null when the crate is empty.
@@ -565,7 +645,7 @@ internal const val ARTIST_PREVIEW: Int = 4
  */
 internal const val CATALOGUE_ALBUM_PREVIEW: Int = 8
 
-/** The label on the owned-albums block. Vocabulary: "In library — owned by the server". */
+/** The label on the owned-albums block. Vocabulary: "Server — on the server, not on the device". */
 internal const val LIBRARY_ALBUMS_HEADER: String = "Albums"
 
 /** The label on the un-owned block. Vocabulary: "Pull — ask the server to acquire an album". */
@@ -618,6 +698,40 @@ internal const val FROM_CATALOGUE: String = "from MusicBrainz"
 
 /** The same caption when only the mirror has contributed, which is what the list then holds. */
 internal const val FROM_LIBRARY: String = "in your library"
+
+/**
+ * The caption on the to-pull block when the catalogue lane has not answered.
+ *
+ * "sync" rather than "cache" or "mirror": it is the word this screen already
+ * uses to the user, in [CATALOGUE_OFFLINE]'s "everything already synced is
+ * searchable", and the only one of the three that is not internal vocabulary.
+ */
+internal const val FROM_LAST_SYNC: String = "from your last sync"
+
+/**
+ * The confirm button on the pull sheet with a connection.
+ *
+ * Repeats `NeedlerRequestSheet`'s own default rather than relying on it: this
+ * screen now has two labels for that button and the choice between them belongs
+ * in one place, next to the one it picks instead.
+ */
+internal const val PULL_LABEL: String = "Pull"
+
+/** The same button with no connection. The verb changes because the outcome does. */
+internal const val QUEUE_PULL_LABEL: String = "Queue the pull"
+
+/**
+ * What the sheet says a pull placed offline will do, before it is placed.
+ *
+ * The same two facts, in the same order and nearly the same words, as the notice
+ * `SearchNotice.forRequest` draws afterwards for
+ * [app.needler.core.domain.model.RequestStatus.QUEUED_OFFLINE] - queued now,
+ * sent on reconnect. Deliberately not the identical string: this one is about
+ * what a tap would do and that one reports what a tap did, and a sentence that
+ * has to read correctly in both tenses ends up reading well in neither.
+ */
+internal const val PULL_QUEUED_OFFLINE: String =
+    "No connection, so this pull is queued on the device and sent as soon as you are back online."
 
 internal const val CATALOGUE_SEARCHING: String =
     "Searching the MusicBrainz catalogue. Your library results are already below."

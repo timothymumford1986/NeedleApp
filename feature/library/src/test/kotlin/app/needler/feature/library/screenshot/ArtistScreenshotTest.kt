@@ -120,6 +120,63 @@ class ArtistScreenshotTest {
         )
     }
 
+    // ---- the discography has more than one page -----------------------------
+
+    /**
+     * A prolific artist, with the row that asks for the rest.
+     *
+     * The second defect this screen had, rendered. `has_more` and `next_offset` were fetched and
+     * discarded, so the list stopped at the endpoint's first fifty release groups and the screen
+     * said, underneath, that this was the artist's whole discography. The row carries the server's
+     * own figures - `returned_count` against `source_total_count` - because the one thing a reader
+     * cannot work out from a list is how much of it there is.
+     */
+    @Test
+    fun `a discography with more pages to fetch`() {
+        capture(
+            "artist-discography-paged",
+            NeedlerDevice.Phone,
+            LOADED.copy(
+                discographySettled = true,
+                discographyHasMore = true,
+                discographyFetched = 50,
+                discographyTotal = 212,
+            ),
+        )
+    }
+
+    /** The same row with a page in flight: a statement rather than an offer, and not tappable. */
+    @Test
+    fun `a page of the discography in flight`() {
+        capture(
+            "artist-discography-paging",
+            NeedlerDevice.Phone,
+            LOADED.copy(
+                discographySettled = true,
+                discographyHasMore = true,
+                loadingMoreDiscography = true,
+                discographyFetched = 50,
+                discographyTotal = 212,
+            ),
+        )
+    }
+
+    /** And when that page did not arrive. The list above it is intact, and the row retries. */
+    @Test
+    fun `a page of the discography that did not arrive`() {
+        capture(
+            "artist-discography-page-failed",
+            NeedlerDevice.Phone,
+            LOADED.copy(
+                discographySettled = true,
+                discographyHasMore = true,
+                moreDiscographyFailed = true,
+                discographyFetched = 50,
+                discographyTotal = 212,
+            ),
+        )
+    }
+
     // ---- the discography could not be listed --------------------------------
 
     /**
@@ -233,6 +290,7 @@ class ArtistScreenshotTest {
             onPull = {},
             onPullArtist = {},
             onRetryDiscography = {},
+            onShowMoreDiscography = {},
             onFindInCatalogue = {},
             onOpenArtist = {},
             onPlay = {},

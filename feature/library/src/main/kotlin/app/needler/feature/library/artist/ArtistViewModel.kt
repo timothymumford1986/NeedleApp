@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.ArtistDiscographyPage
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.CatalogueSearchPage
 import app.needler.core.domain.model.SearchBucket
@@ -78,6 +79,14 @@ import kotlinx.coroutines.launch
  * all, so `ArtistUiState.discographyEmpty` can mean what it says. REQUIREMENTS.md "Library browse"
  * makes this screen "where the two lanes meet visibly"; a lane that is missing without comment is
  * not visible.
+ *
+ * ## The discography arrives a page at a time
+ *
+ * `GET /api/v1/artists/{mbid}/releases` is paged and reports `has_more`, `next_offset` and
+ * `source_total_count`. All three were being discarded, so a prolific artist's discography stopped
+ * silently at the endpoint's first fifty release groups. [onShowMoreDiscography] continues the walk
+ * from the cursor the server named, and the counts it keeps are what let the row under the list say
+ * how much of the discography has been looked up rather than implying it is all of it.
  *
  * ## This screen plays
  *
@@ -252,6 +261,11 @@ class ArtistViewModel @Inject constructor(
             // above the sentence would be worse than saying nothing.
             artistNotInCatalogue = artistMbid.isNameDerived && current.catalogue.isEmpty(),
             discographySettled = catalogueLookup.settled,
+            discographyHasMore = catalogueLookup.nextOffset != null,
+            loadingMoreDiscography = catalogueLookup.loadingMore,
+            moreDiscographyFailed = catalogueLookup.moreFailed,
+            discographyFetched = catalogueLookup.fetched,
+            discographyTotal = catalogueLookup.total,
             // Kept whether or not [discographyError] was suppressed above. A discography that is
             // on screen *and* failed to refresh is a cached list that may be short, and that is a
             // different sentence from the one a screen with no discography at all needs.
@@ -527,9 +541,12 @@ class ArtistViewModel @Inject constructor(
             lookup.value = DiscographyLookup(settled = true, error = null)
             return
         }
-        lookup.value = lookup.value.copy(settled = false)
+        // The cursor and the counts go with it. This is the first page again, so anything the last
+        // walk learned about where it had got to is about a walk that is being abandoned.
+        lookup.value = lookup.value.restarting()
         viewModelScope.launch {
-            val result: Outcome<Unit> = library.refreshArtistDiscography(artistMbid)
+            val result: Outcome<ArtistDiscographyPage> =
+                library.refreshArtistDiscographyPage(artistMbid, offset = FIRST_PAGE)
             // Keep the reason, not just the fact. NeedlerError's own KDoc says
             // "the distinctions matter to the UI, which is why this is a sealed
             // hierarchy rather than a message" - collapsing it to a boolean here
@@ -545,7 +562,81 @@ class ArtistViewModel @Inject constructor(
                 // where a v1-lane failure is visible at all.
                 Log.w(TAG, "artist discography failed for " + artistMbid.value + ": " + error.diagnostic)
             }
-            lookup.value = DiscographyLookup(settled = true, error = error)
+            val page: ArtistDiscographyPage? = (result as? Outcome.Success)?.value
+            lookup.value = DiscographyLookup(
+                settled = true,
+                error = error,
+                nextOffset = page?.nextOffset,
+                fetched = page?.returned ?: 0,
+                total = page?.sourceTotal,
+            )
+        }
+    }
+
+    /**
+     * Ask the catalogue for the next page of this artist's discography.
+     *
+     * The control the screen never had. `v1.artistReleases` was called with the endpoint's own
+     * `limit = 50, offset = 0` and its `has_more` and `next_offset` were discarded, so a prolific
+     * artist's discography stopped at fifty release groups with nothing on screen saying so - and the
+     * sentence drawn underneath it, `CATALOGUE_COMPLETE`, told the reader that was the lot.
+     * REQUIREMENTS.md "Library browse" asks this screen for "the artist's full discography".
+     *
+     * ## A tap, not a scroll
+     *
+     * Infinite scroll was the alternative, and it is what the artist page this was measured against
+     * does. Rejected on what a page costs here: every one is resolved upstream against MusicBrainz,
+     * which is the whole reason `warming` exists as a response field, so pages would fire from the
+     * flick of a list whose rows are otherwise free. A tap also gives `source_total_count` the one
+     * honest place it can be shown - [ArtistUiState.discographyMoreRow]'s label - so a reader can see
+     * how much of a discography is still unfetched instead of discovering it by scrolling. It is the
+     * same control `:feature:search` pages its bucket endpoint with, which is the second reason: one
+     * paging gesture in the app, not two.
+     *
+     * [ArtistDiscographyPage.nextOffset] being null is the only stop condition, and it is the server's
+     * own. The page type cannot represent "there is more and no way to ask for it" - that contradiction
+     * is resolved in `DefaultLibraryRepository`, in favour of stopping - so there is no way for this to
+     * loop on one offset.
+     *
+     * A failure leaves the cursor alone, so the row stays and tapping it asks for the same page again.
+     * It is deliberately not the discography-wide error: that one says "the list you are reading is a
+     * cache and may be short", and this one says "the next page did not arrive", and they name
+     * different controls.
+     */
+    fun onShowMoreDiscography() {
+        val current: DiscographyLookup = lookup.value
+        val next: Int = current.nextOffset ?: return
+        if (current.loadingMore) return
+        lookup.value = current.copy(loadingMore = true, moreFailed = false)
+        viewModelScope.launch {
+            val result: Outcome<ArtistDiscographyPage> =
+                library.refreshArtistDiscographyPage(artistMbid, offset = next)
+            // A refresh started while this page was in flight has already put the lookup back to its
+            // first page, and `restarting` clears this flag - so finding it cleared means this answer
+            // belongs to a walk that was abandoned, and adding its count to the new one would report
+            // a discography part-fetched twice.
+            val latest: DiscographyLookup = lookup.value
+            if (!latest.loadingMore) return@launch
+            lookup.value = when (result) {
+                is Outcome.Failure -> {
+                    Log.w(
+                        TAG,
+                        "artist discography page at " + next + " failed for " + artistMbid.value +
+                            ": " + result.error.diagnostic,
+                    )
+                    latest.copy(loadingMore = false, moreFailed = true)
+                }
+                is Outcome.Success -> latest.copy(
+                    loadingMore = false,
+                    moreFailed = false,
+                    nextOffset = result.value.nextOffset,
+                    fetched = latest.fetched + result.value.returned,
+                    // Kept when a later page does not repeat it. The field is documented as null
+                    // while the artist is warming upstream, and a total that vanished mid-walk would
+                    // take the figure off the row the reader is looking at.
+                    total = result.value.sourceTotal ?: latest.total,
+                )
+            }
         }
     }
 
@@ -656,7 +747,32 @@ class ArtistViewModel @Inject constructor(
     private data class DiscographyLookup(
         val settled: Boolean = false,
         val error: NeedlerError? = null,
-    )
+        /**
+         * The offset to ask for next, straight from [ArtistDiscographyPage.nextOffset], or null when
+         * the discography is complete or has not been asked for at all.
+         *
+         * The cursor itself rather than a `hasMore` flag beside it, so the screen's offer of another
+         * page and this ViewModel's ability to ask for one cannot disagree.
+         */
+        val nextOffset: Int? = null,
+        val loadingMore: Boolean = false,
+        val moreFailed: Boolean = false,
+        /** Release groups returned so far, summed over the pages fetched. */
+        val fetched: Int = 0,
+        /** `source_total_count`, or null while the server has not said. */
+        val total: Int? = null,
+    ) {
+        /**
+         * The same lookup, about to fetch its first page again.
+         *
+         * [error] is deliberately kept until the new answer lands: the sentence it draws is about the
+         * last attempt, and clearing it here would blank the notice for the length of a round trip,
+         * which reads as the problem having fixed itself. Everything about *where the walk had got to*
+         * is dropped, because the walk is starting again - and clearing [loadingMore] is also what
+         * tells a page still in flight that its answer is no longer wanted.
+         */
+        fun restarting(): DiscographyLookup = DiscographyLookup(settled = false, error = error)
+    }
 
     private data class Content(
         val artist: Artist?,
@@ -714,6 +830,14 @@ class ArtistViewModel @Inject constructor(
          * case was four Didos, and a sixth row would be a worse match than the five above it.
          */
         private const val NAMESAKE_LIMIT: Int = 5
+
+        /**
+         * The offset a discography starts at.
+         *
+         * Named so that the calls in [refreshDiscography] and [onShowMoreDiscography] cannot read as
+         * the same call with a different number in it; one restarts the walk and one continues it.
+         */
+        private const val FIRST_PAGE: Int = 0
 
         private const val SUBSCRIPTION_TIMEOUT_MS: Long = 5_000L
 

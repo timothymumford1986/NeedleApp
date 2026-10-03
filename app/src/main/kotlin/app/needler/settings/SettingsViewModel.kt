@@ -19,6 +19,7 @@ import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EvictionReport
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.PinnedCertificate
 import app.needler.core.domain.model.PlaybackPreferences
 import app.needler.core.domain.model.RemovedDownload
 import app.needler.core.domain.model.ScrobblePreferences
@@ -107,6 +108,13 @@ class SettingsViewModel @Inject constructor(
 
     private val transient: MutableStateFlow<Transient> = MutableStateFlow(Transient())
 
+    init {
+        // One read at construction, for the reason recorded on `Transient.pinnedCertificate`: a pin
+        // changes only when the user changes it, and both doors into that are on this screen or on
+        // Connect, which this screen is re-entered from.
+        refreshPinnedCertificate()
+    }
+
     private val serverSection: Flow<ServerSectionState> = combine(
         session.observeSession(),
         session.observeConnectivity(),
@@ -185,7 +193,12 @@ class SettingsViewModel @Inject constructor(
     ) { server, playing, notifications, storage, pending ->
         SettingsUiState(
             loading = false,
-            server = server.copy(syncNotice = pending.syncNotice),
+            server = server.copy(
+                syncNotice = pending.syncNotice,
+                pinnedCertificate = pending.pinnedCertificate,
+                certificateChecked = pending.certificateChecked,
+                certificateNotice = pending.certificateNotice,
+            ),
             playing = playing,
             notifications = notifications,
             storage = storage.copy(working = pending.working, notice = pending.storageNotice),
@@ -386,6 +399,7 @@ class SettingsViewModel @Inject constructor(
         when (action) {
             DestructiveSettingsAction.RemoveAllFromDevice -> removeAllFromDevice()
             DestructiveSettingsAction.SignOut -> signOut()
+            DestructiveSettingsAction.ForgetCertificate -> forgetCertificate()
         }
     }
 
@@ -405,6 +419,32 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Forgets the trusted certificate, and says what that has just done to the connection.
+     *
+     * The state is re-read from the repository afterwards rather than assumed: a failed clear leaves
+     * the pin in force, and a screen that removed the row on the strength of having asked would tell
+     * the user they were no longer trusting a certificate they were still trusting.
+     */
+    private fun forgetCertificate() {
+        viewModelScope.launch {
+            val notice: String = when (val outcome: Outcome<Unit> = session.forgetPinnedCertificate()) {
+                is Outcome.Success -> SettingsNotices.FORGOT_CERTIFICATE
+                is Outcome.Failure -> "Could not forget the certificate. " + describe(outcome.error)
+            }
+            transient.update { it.copy(certificateNotice = notice) }
+            refreshPinnedCertificate()
+        }
+    }
+
+    /** Reads the pin back out of the repository, which is the only thing that knows. */
+    private fun refreshPinnedCertificate() {
+        viewModelScope.launch {
+            val pinned: PinnedCertificate? = session.pinnedCertificate()
+            transient.update { it.copy(pinnedCertificate = pinned, certificateChecked = true) }
+        }
+    }
+
     private fun signOut() {
         viewModelScope.launch {
             when (val outcome: Outcome<Unit> = session.signOut(revokeRemote = true)) {
@@ -420,12 +460,8 @@ class SettingsViewModel @Inject constructor(
 
     private fun now(): Instant = Instant.fromEpochMilliseconds(System.currentTimeMillis())
 
-    private fun describe(report: SyncReport): String = if (report.libraryUnchanged) {
-        "Already up to date."
-    } else {
-        "Synced " + SettingsFormat.plural(report.albumsUpdated.toLong(), "album") +
-            " and " + SettingsFormat.plural(report.artistsUpdated.toLong(), "artist") + "."
-    }
+    /** Copy in [SettingsNotices], which is where the "nothing changed" case is argued. */
+    private fun describe(report: SyncReport): String = SettingsNotices.synced(report)
 
     /**
      * What removing one album freed.
@@ -544,6 +580,16 @@ class SettingsViewModel @Inject constructor(
         val signOutNotice: String? = null,
         val signedOut: Boolean = false,
         val updateCheck: UpdateCheckStatus = UpdateCheckStatus.Idle,
+        /**
+         * The trusted certificate, and whether it has been looked up yet.
+         *
+         * It lives here rather than in [serverSection] because `SessionRepository` exposes it as a
+         * suspend read and not as a flow - there is no background writer to observe, since the only
+         * two things that change a pin are the Connect screen and [onConfirmDestructiveAction] below.
+         */
+        val pinnedCertificate: PinnedCertificate? = null,
+        val certificateChecked: Boolean = false,
+        val certificateNotice: String? = null,
     )
 
     private companion object {

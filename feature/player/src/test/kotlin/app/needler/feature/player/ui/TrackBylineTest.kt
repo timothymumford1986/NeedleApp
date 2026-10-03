@@ -3,12 +3,17 @@ package app.needler.feature.player.ui
 import android.app.Application
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertHasNoClickAction
+import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.feature.player.screenshot.PlayerScreenshots
 import org.junit.Assert.assertEquals
@@ -55,6 +60,31 @@ class TrackBylineTest {
         compose.onNodeWithText("· Submarine").assertIsDisplayed()
     }
 
+    /**
+     * The link is a legal target, which a single line of player type is not on its own.
+     *
+     * REQUIREMENTS.md "Accessibility" puts the floor at 48dp. One line of `bodyLarge` measures about
+     * 20dp, so this was a little under half of it - and the reason nobody caught it by eye is that the
+     * node it replaced was dead text, which has no target to be too small. The floor is on the
+     * clickable node rather than on a parent, which is why the assertion can see it at all: a 48dp box
+     * drawn *around* a 20dp target leaves this height reading 20dp, and the press reading as a miss.
+     */
+    @Test
+    fun `the link is a 48dp target`() {
+        showing(onOpenArtist = {})
+
+        compose.onNodeWithContentDescription("Go to The Marias").assertHeightIsAtLeast(48.dp)
+    }
+
+    /** Still true at 200% text, where the name wraps to two lines and the target grows rather than
+     * shrinks. */
+    @Test
+    fun `the link survives 200 percent text`() {
+        showing(onOpenArtist = {}, fontScale = 2f)
+
+        compose.onNodeWithContentDescription("Go to The Marias").assertHeightIsAtLeast(48.dp)
+    }
+
     @Test
     fun `an artist with no MBID is plain text, not a link that does nothing`() {
         showing(onOpenArtist = null)
@@ -73,15 +103,18 @@ class TrackBylineTest {
         )
     }
 
-    private fun showing(onOpenArtist: (() -> Unit)?) {
+    private fun showing(onOpenArtist: (() -> Unit)?, fontScale: Float = 1f) {
         compose.setContent {
             NeedlerTheme(reducedMotion = true) {
-                TrackByline(
-                    artistName = "The Marias",
-                    albumTitle = "Submarine",
-                    onOpenArtist = onOpenArtist,
-                    style = NeedlerTheme.typography.bodyLarge,
-                )
+                val base = LocalDensity.current
+                CompositionLocalProvider(LocalDensity provides Density(base.density, fontScale)) {
+                    TrackByline(
+                        artistName = "The Marias",
+                        albumTitle = "Submarine",
+                        onOpenArtist = onOpenArtist,
+                        style = NeedlerTheme.typography.bodyLarge,
+                    )
+                }
             }
         }
     }

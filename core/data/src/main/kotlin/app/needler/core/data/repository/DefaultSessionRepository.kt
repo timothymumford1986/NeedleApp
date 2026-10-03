@@ -11,6 +11,7 @@ import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineCause
 import app.needler.core.domain.model.OpenSubsonicExtension
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.PinnedCertificate
 import app.needler.core.domain.model.PlayerOnlyReason
 import app.needler.core.domain.model.ReonboardingReason
 import app.needler.core.domain.model.ServerCapabilities
@@ -336,6 +337,49 @@ public class DefaultSessionRepository(
         // Live, so the retry the Connect screen makes next uses it: the store is read on every
         // handshake and `NeedlerHttpClient` evicts pooled connections when it changes.
         pins.pin(host, certificate.sha256Fingerprint)
+        return Outcome.Ok
+    }
+
+    /**
+     * What the user trusted, read back out of the store that kept it.
+     *
+     * Both halves come from [SecureCredentialStore] rather than from [pins], and the asymmetry with
+     * [trustCertificate] - which writes to both - is deliberate. The credential store is the record of
+     * the user's *decision*; the in-memory store is a cache the handshake reads, seeded from it at
+     * startup by `DataModule`. Reporting the cache would report a fact about this process rather than
+     * a fact about the install, and the two differ for exactly as long as a bug lets them.
+     *
+     * `pinnedCertificateHost()` rather than the saved address's host, for the reason that method
+     * documents: a pin is attributed to the host it was granted to and written down beside it, so that
+     * changing the address afterwards cannot re-point it. See
+     * [SecureCredentialStore.pinnedCertificateHost].
+     */
+    override suspend fun pinnedCertificate(): PinnedCertificate? {
+        val host: String = credentials.pinnedCertificateHost() ?: return null
+        val fingerprint: String = credentials.pinnedCertificateFor(host) ?: return null
+        return PinnedCertificate(host = host, sha256Fingerprint = fingerprint)
+    }
+
+    /**
+     * Drops the pin from disk first, then from the live set.
+     *
+     * Disk first, which is the mirror image of [trustCertificate]'s ordering and the same reasoning:
+     * there the worst outcome available was a trust that evaporated on restart, so the persist had to
+     * succeed before the grant; here it is a revocation that comes *back* on restart, so the persist
+     * has to succeed before the handshake stops honouring it. A user who revokes a certificate and
+     * finds it trusted again tomorrow has been told something false about their own device.
+     *
+     * The host is read before the clear, because afterwards there is nothing left to say which host to
+     * drop from the live set.
+     */
+    override suspend fun forgetPinnedCertificate(): Outcome<Unit> {
+        val host: String = credentials.pinnedCertificateHost() ?: return Outcome.Ok
+        if (!credentials.clearPinnedCertificate()) {
+            return Outcome.Failure(NeedlerError.Unexpected("could not forget the certificate pin"))
+        }
+        // Live, so the next request stops trusting it rather than the next launch: the store is read
+        // on every handshake and `NeedlerHttpClient` evicts pooled connections when it changes.
+        pins.clear(host)
         return Outcome.Ok
     }
 

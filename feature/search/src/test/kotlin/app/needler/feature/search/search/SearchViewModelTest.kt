@@ -295,7 +295,74 @@ class SearchViewModelTest {
             assertFalse(state.searching)
             assertEquals(1, state.tracks.size)
             assertEquals(CATALOGUE_OFFLINE, state.catalogueNote)
+            assertEquals(FROM_LAST_SYNC, state.albumsSourceNote)
             assertFalse("no page of a catalogue that cannot be reached", state.canPageCatalogue)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The other half of the offline lane: connectivity reaching the sheet that
+     * places a write, not just the note about the one that reads.
+     *
+     * REQUIREMENTS.md "Failure handling" queues a pull placed offline for
+     * replay, and the user is entitled to know that before confirming rather
+     * than from the notice afterwards. Asserted through the real flow because
+     * the copy is only as good as the flag under it.
+     */
+    @Test
+    fun `the pull sheet warns that an offline pull will be queued`() = runTest {
+        sessions.connectivityFlow.value = ConnectivityState.Offline
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onPull(SampleSearch.buzz)
+            advanceUntilIdle()
+            val offline = expectMostRecentItem()
+
+            assertEquals(SampleSearch.buzz, offline.pullSheetAlbum)
+            assertEquals(QUEUE_PULL_LABEL, offline.pullConfirmLabel)
+            assertTrue(offline.pullSheetNote.orEmpty().contains("queued"))
+
+            sessions.connectivityFlow.value = ConnectivityState.Unmetered
+            advanceUntilIdle()
+            val online = expectMostRecentItem()
+
+            assertEquals(PULL_LABEL, online.pullConfirmLabel)
+            assertNull("nothing extra to say with a connection", online.pullSheetNote)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The promise `SUBSCRIPTION_TIMEOUT_MS` is there to keep, asserted rather
+     * than assumed: "a rotation, or a trip into an album and straight back, does
+     * not lose the user's search".
+     *
+     * The screen going away cancels the only collector, which is what that
+     * timeout is about. It is worth a test of its own because the search field
+     * now *selects* that surviving query on arrival rather than clearing it
+     * (`SearchFieldEntryTest`), and the alternative fix - blanking the query on
+     * entry - would have deleted it here. Nothing would have failed.
+     */
+    @Test
+    fun `the query survives the screen going away and coming back`() = runTest {
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onQueryChange("dido")
+            advanceUntilIdle()
+            assertEquals("dido", expectMostRecentItem().query)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        // Long enough for the subscription to have timed out, so this is the
+        // cold start the album screen leaves behind and not a live flow.
+        advanceUntilIdle()
+
+        model.state.test {
+            assertEquals("dido", awaitItem().query)
             cancelAndIgnoreRemainingEvents()
         }
     }

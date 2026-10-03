@@ -3,6 +3,7 @@ package app.needler.settings
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.RemovedDownload
+import app.needler.core.domain.model.SyncReport
 
 /**
  * The sentences a storage action reports when it has finished, or when it could not run.
@@ -40,6 +41,69 @@ internal object SettingsNotices {
                 SettingsFormat.plural(removed.removedTracks.toLong(), "track") + ", " +
                 SettingsFormat.bytes(removed.freedBytes) + " freed."
         }
+
+    /**
+     * What forgetting a certificate says afterwards.
+     *
+     * It names the consequence rather than confirming the act, because the act is already visible -
+     * the row above it has changed to "None" by the time this is read - and the consequence is not.
+     * The server is unreachable from this moment, and the user needs to know where to go to fix that
+     * rather than discovering it the next time they press play.
+     */
+    const val FORGOT_CERTIFICATE: String =
+        "Needler no longer trusts this certificate. This server will be unreachable until you " +
+            "trust it again from the Connect screen."
+
+    /**
+     * What a finished **Sync now** says.
+     *
+     * ## What this fixes
+     *
+     * It said `Synced 0 albums and 0 artists.` A sentence whose two numbers are both zero reads as a
+     * report of failure, and the device audit read it as one - it is the shape of an error message,
+     * with a success's punctuation. Nothing had gone wrong: the server's library simply had no work in
+     * it for this device.
+     *
+     * ## Why `libraryUnchanged` was not enough on its own
+     *
+     * [SyncReport.libraryUnchanged] is true only for the cheap path, where the revision had not moved
+     * and the engine returned after one request. A pass that *did* run - a moved revision, a forced
+     * sync, or a full rebuild - and then found nothing to write comes back with the flag false and
+     * every count at zero, which is the case the user actually hit. So the question asked here is "did
+     * this write anything", not "did it decide to look".
+     *
+     * `tracksUpdated` and the evictions are folded in for honesty rather than for display: both are
+     * only ever accumulated inside `LibrarySyncEngine`'s per-album loop, so a non-zero track count
+     * with no albums cannot currently arise - but "already up to date" would be a lie the day it can,
+     * and the counts that *are* drawn would not notice.
+     *
+     * The wording is `SyncSummary`'s own, which says "nothing changed" for exactly this outcome in the
+     * diagnostics log. Two sentences about one event, in two places, that disagree about whether it
+     * worked is how a user comes to distrust both.
+     */
+    fun synced(report: SyncReport): String = if (report.changedNothing) {
+        "Already up to date."
+    } else {
+        "Synced " + SettingsFormat.plural(report.albumsUpdated.toLong(), "album") +
+            " and " + SettingsFormat.plural(report.artistsUpdated.toLong(), "artist") + "."
+    }
+
+    /**
+     * Whether a finished pass wrote anything at all to the mirror.
+     *
+     * An extension rather than a property on [SyncReport], because "did this change anything the user
+     * would notice" is a question about copy on one screen and not part of the domain model's contract
+     * - `SyncSummary` asks a near-identical question for the log and phrases its answer differently.
+     */
+    private val SyncReport.changedNothing: Boolean
+        get() = libraryUnchanged ||
+            (
+                albumsUpdated == 0 &&
+                    artistsUpdated == 0 &&
+                    tracksUpdated == 0 &&
+                    playlistsUpdated == 0 &&
+                    staleTracksEvicted.isEmpty()
+                )
 
     /**
      * One sentence a person can act on, for each failure a storage control can actually produce.

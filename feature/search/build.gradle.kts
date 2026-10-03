@@ -48,4 +48,12 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.hilt.navigation.compose)
+
+    // On the JVM, beside Robolectric, so what the search field does with the
+    // caret can be driven rather than looked at. SearchFieldEntryTest types into
+    // the real field and reads back its selection: the defect it guards against -
+    // a stale query the first keystroke prepends to instead of replacing - is
+    // one character of text and no pixels, so no render of this screen can fail
+    // on it. Same dependency, same reason, as :feature:player's measure tests.
+    testImplementation(libs.compose.ui.test.junit4)
 }

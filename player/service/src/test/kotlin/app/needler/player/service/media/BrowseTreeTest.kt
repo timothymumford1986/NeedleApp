@@ -216,14 +216,22 @@ class BrowseTreeTest {
     fun `an un-owned album never appears in a list`() = runTest {
         every { library.observeAlbumList(any(), any(), any()) } returns flowOf(
             listOf(
-                Fixtures.album(mbid = Fixtures.ALBUM_A, title = "In library", state = AlbumState.Owned),
-                Fixtures.album(mbid = Fixtures.ALBUM_B, title = "Not owned", state = AlbumState.NotOwned),
+                Fixtures.album(
+                    mbid = Fixtures.ALBUM_A,
+                    title = "On the server",
+                    state = AlbumState.Owned,
+                ),
+                Fixtures.album(
+                    mbid = Fixtures.ALBUM_B,
+                    title = "Only in the catalogue",
+                    state = AlbumState.NotOwned,
+                ),
             ),
         )
 
         val rows = tree.children(MediaId.BROWSE_ALBUMS, page = 0, pageSize = 20)
 
-        assertEquals(listOf("In library"), rows.map { it.title })
+        assertEquals(listOf("On the server"), rows.map { it.title })
     }
 
     @Test
@@ -353,7 +361,11 @@ class BrowseTreeTest {
             LocalSearchResults(
                 query = "rain",
                 albums = listOf(
-                    Fixtures.album(mbid = Fixtures.ALBUM_A, title = "In library", state = AlbumState.Owned),
+                    Fixtures.album(
+                        mbid = Fixtures.ALBUM_A,
+                        title = "On the server",
+                        state = AlbumState.Owned,
+                    ),
                     Fixtures.album(
                         mbid = Fixtures.ALBUM_B,
                         title = "Only in the catalogue",
@@ -365,7 +377,7 @@ class BrowseTreeTest {
 
         val rows = tree.searchRows("rain", page = 0, pageSize = 20)
 
-        assertEquals(listOf("In library"), rows.map { it.title })
+        assertEquals(listOf("On the server"), rows.map { it.title })
     }
 
     /**

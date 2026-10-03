@@ -219,8 +219,8 @@ internal object SearchFormat {
  * | `NotOwned` | none |
  * | `PendingApproval` | Waiting |
  * | `Acquiring` | Pulling, with percentage — or Searching / Needs attention |
- * | `Owned` | In library |
- * | `Pinned` | On device |
+ * | `Owned` | Server |
+ * | `Pinned` | Device |
  * | `Failed` | no source found |
  *
  * All four of the badges screen 03 draws on one list come out of this one

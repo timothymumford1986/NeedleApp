@@ -443,7 +443,7 @@ public class LibraryRepositoryTest {
         runTest {
             albumDao.rows[RG] = albumRow(state = AlbumStateDb.PINNED)
             artistDao.rows[ARTIST_MBID] = artistRow()
-            v1.artistReleasesResponse = {
+            v1.artistReleasesResponse = { _, _ ->
                 ArtistReleasesDto(
                     albums = listOf(
                         ReleaseItemDto(id = RG, title = "Spiderland", year = 1991),
@@ -507,7 +507,7 @@ public class LibraryRepositoryTest {
     @Test
     public fun `a warming response with nothing in it is a failure, not an empty discography`(): Unit =
         runTest {
-            v1.artistReleasesResponse = { ArtistReleasesDto(warming = true, sourceTotalCount = null) }
+            v1.artistReleasesResponse = { _, _ -> ArtistReleasesDto(warming = true, sourceTotalCount = null) }
 
             val result = repository.refreshArtistDiscography(ArtistMbid(REAL_ARTIST_MBID))
 
@@ -521,7 +521,7 @@ public class LibraryRepositoryTest {
     /** A partial answer is still an answer: the flag alone must not throw away resolved rows. */
     @Test
     public fun `a warming response that still carried releases is kept`(): Unit = runTest {
-        v1.artistReleasesResponse = {
+        v1.artistReleasesResponse = { _, _ ->
             ArtistReleasesDto(
                 warming = true,
                 albums = listOf(ReleaseItemDto(id = catalogueOnly, title = "Tweez", year = 1989)),
@@ -556,7 +556,7 @@ public class LibraryRepositoryTest {
                 state = AlbumStateDb.NOT_OWNED,
                 year = 1989,
             )
-            v1.artistReleasesResponse = {
+            v1.artistReleasesResponse = { _, _ ->
                 ArtistReleasesDto(
                     albums = listOf(ReleaseItemDto(id = catalogueOnly, title = "Tweez", year = 1989)),
                 )
@@ -592,7 +592,7 @@ public class LibraryRepositoryTest {
                 artistMbid = otherArtist,
                 state = AlbumStateDb.NOT_OWNED,
             )
-            v1.artistReleasesResponse = {
+            v1.artistReleasesResponse = { _, _ ->
                 ArtistReleasesDto(
                     albums = listOf(
                         ReleaseItemDto(id = RG, title = "Spiderland", year = 1991),
@@ -656,6 +656,153 @@ public class LibraryRepositoryTest {
         repository.refreshArtistDiscography(ArtistMbid(REAL_ARTIST_MBID))
 
         assertTrue(v1.calls.any { it.startsWith("artistReleases(") })
+    }
+
+    // ------------------------------------------------------- paging a discography
+
+    /**
+     * A discography is more than one page, and the second one is asked for where the server said.
+     *
+     * The defect: `v1.artistReleases` was called with its own defaults, `limit = 50, offset = 0`,
+     * and `has_more`, `next_offset`, `returned_count` and `source_total_count` were all discarded.
+     * A prolific artist's discography therefore stopped at fifty release groups, and nothing in the
+     * app knew it had - artist detail drew the fifty and then said that was the artist's whole
+     * output. These assertions are the four fields put back to use.
+     */
+    @Test
+    public fun `a discography reports the cursor and the total the server sent`(): Unit = runTest {
+        v1.artistReleasesResponse = { _, offset ->
+            if (offset == 0) {
+                ArtistReleasesDto(
+                    albums = listOf(ReleaseItemDto(id = RG, title = "Spiderland", year = 1991)),
+                    offset = 0,
+                    returnedCount = 1,
+                    nextOffset = 50,
+                    hasMore = true,
+                    sourceTotalCount = 212,
+                )
+            } else {
+                ArtistReleasesDto(
+                    albums = listOf(ReleaseItemDto(id = catalogueOnly, title = "Tweez", year = 1989)),
+                    offset = offset,
+                    returnedCount = 1,
+                    hasMore = false,
+                    sourceTotalCount = 212,
+                )
+            }
+        }
+
+        val first = repository.refreshArtistDiscographyPage(ArtistMbid(REAL_ARTIST_MBID), offset = 0)
+
+        assertTrue("the first page failed: " + first, first is Outcome.Success)
+        val firstPage = (first as Outcome.Success).value
+        assertEquals(50, firstPage.nextOffset)
+        assertEquals(212, firstPage.sourceTotal)
+        assertEquals(1, firstPage.returned)
+        assertTrue(firstPage.hasMore)
+        // The page size is named rather than inherited, and it reaches the wire with the offset.
+        assertTrue(
+            "the first page was not asked for with a page size: " + v1.calls,
+            v1.calls.any { it.contains("limit=50, offset=0") },
+        )
+
+        val second = repository.refreshArtistDiscographyPage(
+            ArtistMbid(REAL_ARTIST_MBID),
+            offset = firstPage.nextOffset!!,
+        )
+
+        val secondPage = (second as Outcome.Success).value
+        assertNull("the walk did not end", secondPage.nextOffset)
+        assertFalse(secondPage.hasMore)
+        assertTrue(v1.calls.any { it.contains("offset=50") })
+        // Both pages landed in the mirror, which is where the screen reads them from.
+        assertEquals("Spiderland", albumDao.rows[RG]?.title)
+        assertEquals("Tweez", albumDao.rows[catalogueOnly]?.title)
+    }
+
+    /**
+     * `has_more` is believed only when it comes with somewhere to go.
+     *
+     * The wire can name an offset that does not advance - here `next_offset: 0` on the page at
+     * offset 0 - and obeying it would re-request the same page for ever, which on this screen is a
+     * list that grows a row and then never changes again however often the control is tapped. The
+     * fetch replaces a non-advancing cursor with the one it can derive, and reports nothing at all
+     * when it cannot derive one.
+     */
+    @Test
+    public fun `a cursor that does not advance is replaced, and an unusable one stops the walk`(): Unit =
+        runTest {
+            v1.artistReleasesResponse = { _, offset ->
+                ArtistReleasesDto(
+                    albums = listOf(ReleaseItemDto(id = RG, title = "Spiderland", year = 1991)),
+                    offset = offset,
+                    returnedCount = 1,
+                    nextOffset = 0,
+                    hasMore = true,
+                )
+            }
+
+            val page = (
+                repository.refreshArtistDiscographyPage(ArtistMbid(REAL_ARTIST_MBID), offset = 0)
+                    as Outcome.Success
+                ).value
+
+            assertEquals("the standing-still cursor was obeyed", 1, page.nextOffset)
+
+            // And with nothing returned to advance past, the page says there is no more - rather
+            // than "more, somewhere", which is the state that would hang the list.
+            v1.artistReleasesResponse = { _, offset ->
+                ArtistReleasesDto(offset = offset, returnedCount = 0, hasMore = true)
+            }
+
+            val blind = (
+                repository.refreshArtistDiscographyPage(ArtistMbid(REAL_ARTIST_MBID), offset = 1)
+                    as Outcome.Success
+                ).value
+
+            assertNull("has_more with no cursor was taken at its word", blind.nextOffset)
+            assertFalse(blind.hasMore)
+        }
+
+    /**
+     * A warming response with nothing in it fails the first page only.
+     *
+     * Past the first page there are rows in the mirror and on the screen, so an empty answer is
+     * where the discography stopped - and reporting it as the capability failure the first page
+     * reports would retract a discography the user is reading.
+     */
+    @Test
+    public fun `an empty warming page past the first ends the walk instead of failing`(): Unit =
+        runTest {
+            v1.artistReleasesResponse = { _, offset -> ArtistReleasesDto(offset = offset, warming = true) }
+
+            val first = repository.refreshArtistDiscographyPage(ArtistMbid(REAL_ARTIST_MBID), offset = 0)
+            val later = repository.refreshArtistDiscographyPage(ArtistMbid(REAL_ARTIST_MBID), offset = 50)
+
+            assertTrue(first is Outcome.Failure)
+            assertTrue((first as Outcome.Failure).error is NeedlerError.CapabilityUnavailable)
+            assertTrue("a later empty page failed: " + later, later is Outcome.Success)
+            assertNull((later as Outcome.Success).value.nextOffset)
+        }
+
+    /** The unpaged entry point is the first page, and it still answers only yes or no. */
+    @Test
+    public fun `the unpaged refresh asks for the first page`(): Unit = runTest {
+        v1.artistReleasesResponse = { _, offset ->
+            ArtistReleasesDto(
+                albums = listOf(ReleaseItemDto(id = RG, title = "Spiderland", year = 1991)),
+                offset = offset,
+                returnedCount = 1,
+                hasMore = true,
+                nextOffset = 50,
+            )
+        }
+
+        val result = repository.refreshArtistDiscography(ArtistMbid(REAL_ARTIST_MBID))
+
+        assertTrue(result is Outcome.Success)
+        assertEquals(1, v1.calls.count { it.startsWith("artistReleases(") })
+        assertTrue(v1.calls.any { it.contains("offset=0") })
     }
 
     // ------------------------------------------------------------------ favourites

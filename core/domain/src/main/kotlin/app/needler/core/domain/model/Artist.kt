@@ -49,6 +49,77 @@ public data class Artist(
     val isMonitored: Boolean = false,
 )
 
+/**
+ * One page of an artist's catalogue discography, and what the server said about the rest.
+ *
+ * `GET /api/v1/artists/{mbid}/releases` takes `limit` and `offset` and answers with `returned_count`,
+ * `has_more`, `next_offset` and `source_total_count`. Those four were being thrown away: the fetch
+ * asked for the default first fifty release groups across all three buckets and reported only whether
+ * it had written anything, so a prolific artist's screen showed fifty records, claimed in the next
+ * sentence that this was "this artist's whole discography as MusicBrainz has it", and offered nothing
+ * to ask for the rest. This type is what a caller needs to page and to say how far it has got.
+ *
+ * REQUIREMENTS.md "Library browse" makes artist detail "where the two lanes meet visibly", and
+ * paging behaviour is per endpoint rather than global in this API - the same document records that
+ * `GET /api/v1/downloads` "has no `total` and no `total_pages`" and is therefore blind. This endpoint
+ * is not that one: it names both the next offset and the size of the population, so a client may say
+ * how much of a discography it has looked up. It still may not offer "page 3 of 7", because the
+ * cursor is an offset rather than a page number and [sourceTotal] counts release groups upstream
+ * rather than pages of them.
+ *
+ * ## One cursor, not a flag and a cursor
+ *
+ * [hasMore] is derived from [nextOffset] rather than carried beside it, so the state "there is more
+ * and no way to ask for it" cannot be represented. The wire can say exactly that - `has_more` true
+ * with `next_offset` absent and nothing returned to advance past - and a caller that believed both
+ * fields would re-request the same offset for ever. The fetch resolves that contradiction once, in
+ * favour of stopping, and what reaches here is only ever an offset that can actually be asked for.
+ */
+public data class ArtistDiscographyPage(
+    /** The offset this page was asked for, so a late answer can be told from the current one. */
+    val offset: Int,
+    /**
+     * How many release groups this page carried, across all three buckets.
+     *
+     * The server's own `returned_count` where it sent one. It counts what the catalogue holds, owned
+     * and un-owned alike, which is what makes it comparable with [sourceTotal] - the number of rows
+     * artist detail draws is not, because the owned half of that screen comes from the mirror and the
+     * catalogue's copies of those records are discarded on the join.
+     */
+    val returned: Int,
+    /**
+     * The offset to ask for next, or null when this is the end of the discography.
+     *
+     * Null also when the server claimed more and gave no usable cursor; see the type's own KDoc.
+     */
+    val nextOffset: Int? = null,
+    /**
+     * How many release groups the catalogue holds for this artist, or null when the server did not
+     * say.
+     *
+     * `source_total_count` is documented as null while `warming` is true, so a caller may never
+     * assume a figure is there.
+     */
+    val sourceTotal: Int? = null,
+) {
+
+    /** True when there is another page, which is exactly "there is an offset to ask for". */
+    public val hasMore: Boolean get() = nextOffset != null
+
+    public companion object {
+        /**
+         * The answer from a source that does not page: this is everything, and there is no count.
+         *
+         * The default implementation of
+         * [app.needler.core.domain.repository.LibraryRepository.refreshArtistDiscographyPage] returns
+         * it, which is the honest reading of an implementation that only knows how to fetch the
+         * discography whole. [sourceTotal] is deliberately null rather than zero, so nothing drawn from it can
+         * claim a total the source never reported.
+         */
+        public val UNPAGED: ArtistDiscographyPage = ArtistDiscographyPage(offset = 0, returned = 0)
+    }
+}
+
 /** A genre bucket, from Subsonic `getGenres`. */
 public data class Genre(
     val name: String,

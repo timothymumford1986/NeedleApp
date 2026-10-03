@@ -9,7 +9,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.LocalIndication
 import app.needler.core.design.motion.LocalReducedMotion
+import app.needler.core.design.motion.needlerPressIndication
 import app.needler.core.design.motion.rememberSystemReducedMotion
 
 /**
@@ -22,8 +24,24 @@ import app.needler.core.design.motion.rememberSystemReducedMotion
  * Dark only. The design pack has no light theme, so there is no `darkTheme` parameter to get wrong
  * and no dynamic colour: an olive-and-pale-blue record player does not want the wallpaper's opinion.
  *
+ * ## Why the press indication is installed here and not in each component
+ *
+ * REQUIREMENTS.md "Motion" asks that animation be suppressed when the system animator duration scale
+ * is zero, and press feedback was the one animation in the product that never asked. `MaterialTheme`
+ * provides `LocalIndication` as Material 3's ripple, and an interaction modifier that is handed no
+ * indication of its own resolves that one - so the three dozen hand-written `clickable` modifiers on
+ * list rows, scrims and glyphs were all rippling on Material's clock. One substitution at the theme
+ * reaches every one of them; a substitution per component would have reached the five that share
+ * `needlerPressSurface` and missed the rest.
+ *
+ * It is provided **inside** [MaterialTheme] rather than beside the Needler locals above, because
+ * `MaterialTheme` provides `LocalIndication` itself and would otherwise overwrite this on the way in.
+ * The order is load-bearing, which is why it is stated. [needlerPressIndication] reads the ripple back
+ * out of that same local, so under normal motion nothing is substituted at all.
+ *
  * @param reducedMotion whether to suppress animation. Defaults to the platform setting via
- *   [rememberSystemReducedMotion]; pass it explicitly in tests and screenshot harnesses.
+ *   [rememberSystemReducedMotion]; pass it explicitly in tests and screenshot harnesses. It is also
+ *   what decides the press indication above.
  */
 @Composable
 fun NeedlerTheme(
@@ -54,8 +72,12 @@ fun NeedlerTheme(
             colorScheme = materialColors,
             typography = materialTypography,
             shapes = materialShapes,
-            content = content,
-        )
+        ) {
+            CompositionLocalProvider(
+                LocalIndication provides needlerPressIndication(),
+                content = content,
+            )
+        }
     }
 }
 

@@ -117,18 +117,50 @@ class SearchUiStateTest {
                 .albumsSourceNote,
         )
         assertEquals(
-            FROM_LIBRARY,
+            FROM_LAST_SYNC,
             base.copy(results = base.results.copy(catalogue = CatalogueLaneState.Loading))
                 .albumsSourceNote,
         )
         assertEquals(
-            FROM_LIBRARY,
+            FROM_LAST_SYNC,
             base.copy(
                 results = base.results.copy(
                     catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
                 ),
             ).albumsSourceNote,
         )
+    }
+
+    /**
+     * The caption the device contradicted: three rows subtitled "Not in your
+     * library yet", under a header reading "Albums to pull - in your library".
+     *
+     * Asserted as "never the library caption, whatever the lane did" rather than
+     * on one wording, because this block's rows are un-owned by definition — it
+     * is [SearchUiState.catalogueAlbums] — so no state of the catalogue lane can
+     * make that claim true of them.
+     */
+    @Test
+    fun `the to-pull caption never claims the albums are in the library`() {
+        val lanes = listOf(
+            CatalogueLaneState.Idle,
+            CatalogueLaneState.Loading,
+            CatalogueLaneState.Ready(),
+            CatalogueLaneState.Ready(SampleSearch.degraded),
+            CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+            CatalogueLaneState.Unavailable(NeedlerError.SessionExpired),
+        )
+
+        for (lane in lanes) {
+            val state = SearchUiState(
+                query = "beastie",
+                offline = lane is CatalogueLaneState.Unavailable,
+                results = SampleSearch.khruangbinResults.copy(catalogue = lane),
+            )
+
+            assertTrue("the fixture has un-owned rows", state.catalogueAlbums.isNotEmpty())
+            assertTrue(lane.toString(), state.albumsSourceNote != FROM_LIBRARY)
+        }
     }
 
     @Test
@@ -218,6 +250,25 @@ class SearchUiStateTest {
     }
 
     /**
+     * The same query with the two signals agreeing, which is the state a phone
+     * in aeroplane mode is *supposed* to reach.
+     *
+     * Here so that the guarantee cannot be re-derived from
+     * [SearchUiState.offline] by a later author who reads the fixture above and
+     * concludes the connectivity flag would have done: it has to hold in both
+     * fixtures, and only the lane state holds in both.
+     */
+    @Test
+    fun `offline agreeing with the lane claims no lookup either`() {
+        val offline = emptyResultWith(CatalogueLaneState.Unavailable(NeedlerError.Offline()))
+            .copy(offline = true)
+
+        assertTrue(offline.showEmptyResult)
+        assertEquals(nothingFoundInLibraryOnly("dido"), offline.emptyResultDetail)
+        assertEquals(CATALOGUE_OFFLINE, offline.catalogueNote)
+    }
+
+    /**
      * The same guarantee for the lane failures that happen while the device is
      * nominally online, which is where [SearchUiState.offline] used to be wrong
      * in the other direction: a stale session or a timed-out call leaves
@@ -275,9 +326,75 @@ class SearchUiStateTest {
         assertFalse(state.showEmptyResult)
         assertFalse(state.searching)
         assertEquals(4, state.albums.size)
-        assertEquals(FROM_LIBRARY, state.albumsSourceNote)
+        assertEquals(FROM_LAST_SYNC, state.albumsSourceNote)
         assertEquals(CATALOGUE_OFFLINE, state.catalogueNote)
         assertFalse("no page of a catalogue that cannot be reached", state.canPageCatalogue)
+    }
+
+    // ---- what a Pull offline says before it is tapped -----------------------
+
+    /**
+     * REQUIREMENTS.md "Failure handling": offline "queues pulls, playlist edits,
+     * favourites and scrobbles for replay". The outcome is supported; it is also
+     * a different outcome, and the sheet is where the user still has a choice.
+     */
+    @Test
+    fun `a pull placed offline says so before it is placed`() {
+        val state = SearchUiState(
+            query = "niki",
+            offline = true,
+            results = SampleSearch.khruangbinResults.copy(
+                catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+            ),
+            pullSheetAlbum = SampleSearch.buzz,
+        )
+
+        assertEquals(QUEUE_PULL_LABEL, state.pullConfirmLabel)
+        assertTrue(
+            "the queueing is stated, not left to the notice that follows the tap",
+            state.pullSheetNote.orEmpty().contains("queued"),
+        )
+        assertTrue(state.pullSheetNote.orEmpty().contains("back online"))
+    }
+
+    /** With a connection the sheet is the sheet the pack draws, and says nothing extra. */
+    @Test
+    fun `a pull placed online keeps the pack's label and the server's own note`() {
+        val summary = "FLAC where available, else MP3 320"
+        val state = SearchUiState(
+            query = "niki",
+            results = SampleSearch.khruangbinResults.copy(catalogue = CatalogueLaneState.Ready()),
+            pullSheetAlbum = SampleSearch.buzz.copy(qualityPolicySummary = summary),
+        )
+
+        assertEquals(PULL_LABEL, state.pullConfirmLabel)
+        assertEquals("the server's own words, unchanged", summary, state.pullSheetNote)
+        assertNull(
+            "and nothing invented when the server sent none",
+            state.copy(pullSheetAlbum = SampleSearch.buzz).pullSheetNote,
+        )
+    }
+
+    /**
+     * The server's words are kept and the queueing is put in front of them: the
+     * snapshot still describes what the request will fetch, once it goes out.
+     */
+    @Test
+    fun `offline, the queueing leads and the quality snapshot follows`() {
+        val summary = "FLAC where available, else MP3 320"
+        val state = SearchUiState(
+            offline = true,
+            query = "niki",
+            pullSheetAlbum = SampleSearch.buzz.copy(qualityPolicySummary = summary),
+        )
+
+        assertEquals(PULL_QUEUED_OFFLINE + " " + summary, state.pullSheetNote)
+    }
+
+    /** No album, no sheet, so there is nothing for the caption to be about. */
+    @Test
+    fun `the sheet note is absent when no sheet is open`() {
+        assertNull(SearchUiState(offline = true).pullSheetNote)
     }
 
     /** Online, with results: unchanged, and the caption claims the lane that ran. */

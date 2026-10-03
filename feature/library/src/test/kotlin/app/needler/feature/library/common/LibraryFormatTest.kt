@@ -83,9 +83,25 @@ class LibraryFormatTest {
     fun `a bitrate is appended only to lossy formats`() {
         assertEquals("FLAC", LibraryFormat.quality(AudioQuality(AudioFormat.FLAC, 891)))
         assertEquals("MP3 320", LibraryFormat.quality(AudioQuality(AudioFormat.MP3, 320)))
+        // 256 exactly: `AudioQuality.badgeBitrateKbps` checks the encoder's own rungs before it
+        // rounds, so an exact figure survives and only an average is tidied.
         assertEquals("MP3 256", LibraryFormat.quality(AudioQuality(AudioFormat.MP3, 256)))
         assertEquals("MP3", LibraryFormat.quality(AudioQuality(AudioFormat.MP3, null)))
         assertNull(LibraryFormat.quality(AudioQuality(AudioFormat.UNKNOWN, 320)))
+    }
+
+    /**
+     * The row and the player's tags read the same figure, and it is not the raw average.
+     *
+     * `AudioQuality.badgeBitrateKbps` rounds to the nearest 10 kbps, so the 319 the server reports
+     * for a VBR rip reads as the 320 the user ripped. It does **not** snap to the nearest rung:
+     * 280 stays 280, because a 280 kbps average is audibly less than a 320 kbps one and a badge
+     * calling it 320 would be a worse lie than the ones digit was.
+     */
+    @Test
+    fun `a lossy bitrate is rounded to the nearest ten, not to the nearest rung`() {
+        assertEquals("MP3 320", LibraryFormat.quality(AudioQuality(AudioFormat.MP3, 319)))
+        assertEquals("MP3 280", LibraryFormat.quality(AudioQuality(AudioFormat.MP3, 280)))
     }
 
     @Test
@@ -222,8 +238,8 @@ class LibraryFormatTest {
                 "Pull " + label,
                 "Cancel the pull of " + label,
                 "Retry the pull of " + label,
-                "On device. Remove " + label + " from this device",
-                "Pull local. Download " + label + " to this device",
+                "Device. Remove " + label + " from this device",
+                "Pull to device. Download " + label + " to this device",
                 "Go to " + LibraryFormat.artistLabel(album.artistName),
             )
             sentences.forEach { sentence ->
@@ -280,7 +296,7 @@ class LibraryFormatTest {
             albumFormatSpokenLabel(AudioQuality(AudioFormat.MP3, 320), onDevice = false),
         )
         assertEquals(
-            "FLAC, lossless, on device",
+            "FLAC, lossless, Device",
             albumFormatSpokenLabel(AudioQuality(AudioFormat.FLAC, null), onDevice = true),
         )
     }

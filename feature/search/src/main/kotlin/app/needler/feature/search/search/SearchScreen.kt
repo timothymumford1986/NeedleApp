@@ -51,7 +51,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -113,8 +115,8 @@ import kotlin.math.roundToInt
  * on this screen asks which server lane it came from. That is REQUIREMENTS.md's
  * identity model doing its job: "an album found by catalogue search and an album
  * already in the library are the same domain object at different states". So the
- * four different trailing treatments screen 03 shows — **On device**, **In
- * library**, **Pulling**, and a **Pull** button — are four values of
+ * four different trailing treatments screen 03 shows — **Device**, **Server**,
+ * **Pulling**, and a **Pull** button — are four values of
  * [AlbumState] and not four kinds of result.
  *
  * The albums are drawn in two blocks all the same, split on that state and never
@@ -333,10 +335,16 @@ fun SearchScreen(
                 onMonitorArtistChange = onMonitorArtistChange,
                 onConfirm = onConfirmPull,
                 onCancel = onCancelPull,
+                // "Queue the pull" with no connection. The write is journalled
+                // either way; what changes is when the server hears about it, and
+                // this is the last line read before the tap that decides.
+                confirmLabel = state.pullConfirmLabel,
                 // The server's own `quality_snapshot_summary` when it sent one,
                 // which is the only account of what will be downloaded that is
-                // guaranteed to be true. Null falls back to the sheet's own line.
-                qualityNote = sheetAlbum.qualityPolicySummary,
+                // guaranteed to be true, preceded offline by what becomes of the
+                // request itself. Null falls back to the sheet's own line. See
+                // SearchUiState.pullSheetNote.
+                qualityNote = state.pullSheetNote,
                 busy = state.busy,
                 artwork = {
                     AlbumArtwork(
@@ -417,6 +425,46 @@ private fun listBottomInset(chromeBelowListPx: Int): Dp {
  * take focus away and keep it; a request that re-fired on recomposition would
  * drag the keyboard back up under them. Screen 03 draws the field with the
  * accent focus border already on it, so this is also the state the pack shows.
+ *
+ * ## And the old query is selected, not cleared
+ *
+ * `search` is a bottom-navigation destination, so leaving the tab disposes this
+ * composition but not [SearchViewModel]: the previous query is still in
+ * [SearchUiState.query] when the user taps the library's search box again, which
+ * is what `SUBSCRIPTION_TIMEOUT_MS` and REQUIREMENTS.md "Search behaviour"
+ * between them intend. What was wrong was the caret. `BasicTextField`'s `String`
+ * overload seeds its selection to `TextRange(0)`, so the first keystroke landed
+ * at index 0 and **prepended**: typing "beastie" over a previous "dido"
+ * searched for "beastiedido" and found nothing, and the empty result looked like
+ * a fault in search itself.
+ *
+ * So the field owns a [TextFieldValue] and seeds it with the whole query
+ * selected. The first keystroke replaces it, the way arriving at a field with
+ * stale text in it should behave, and a user who came back to *edit* that query
+ * still can: one tap in the text puts the caret where they tapped.
+ *
+ * Clearing the query on arrival instead was rejected, and the reason is in
+ * [NeedlerSearchField]'s `TextFieldValue` overload: it costs a flag in a
+ * `SavedStateHandle` to stop a rotation wiping the search, and it throws away
+ * text the user may have meant to keep.
+ *
+ * ## Why the re-seed is an effect and not an `if`
+ *
+ * The ViewModel also changes this text on its own: a recent query, a suggestion,
+ * the clear button. Those have to reach the field, so it re-seeds when
+ * [SearchUiState.query] stops matching - with the caret at the end, because a
+ * completion the user just chose is a starting point to type from, not something
+ * to overtype.
+ *
+ * That comparison is in a [LaunchedEffect] **keyed on the query**, not run bare
+ * on every recomposition. A bare `if` also fires on the recomposition a keystroke
+ * itself triggers, where the field already holds the new text and `state.query`
+ * is one frame behind it, and it would then reset the field to the older text and
+ * drag the caret to the end - fighting the user mid-word, which is worse than the
+ * defect being fixed. Keyed on the query, the effect runs only when the query
+ * actually changed, and the value it sees is the latest one: the ViewModel's
+ * [SearchUiState] arrives through a conflated `StateFlow`, so a composition never
+ * sees a query older than the keystroke that caused it.
  */
 @Composable
 private fun SearchHeader(
@@ -443,10 +491,23 @@ private fun SearchHeader(
         }
     }
 
+    // Selected, so the first keystroke replaces whatever the last visit left here.
+    var query: TextFieldValue by remember {
+        mutableStateOf(TextFieldValue(state.query, TextRange(0, state.query.length)))
+    }
+    LaunchedEffect(state.query) {
+        if (state.query != query.text) {
+            query = TextFieldValue(state.query, TextRange(state.query.length))
+        }
+    }
+
     val field: @Composable () -> Unit = {
         NeedlerSearchField(
-            value = state.query,
-            onValueChange = onQueryChange,
+            value = query,
+            onValueChange = { next: TextFieldValue ->
+                query = next
+                onQueryChange(next.text)
+            },
             onClear = onClearQuery,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSubmitQuery() }),
@@ -613,9 +674,11 @@ private fun LazyListScope.resultBlocks(
         blockHeader(
             key = "albums-catalogue",
             title = CATALOGUE_ALBUMS_HEADER,
-            // "from MusicBrainz" once the catalogue has answered, "in your
-            // library" while it has not or cannot — these rows are then cached
-            // catalogue records the mirror happens to hold. See SearchUiState.
+            // "from MusicBrainz" once the catalogue has answered, "from your
+            // last sync" while it has not or cannot — these rows are then the
+            // un-owned catalogue records the mirror happens to hold, and saying
+            // "in your library" over a block of albums that are not is the one
+            // claim this header cannot make. See SearchUiState.
             trailing = state.albumsSourceNote,
             topGap = if (first) 0.dp else sectionGap,
             headerGap = headerGap,
@@ -1081,7 +1144,7 @@ private fun SongRow(
     }
 }
 
-/** `Mordechai, Khruangbin, 2024, On device` — the whole row in one phrase. */
+/** `Mordechai, Khruangbin, 2024, Device` — the whole row in one phrase. */
 private fun albumRowDescription(album: Album): String {
     val badge: NeedlerAlbumBadge? = albumBadge(album.state)
     return buildString {
@@ -1093,10 +1156,10 @@ private fun albumRowDescription(album: Album): String {
             append(badge.accessibleLabel())
         }
         // The green check the pack puts on the artwork of a complete download is
-        // already covered by the On device badge, so it is not repeated; what is
+        // already covered by the Device badge, so it is not repeated; what is
         // worth saying is when a *pinned* album is not yet fully down.
         if (album.state is AlbumState.Pinned && !album.showsOnDeviceCheck) {
-            append(", still downloading to this device")
+            append(", pulling to device")
         }
     }
 }

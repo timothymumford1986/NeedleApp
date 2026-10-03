@@ -7,6 +7,7 @@ package app.needler.settings
 import app.needler.core.domain.model.CrossfadeDuration
 import app.needler.core.domain.model.DownloadedAlbum
 import app.needler.core.domain.model.EqPreset
+import app.needler.core.domain.model.PinnedCertificate
 import app.needler.core.domain.model.StreamRung
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -158,6 +159,22 @@ data class ServerSectionState(
     /** What the last **Sync now** did, or why it could not. Replaced by the next one. */
     val syncNotice: String? = null,
 
+    /**
+     * The self-signed certificate this install has trusted, or null for none.
+     *
+     * Null is ambiguous on its own - it is both "nothing is pinned" and "the pin has not been read
+     * yet" - which is what [certificateChecked] is for. The row must not flash "None" on the way to
+     * saying a certificate is trusted, because "None" is the reassuring answer and a reassuring answer
+     * that turns out to be wrong is worse than a blank.
+     */
+    val pinnedCertificate: PinnedCertificate? = null,
+
+    /** True once the pin has actually been read, whatever the answer was. */
+    val certificateChecked: Boolean = false,
+
+    /** What forgetting a certificate did, or why it could not. Replaced by the next one. */
+    val certificateNotice: String? = null,
+
     /** When the state was assembled, so "2 min ago" is computed against a fixed instant. */
     val renderedAt: Instant = Instant.fromEpochSeconds(0L),
 ) {
@@ -179,6 +196,48 @@ data class ServerSectionState(
 
     /** A sync with no server to sync against is not an action, so the row does not offer it. */
     val canSyncNow: Boolean get() = host != null && !syncing
+
+    // ---- the trusted certificate -------------------------------------------
+
+    /**
+     * Whether the Server block draws its certificate row at all.
+     *
+     * ## Why the row is drawn even when nothing is pinned
+     *
+     * The question the row answers is "is this app trusting a certificate my browser would refuse",
+     * and that question has two answers, both of which a user is entitled to. A row that appeared only
+     * in the affirmative could not deliver the negative one: a user who found no row would not know
+     * whether nothing was pinned or whether Needler simply never says. That was the state this fixes -
+     * "Trust this certificate" on the Connect screen wrote a pin that no surface in the application
+     * ever mentioned again.
+     *
+     * It is gated on a server being configured, because a fresh install has nothing to have trusted,
+     * and on the pin having been read, so the row never shows "None" before it knows.
+     */
+    val showCertificateRow: Boolean get() = host != null && certificateChecked
+
+    /**
+     * `music.yourhome.net`, or `None`.
+     *
+     * The **host**, not the subject or the issuer, because the host is what the pin is scoped to and
+     * the subject was never written to disk - see
+     * [app.needler.core.domain.model.PinnedCertificate]. It is also the more useful of the two: a pin
+     * grants an exception to one name, and that name is what the user needs to recognise.
+     */
+    val trustedCertificateValue: String get() = pinnedCertificate?.host ?: "None"
+
+    /**
+     * The fingerprint, on its own line under the row, or null when nothing is pinned.
+     *
+     * Drawn in full. It is 95 characters and it is the only thing on this screen a user can *check*
+     * against their own server, so an abbreviation would leave the row stating a fact nobody can
+     * verify - which is the whole value the row has over the Connect screen's prompt, where the full
+     * fingerprint was shown once and then never again.
+     */
+    val trustedCertificateFingerprint: String? get() = pinnedCertificate?.sha256Fingerprint
+
+    /** A certificate can only be forgotten while one is pinned and nothing else is in flight. */
+    val canForgetCertificate: Boolean get() = pinnedCertificate != null
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +497,7 @@ data class NotificationSectionState(
  *  * **Remove all from device**, which clears both audio tiers and the artwork cache but never the
  *    metadata mirror.
  *
- * It also carries the two toggles that survived: "Keep pulled albums on device", and the moved
+ * It also carries the two toggles that survived: "Keep pulled albums on the device", and the moved
  * Wi-Fi-only setting.
  */
 data class StorageSectionState(
@@ -490,6 +549,38 @@ data class StorageSectionState(
     val canClearCache: Boolean get() = cachedBytes > 0L && !working
 
     val canRemoveAll: Boolean get() = totalBytes > 0L && !working
+
+    /**
+     * What "Keep pulled albums on device" says underneath itself, which depends on whether it is on.
+     *
+     * ## What this fixes
+     *
+     * The subtitle was one fixed sentence - "Anything this device pulls is downloaded straight away."
+     * - and the switch defaults to **off**, so the screen described the setting's on-state while
+     * sitting beside a switch that was not in it. Read on the device it is simply wrong: it says the
+     * app is doing something it is not doing.
+     *
+     * ## Why it reflects the state rather than being rewritten to be state-free
+     *
+     * A state-free sentence was the other option and is what the Wi-Fi toggle below has
+     * ("Asking your server to find music costs almost no data; downloading it here does."), which is
+     * a *reason* rather than a description and so cannot be wrong either way round. It would have
+     * worked here too. This reflects the state instead, because the subtitle then also confirms that
+     * the tap landed: a control whose description is identical before and after a press says nothing
+     * about whether the press worked, and that is the fault
+     * `app.needler.core.design.component.secretRevealContentDescription` was written to avoid one
+     * screen over.
+     *
+     * Both sentences name the same two places in REQUIREMENTS.md "Vocabulary"'s words - the server
+     * and the device - so the off-state reads as a description of where the music is rather than as a
+     * warning about a feature being disabled.
+     */
+    val keepPulledAlbumsSubtitle: String
+        get() = if (keepPulledAlbumsOnDevice) {
+            "Anything this device pulls is downloaded straight away."
+        } else {
+            "Albums this device pulls stay on the server until you pull them to this device."
+        }
 
     /** The warning line, phrased with the shortfall so it names an amount rather than a mood. */
     val lowOnSpaceMessage: String?
@@ -660,19 +751,41 @@ enum class DestructiveSettingsAction {
      * above.
      */
     SignOut,
+
+    /**
+     * Forgets the trusted self-signed certificate, so the server's certificate is validated normally
+     * again.
+     *
+     * Two taps, and the reason is not data loss - a pin is re-grantable - but that it **takes the
+     * server offline until it is re-granted**. The next handshake fails with
+     * `NeedlerError.CertificateUntrusted`, and the prompt that offers to trust it again lives on the
+     * Connect screen, so a user who taps this by accident has a trip through "Change server" ahead of
+     * them. That is a bigger consequence than "Clear cached music", which REQUIREMENTS.md puts behind
+     * a single tap because "those bytes are re-fetchable and were never explicitly asked for".
+     *
+     * The prompt therefore leads with the consequence rather than with the act. The rejected
+     * alternative was a single tap plus a notice afterwards, which is the shape of a control that
+     * tells you what it has done to you.
+     */
+    ForgetCertificate,
     ;
 
     /** What the confirmation asks. */
     val prompt: String
         get() = when (this) {
             RemoveAllFromDevice ->
-                "This deletes every downloaded album and everything cached while listening. Your " +
+                "This deletes every downloaded album and everything held temporarily. Your " +
                     "library stays browsable and nothing on the server changes."
 
             SignOut ->
                 "This revokes this device's session and app-password on the server. Music already " +
                     "on the device is left alone; you will need your account password to sign in " +
                     "again."
+
+            ForgetCertificate ->
+                "Needler will stop trusting this certificate straight away, so this server " +
+                    "becomes unreachable until you trust it again from the Connect screen. " +
+                    "Nothing on this device is deleted."
         }
 
     /** The label on the button that goes through with it. */
@@ -680,5 +793,6 @@ enum class DestructiveSettingsAction {
         get() = when (this) {
             RemoveAllFromDevice -> "Remove everything"
             SignOut -> "Sign out"
+            ForgetCertificate -> "Forget it"
         }
 }

@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.ArtistDiscographyPage
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.FavouriteTarget
@@ -441,6 +442,195 @@ class ArtistViewModelTest {
         assertFalse(state.canRetryDiscography)
     }
 
+    // ---- paging the discography ---------------------------------------------
+
+    /**
+     * A discography longer than one page offers the next one, and the tap fetches it.
+     *
+     * The defect: `refreshArtistDiscography` called the endpoint with its own defaults,
+     * `limit = 50, offset = 0`, and discarded `has_more` and `next_offset`. A prolific artist got
+     * the first fifty release groups across all three buckets and the screen had no affordance to
+     * ask for the rest - so the list was quietly short, and the sentence drawn under it said that
+     * was the artist's whole output. REQUIREMENTS.md "Library browse" asks this screen for "the
+     * artist's full discography".
+     *
+     * The offsets asked for are asserted, not just the row: a control that offers another page and
+     * then re-requests the first one is the same bug with a button on it.
+     */
+    @Test
+    fun `a discography of more than one page offers the next, and the tap fetches it`() = runTest {
+        library.ownedByArtist.value = mapOf(artist.mbid.value to owned)
+        library.discographyByArtist.value = mapOf(artist.mbid.value to owned)
+        library.discographyPage = { offset ->
+            if (offset == 0) {
+                library.discographyByArtist.value =
+                    mapOf(artist.mbid.value to (owned + unowned.take(1)))
+                Outcome.Success(
+                    ArtistDiscographyPage(
+                        offset = 0,
+                        returned = 50,
+                        nextOffset = 50,
+                        sourceTotal = 212,
+                    ),
+                )
+            } else {
+                library.discographyByArtist.value = mapOf(artist.mbid.value to (owned + unowned))
+                Outcome.Success(ArtistDiscographyPage(offset = offset, returned = 12, sourceTotal = 212))
+            }
+        }
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.discographySettled) loaded = awaitItem()
+            assertTrue(loaded.discographyHasMore)
+            assertEquals(50, loaded.discographyFetched)
+            assertEquals(212, loaded.discographyTotal)
+            // The label carries the server's own figures, which is the only thing a reader cannot
+            // work out from the list itself.
+            assertEquals(
+                "Show more · 50 of 212 releases looked up",
+                loaded.discographyMoreRow?.label,
+            )
+            // And no claim that this is the whole discography while there is more of it.
+            assertFalse(loaded.discographyEmpty)
+
+            model.onShowMoreDiscography()
+
+            var more = awaitItem()
+            // The page's rows and the page's cursor reach this state through two different flows -
+            // the mirror and the lookup - so both conditions are waited for rather than assumed to
+            // land in one emission.
+            while (
+                more.loadingMoreDiscography ||
+                more.discographyHasMore ||
+                more.catalogueAlbums.size < 2
+            ) {
+                more = awaitItem()
+            }
+            assertEquals(62, more.discographyFetched)
+            assertEquals(2, more.catalogueAlbums.size)
+            // The end of the discography is not a row: there is nothing left to ask for.
+            assertNull(more.discographyMoreRow)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf(0, 50), library.discographyOffsets)
+    }
+
+    /**
+     * A page that did not arrive leaves the row, and tapping it asks for the same page again.
+     *
+     * The failure is deliberately not the discography-wide one: that sentence says "the list you
+     * are reading is a cache and may be short" and names the Try again button, and this one is
+     * about a page that is missing from the end of a list that is otherwise current. Two sentences
+     * naming two controls for one fact is how a screen comes to look broken.
+     */
+    @Test
+    fun `a page that did not arrive keeps the cursor and stays tappable`() = runTest {
+        library.ownedByArtist.value = mapOf(artist.mbid.value to owned)
+        library.discographyByArtist.value = mapOf(artist.mbid.value to (owned + unowned))
+        library.discographyPage = { offset ->
+            if (offset == 0) {
+                Outcome.Success(ArtistDiscographyPage(offset = 0, returned = 50, nextOffset = 50))
+            } else {
+                Outcome.Failure(NeedlerError.Offline())
+            }
+        }
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.discographySettled) loaded = awaitItem()
+
+            model.onShowMoreDiscography()
+
+            var failed = awaitItem()
+            while (!failed.moreDiscographyFailed) failed = awaitItem()
+            assertFalse(failed.loadingMoreDiscography)
+            // The cursor is untouched, so the same page can be asked for again.
+            assertTrue(failed.discographyHasMore)
+            assertEquals(MORE_RELEASES_FAILED, failed.discographyMoreRow?.label)
+            assertTrue(failed.discographyMoreRow?.enabled == true)
+            assertTrue(failed.discographyMoreRow?.isProblem == true)
+            // And nothing is said about the rows already on screen, which are current.
+            assertNull(failed.discographyError)
+            assertFalse(failed.discographyIncomplete)
+
+            model.onShowMoreDiscography()
+            advanceUntilIdle()
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf(0, 50, 50), library.discographyOffsets)
+    }
+
+    /**
+     * A warming discography offers no page to fetch, and the artist's id is not the reason.
+     *
+     * `warming` means the server is still resolving this artist upstream, so there is no cursor and
+     * nothing to page - the honest offer is the retry, which is what the failure already draws. The
+     * row has to stay off the screen: an offer of "more" under a discography that is entirely
+     * absent would be an offer of more of nothing.
+     */
+    @Test
+    fun `a warming discography offers a retry and no page to fetch`() = runTest {
+        library.refreshDiscographyOutcome =
+            Outcome.Failure(NeedlerError.CapabilityUnavailable("still warming"))
+        library.ownedByArtist.value = mapOf(artist.mbid.value to owned)
+        library.discographyByArtist.value = mapOf(artist.mbid.value to owned)
+
+        viewModel().state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (!loaded.discographySettled) loaded = awaitItem()
+            assertTrue(loaded.discographyUnavailable)
+            assertTrue(loaded.canRetryDiscography)
+            assertFalse(loaded.discographyHasMore)
+            assertNull(loaded.discographyMoreRow)
+            // Not "that is the whole discography", which is the claim this state used to make.
+            assertFalse(loaded.discographyEmpty)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * A first page of records the user already owns is not an empty discography.
+     *
+     * The join drops the catalogue's copy of anything owned, so fifty returned release groups can
+     * leave no un-owned rows at all - and `discographyEmpty` would then have said this artist has
+     * nothing more while fifty of their records were still unfetched. The cursor is what tells the
+     * two apart, and the row is what the reader gets instead of the claim.
+     */
+    @Test
+    fun `an all-owned first page claims nothing and still offers the next`() {
+        val state = ArtistUiState(
+            loading = false,
+            ownedAlbums = owned,
+            discographySettled = true,
+            discographyHasMore = true,
+            discographyFetched = 50,
+        )
+
+        assertFalse(state.discographyEmpty)
+        // No total from the server, so the row says what it can and no figure it cannot.
+        assertEquals(SHOW_MORE_RELEASES, state.discographyMoreRow?.label)
+    }
+
+    /** A name-derived artist is never offered a page: nothing was fetched and nothing ever will be. */
+    @Test
+    fun `a name-derived artist is offered no page of a discography`() {
+        val state = ArtistUiState(
+            loading = false,
+            ownedAlbums = owned,
+            artistNotInCatalogue = true,
+            discographySettled = true,
+            discographyHasMore = true,
+        )
+
+        assertNull(state.discographyMoreRow)
+    }
+
     // ---- an id the catalogue can never accept -------------------------------
 
     /**
@@ -734,6 +924,74 @@ class ArtistViewModelTest {
             var loaded = awaitItem()
             while (loaded.loading) loaded = awaitItem()
             assertTrue(loaded.notFound)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The other half of the reported defect: the **first** frame, not the settled one.
+     *
+     * Every assertion above waits for something to land. This one deliberately does not, because
+     * the complaint was that the screen "looks broken on arrival": a discography takes a round trip
+     * and the frames before it arrives have no owned album, no catalogue album and no mirror row,
+     * which used to be exactly `notFound`. A screen that says the artist does not exist and then
+     * shows them is worse than one that says nothing, so the name alone has to settle it, on the
+     * emission immediately after the loading placeholder and with nothing else to go on.
+     */
+    @Test
+    fun `the name from the route suppresses the empty screen on the very first frame`() = runTest {
+        viewModel(
+            artistId = CATALOGUE_ONLY,
+            artistName = SampleLibrary.CATALOGUE_ONLY_ARTIST_NAME,
+        ).state.test {
+            assertTrue(awaitItem().loading)
+
+            val first: ArtistUiState = awaitItem()
+            assertFalse(first.loading)
+            // Nothing has arrived yet, which is the whole point of asserting this frame.
+            assertTrue(first.hasNothing)
+            assertFalse(first.notFound)
+            assertEquals(SampleLibrary.CATALOGUE_ONLY_ARTIST_NAME, first.displayName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The route encodes the name and the navigation library decodes it, so nothing is done to it
+     * here - and nothing may be.
+     *
+     * "AC/DC" would end the route's path segment and "&" would start a second query argument, which
+     * is why `:app` percent-encodes both on the way out; `ArtistRouteTest` asserts that half. This
+     * is the other end of it: whatever arrives is the header, character for character, with no
+     * second decode and no sanitising.
+     */
+    @Test
+    fun `a name with a slash and an ampersand reaches the header unchanged`() = runTest {
+        viewModel(artistId = CATALOGUE_ONLY, artistName = "AC/DC & Friends").state.test {
+            awaitItem()
+            assertEquals("AC/DC & Friends", awaitItem().displayName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * An artist opened with no name argument at all, which is every ordinary way in.
+     *
+     * The library, search, an album's artist link and a notification tap through
+     * `NotificationDestination.Artist` all carry an MBID and nothing else, and they are right not
+     * to: the mirror has the row and the row has the name. The two optional arguments must stay
+     * optional, and their absence must change nothing.
+     */
+    @Test
+    fun `an artist opened with no name argument reads its name from the mirror`() = runTest {
+        stocked()
+        viewModel().state.test {
+            awaitItem()
+            var loaded = awaitItem()
+            while (loaded.ownedAlbums.isEmpty()) loaded = awaitItem()
+            assertFalse(loaded.notFound)
+            assertFalse(loaded.fromHintsOnly)
+            assertEquals(artist.name, loaded.displayName)
             cancelAndIgnoreRemainingEvents()
         }
     }

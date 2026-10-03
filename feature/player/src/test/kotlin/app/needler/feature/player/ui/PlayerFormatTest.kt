@@ -155,6 +155,20 @@ class PlayerFormatTest {
         assertNull(PlayerFormat.formatBadge(null))
     }
 
+    /**
+     * The tag states the rounded figure, not the server's raw average.
+     *
+     * The badge read `MP3 319` on the device for a 320 rip, because the server reports the *mean*
+     * bitrate of a variable-bitrate file. `AudioQualityBadgeTest` argues the rounding and the reason a
+     * 280 average is deliberately not rounded up; this asserts the player's tag actually reads it,
+     * which is the wiring a one-word edit here would undo without failing that test.
+     */
+    @Test
+    fun `a lossy badge rounds the average rather than printing its last digit`() {
+        assertEquals("MP3 320", PlayerFormat.formatBadge(AudioQuality(AudioFormat.MP3, 319)))
+        assertEquals("MP3 280", PlayerFormat.formatBadge(AudioQuality(AudioFormat.MP3, 280)))
+    }
+
     // ---- the quality tag pair -----------------------------------------------
 
     /**

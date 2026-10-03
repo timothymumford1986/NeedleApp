@@ -3,6 +3,7 @@ package app.needler.core.domain.repository
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumListKind
 import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.ArtistDiscographyPage
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.Genre
 import app.needler.core.domain.model.LibraryStats
@@ -174,13 +175,48 @@ public interface LibraryRepository {
     public suspend fun getAlbum(mbid: ReleaseGroupMbid): Album?
 
     /**
-     * Fetches the artist's catalogue discography and merges it into the mirror.
+     * Fetches the first page of the artist's catalogue discography and merges it into the mirror.
      *
      * Needs the `/api/v1` lane, so it fails with [app.needler.core.domain.model.NeedlerError.SessionExpired]
      * on a degraded session and [app.needler.core.domain.model.NeedlerError.Offline] with no network.
      * Neither is fatal: the owned half of artist detail still renders.
+     *
+     * **One page.** `GET /api/v1/artists/{mbid}/releases` is paged, and this entry point is for the
+     * caller that wants the mirror warm rather than the caller that wants the whole discography on
+     * screen - it says whether anything was written and nothing about what is left. A screen that
+     * lists the discography must use [refreshArtistDiscographyPage], which answers with the cursor.
      */
     public suspend fun refreshArtistDiscography(mbid: ArtistMbid): Outcome<Unit>
+
+    /**
+     * Fetches one page of the artist's catalogue discography into the mirror and reports the cursor.
+     *
+     * Fails exactly as [refreshArtistDiscography] does, and for the same reasons; the only difference
+     * is the payload. [ArtistDiscographyPage] carries `next_offset`, `returned_count` and
+     * `source_total_count`, which were previously fetched and discarded - the fetch asked for the
+     * endpoint's default first fifty release groups and the screen then presented them as the artist's
+     * complete output, with no control to ask for the rest. REQUIREMENTS.md "Library browse" makes
+     * artist detail the screen that shows "the artist's full discography"; fifty of it is not that.
+     *
+     * The rows land in the mirror, as every `refresh*` member's do, so a caller observes
+     * [observeArtistDiscography] for the content and reads this only to know whether to ask again and
+     * what to say about how far it has got.
+     *
+     * ## Why this has a default implementation
+     *
+     * A source that cannot page can still answer this honestly - one page, holding everything, with
+     * no total - and that is what the default does, by delegating to [refreshArtistDiscography]. The
+     * alternative was to make it abstract, which would have forced every implementation to invent an
+     * answer for a cursor it has no concept of. The one implementation that talks to the server
+     * overrides it, and that is the one the paging exists for.
+     */
+    public suspend fun refreshArtistDiscographyPage(
+        mbid: ArtistMbid,
+        offset: Int = 0,
+    ): Outcome<ArtistDiscographyPage> = when (val result: Outcome<Unit> = refreshArtistDiscography(mbid)) {
+        is Outcome.Failure -> result
+        is Outcome.Success -> Outcome.Success(ArtistDiscographyPage.UNPAGED)
+    }
 
     /**
      * Re-reads one album and its tracks from the server into the mirror.

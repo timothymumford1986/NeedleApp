@@ -178,7 +178,7 @@ object WearPlaybackProtocol {
     /**
      * Path of the offer: the albums the phone can put on the watch.
      *
-     * The phone's **Downloaded** tier and nothing else - never "Cached while listening". That is the
+     * The phone's **Device** tier and nothing else - never the **Temporary** one. That is the
      * whole sync policy; the canonical file records the three reasons.
      */
     const val PATH_SYNC_OFFER: String = "/needler/sync/offer"

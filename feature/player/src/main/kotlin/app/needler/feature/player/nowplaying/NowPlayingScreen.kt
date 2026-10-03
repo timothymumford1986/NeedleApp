@@ -274,7 +274,12 @@ private fun NowPlayingHeader(onClose: () -> Unit, onOpenCrate: () -> Unit) {
             modifier = Modifier.semantics { heading() },
         )
         NeedlerIconButton(
-            contentDescription = "In the crate",
+            // Says what the tap does, not what the destination is called. "In the crate" is
+            // REQUIREMENTS.md "Vocabulary" for the play queue and is the right *heading* for it -
+            // `CrateScreen` draws exactly that - but as the only thing a screen reader hears on a
+            // button it names a place rather than an action, which is the half of this control's
+            // disagreement that TalkBack could hear. The other half was the glyph; see [PathQueue].
+            contentDescription = OPEN_CRATE,
             onClick = onOpenCrate,
             visualSize = 44.dp,
         ) {
@@ -282,3 +287,13 @@ private fun NowPlayingHeader(onClose: () -> Unit, onOpenCrate: () -> Unit) {
         }
     }
 }
+
+/**
+ * What the header's crate control announces.
+ *
+ * A verb, because it is a button. REQUIREMENTS.md "Vocabulary" fixes **the crate** as the word for the
+ * play queue and this keeps it; what it adds is what a tap does with it. Public so the wording can be
+ * asserted without rendering, and so `CrateScreen`'s own heading - which is the noun phrase "In the
+ * crate", correctly - can never drift into being read out as a button's label again.
+ */
+const val OPEN_CRATE: String = "Open the crate"

@@ -13,6 +13,7 @@ import app.needler.core.network.NeedlerHttpClient
 import app.needler.core.network.subsonic.SubsonicApi
 import app.needler.image.buildArtworkImageLoader
 import dagger.hilt.android.HiltAndroidApp
+import app.needler.core.data.background.DownloadResumeCoordinator
 import app.needler.widgets.WidgetRefreshCoordinator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +64,8 @@ class NeedlerApplication : Application(), SingletonImageLoader.Factory, Configur
 
     @Inject lateinit var widgetRefresh: WidgetRefreshCoordinator
 
+    @Inject lateinit var downloadResume: DownloadResumeCoordinator
+
     /**
      * The scope the widget pushes run in.
      *
@@ -103,6 +106,12 @@ class NeedlerApplication : Application(), SingletonImageLoader.Factory, Configur
         // so a placed widget kept whatever it last drew for as long as the
         // process stayed dead.
         widgetRefresh.start(applicationScope)
+        // One indexed query, then nothing. A pin row can be left at `queued` or `downloading` with
+        // no job behind it - process death, a reboot, or WorkManager giving up after its backoff
+        // ceiling - and before this line nothing ever looked again, so the album showed as
+        // downloading for ever and only a manual retry could clear it. `ExistingWorkPolicy.KEEP`
+        // supplies the idempotence, so a job that is genuinely alive is untouched.
+        downloadResume.start(applicationScope)
     }
 
     /**

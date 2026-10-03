@@ -3,6 +3,7 @@ package app.needler.core.design.component
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,11 +15,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -229,6 +230,28 @@ fun NeedlerRequestSheet(
  * The scrim is [app.needler.core.design.theme.NeedlerColors.artworkScrimStrong], the pack's only heavy
  * scrim value. Its name comes from where the pack first uses it - under a pull's progress ring - and
  * not from a restriction on where it may be used.
+ *
+ * ## Why the scrim draws no press indication
+ *
+ * It used to. The scrim is a `fillMaxSize` node, so the ripple `clickable` gives it by default was a
+ * ripple the size of the window: tapping outside the sheet to dismiss it flashed the whole screen,
+ * artwork and all, on the way out. A press indication exists to say *which* control was hit, and a
+ * control that is the entire screen has nothing to disambiguate - so the feedback carried no
+ * information and spent a full-screen repaint saying it.
+ *
+ * `indication = null` with an interaction source of its own is what
+ * [app.needler.core.design.motion.NeedlerSplash] already does for the same kind of surface - a
+ * full-bleed box whose whole job is to swallow one tap - and this follows it rather than inventing a
+ * second answer. Nothing visible is lost: the sheet's own Cancel button is the drawn affordance and
+ * the scrim is the shortcut beside it.
+ *
+ * The dismissal stays announced, and moves to where the platform expects it. `Role.Button` with a
+ * content description announced the scrim as a button named "Close the pull options for X", which
+ * puts a screen-sized control in the traversal order in front of the sheet it sits behind;
+ * `onClickLabel` names the action without claiming the role, which is again what the splash does.
+ * The rejected alternative was keeping the role and suppressing only the indication - it works, and
+ * it leaves a screen-sized button that a screen reader has to step past to reach the two buttons the
+ * user came for.
  */
 @Composable
 fun NeedlerRequestSheetOverlay(
@@ -246,12 +269,18 @@ fun NeedlerRequestSheetOverlay(
     artwork: (@Composable () -> Unit)? = null,
 ) {
     Box(modifier = modifier.fillMaxSize()) {
+        val scrimInteraction: MutableInteractionSource = remember { MutableInteractionSource() }
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(NeedlerTheme.colors.artworkScrimStrong)
-                .clickable(role = Role.Button, onClick = onCancel)
-                .semantics { contentDescription = "Close the pull options for " + title },
+                .clickable(
+                    interactionSource = scrimInteraction,
+                    // A window-sized ripple says nothing and repaints everything. See the KDoc.
+                    indication = null,
+                    onClickLabel = SCRIM_DISMISS_LABEL + title,
+                    onClick = onCancel,
+                ),
         )
         NeedlerRequestSheet(
             title = title,
@@ -277,6 +306,14 @@ fun NeedlerRequestSheetOverlay(
         )
     }
 }
+
+/**
+ * What the dismiss scrim's tap does, for TalkBack's "double tap to ...".
+ *
+ * Public so the wording can be asserted without rendering, and because it is the only reading the
+ * scrim has now that it no longer announces itself as a button.
+ */
+const val SCRIM_DISMISS_LABEL: String = "Close the pull options for "
 
 /** The subtitle under the monitor toggle, which names the artist when there is one to name. */
 private fun monitorArtistSubtitle(artistName: String?): String =

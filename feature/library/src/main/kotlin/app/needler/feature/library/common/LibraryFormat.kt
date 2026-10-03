@@ -147,17 +147,22 @@ internal object LibraryFormat {
     // ---- quality ------------------------------------------------------------
 
     /**
-     * `FLAC`, `MP3 320`, `MP3 256` — the badge on every row of screen 13.
+     * `FLAC`, `MP3 320`, `MP3 260` — the badge on every row of screen 13.
      *
      * The bitrate is appended only for lossy formats. "FLAC 891" would be a
      * true number and a useless one: the point of the badge is whether this
      * copy is lossless, and for a lossy one, how lossy.
+     *
+     * The figure is [AudioQuality.badgeBitrateKbps] rather than the raw average, so a row reads
+     * `MP3 320` where the server reported 319. Its KDoc has why the rounding is to the nearest
+     * 10 kbps and not to the nearest rung - `280` stays `280`. The player's tags read the same
+     * property, so the two surfaces cannot disagree about the same file.
      */
     fun quality(quality: AudioQuality?): String? {
         val format: AudioFormat = quality?.format ?: return null
         if (format == AudioFormat.UNKNOWN) return null
         val name: String = formatName(format)
-        val bitrate: Int? = quality.bitrateKbps
+        val bitrate: Int? = quality.badgeBitrateKbps
         return if (quality.isLossless || bitrate == null || bitrate <= 0) name else "$name $bitrate"
     }
 

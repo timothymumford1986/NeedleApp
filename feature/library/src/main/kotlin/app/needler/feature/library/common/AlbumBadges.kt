@@ -12,10 +12,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumBadge
+import app.needler.core.design.component.NeedlerAlbumSource
 import app.needler.core.design.component.NeedlerOnDeviceIcon
+import app.needler.core.design.component.label
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.AudioQuality
+import app.needler.core.domain.model.OfflineDownloadState
 import app.needler.core.domain.model.PullFailureReason
 import app.needler.core.domain.model.PullState
 
@@ -27,8 +30,8 @@ import app.needler.core.domain.model.PullState
  * | `NotOwned` | none |
  * | `PendingApproval` | Waiting |
  * | `Acquiring` | Pulling, with percentage — or Searching / Needs attention |
- * | `Owned` | In library |
- * | `Pinned` | On device |
+ * | `Owned` | Server |
+ * | `Pinned` | Device, or the download's own state while bytes are arriving |
  * | `Failed` | no source found |
  *
  * The two derived acquiring states come straight off [PullState], which already
@@ -36,6 +39,14 @@ import app.needler.core.domain.model.PullState
  * `queued` with a search job but no candidate means a human has to pick a
  * source on the server. Deriving them here again would put the rule in two
  * places.
+ *
+ * A pin whose bytes have not all landed is the same shape of fact and is read
+ * off [OfflineDownloadState] here for the same reason. Pinning is instant and
+ * the download is not, so a pin in flight badges the journey - Pulling to
+ * device, or Waiting for Wi-Fi when the setting is holding it - rather than
+ * claiming the record is already here. A pin that has nothing at all on the
+ * device drops back to the server's own word: the album is on the server and
+ * playable, and a Device badge over zero bytes would be a false promise.
  *
  * Returns null where the pack draws nothing, which is the un-owned case: an
  * album you do not own wears a **Pull** button instead of a badge.
@@ -50,7 +61,20 @@ internal fun albumBadge(state: AlbumState): NeedlerAlbumBadge? = when (state) {
         else -> NeedlerAlbumBadge.Pulling(state.progress.percent)
     }
     AlbumState.Owned -> NeedlerAlbumBadge.InLibrary
-    is AlbumState.Pinned -> NeedlerAlbumBadge.OnDevice
+    is AlbumState.Pinned -> when {
+        state.download == OfflineDownloadState.WaitingForUnmeteredNetwork ->
+            NeedlerAlbumBadge.WaitingForWifi
+        state.download.isInFlight ->
+            NeedlerAlbumBadge.PullingToDevice(
+                (state.download as? OfflineDownloadState.Downloading)
+                    ?.fraction?.let { (it * 100f).toInt() },
+            )
+        // Nothing landed: the bytes are not here, so the badge must not claim they are.
+        state.download is OfflineDownloadState.Failed ||
+            (state.download as? OfflineDownloadState.Partial)?.tracksComplete == 0 ->
+            NeedlerAlbumBadge.InLibrary
+        else -> NeedlerAlbumBadge.OnDevice
+    }
     is AlbumState.Failed -> NeedlerAlbumBadge.NoSource
 }
 
@@ -164,7 +188,7 @@ internal fun AlbumFormatLabel(
 }
 
 /**
- * The format, on device state and lossless-ness in words, for a row's content description.
+ * The format, the state word and lossless-ness in words, for a row's content description.
  *
  * Returns null when there is no format to report, so a caller can drop the clause rather than say
  * "unknown". "Lossless" and "lossy" are spelled out because the chip that carries that distinction on
@@ -174,7 +198,7 @@ internal fun albumFormatSpokenLabel(quality: AudioQuality?, onDevice: Boolean): 
     val label: String = LibraryFormat.quality(quality) ?: return null
     val lossless: String = if (quality?.isLossless == true) "lossless" else "lossy"
     return if (onDevice) {
-        label + ", " + lossless + ", on device"
+        label + ", " + lossless + ", " + NeedlerAlbumSource.Device.label()
     } else {
         label + ", " + lossless
     }

@@ -3,6 +3,7 @@ package app.needler.core.domain.repository
 import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.Outcome
+import app.needler.core.domain.model.PinnedCertificate
 import app.needler.core.domain.model.PlayerOnlyReason
 import app.needler.core.domain.model.ServerCapabilities
 import app.needler.core.domain.model.ServerProbe
@@ -69,6 +70,49 @@ public interface SessionRepository {
      * [app.needler.core.domain.model.NeedlerError.CertificateChanged].
      */
     public suspend fun trustCertificate(certificate: CertificateInfo): Outcome<Unit>
+
+    /**
+     * The certificate the user has trusted, or null when validation is running normally.
+     *
+     * ## Why this exists
+     *
+     * [trustCertificate] was a one-way door. A user could grant a self-signed certificate an exception
+     * on the Connect screen and from then on no surface in the application said that they had, what
+     * they had trusted, or offered any way to take it back - so the single most consequential security
+     * decision in the product was also the only one with no record and no undo. REQUIREMENTS.md
+     * "Self-signed certificates" requires the pin be scoped to "the one host"; a scope the user cannot
+     * inspect is a scope they are taking on trust.
+     *
+     * It is a suspend read rather than a `Flow` because a pin changes only when the user changes it -
+     * on the Connect screen, or through [forgetPinnedCertificate] - and both are actions whose caller
+     * is in a position to ask again. There is no background writer to observe.
+     *
+     * ## The default
+     *
+     * Null, and defaulted rather than abstract, because an implementation that does no TLS has no pin
+     * and never will. Every test double of this interface is in that position, and a stub returning
+     * "nothing is pinned" is the truth for all of them rather than a placeholder.
+     */
+    public suspend fun pinnedCertificate(): PinnedCertificate? = null
+
+    /**
+     * Forgets the pin, so the host's certificate is validated normally again.
+     *
+     * Both stores have to hear about it, for the reason [trustCertificate] records about granting one:
+     * the persisted pin survives launches and the in-memory one is what the handshake consults, and
+     * clearing only one leaves either a pin that comes back on restart or a pin that is still in force
+     * until the process dies.
+     *
+     * **This will break the connection to a self-signed server**, immediately and by design: the next
+     * handshake fails with
+     * [app.needler.core.domain.model.NeedlerError.CertificateUntrusted] and the user is asked to
+     * decide again. That is the point of the control, and the caller must say so before it is used
+     * rather than afterwards.
+     *
+     * Succeeds when there was nothing pinned. Forgetting a certificate that is already forgotten is
+     * the state the caller asked for, not a failure.
+     */
+    public suspend fun forgetPinnedCertificate(): Outcome<Unit> = Outcome.Ok
 
     /**
      * Completes onboarding with the user's **account password** - not an app-password.

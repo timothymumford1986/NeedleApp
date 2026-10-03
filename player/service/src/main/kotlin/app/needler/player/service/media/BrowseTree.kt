@@ -26,7 +26,7 @@ import kotlinx.coroutines.flow.first
  * The Android Auto browse tree, and the voice search behind it.
  *
  * REQUIREMENTS.md "Android Auto": "The browse tree mirrors the app: Library with albums, artists and songs;
- * Recently added; Playlists; Favourites; On device. Voice search maps to the same unified search, restricted
+ * Recently added; Playlists; Favourites; Device. Voice search maps to the same unified search, restricted
  * to owned music, since pulling while driving makes no sense."
  *
  * ## Everything here reads the mirror
@@ -377,7 +377,7 @@ public class BrowseTree(
         /**
          * The node titles.
          *
-         * REQUIREMENTS.md "Vocabulary" fixes "On device"; the rest are the names the app's own screens carry,
+         * REQUIREMENTS.md "Vocabulary" fixes "Device"; the rest are the names the app's own screens carry,
          * because a tree that "mirrors the app" has to use the app's words or it is a second product.
          *
          * Constants rather than string resources because `:player:service` has none of its own, and adding a
@@ -410,8 +410,13 @@ public class BrowseTree(
         /** "Favourites". */
         public const val LABEL_FAVOURITES: String = "Favourites"
 
-        /** "On device", which REQUIREMENTS.md "Vocabulary" fixes as the word for the downloaded tier. */
-        public const val LABEL_ON_DEVICE: String = "On device"
+        /**
+         * "Device", one of the three words REQUIREMENTS.md "Vocabulary" fixes for where a record is.
+         *
+         * The constant keeps the retired name; the word a driver reads does not. Renaming it is a
+         * mechanical pass across the modules that cite it, and it is deliberately not this change.
+         */
+        public const val LABEL_ON_DEVICE: String = "Device"
 
         /**
          * The most tracks one browse selection may enqueue.

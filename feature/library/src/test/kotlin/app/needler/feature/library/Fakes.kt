@@ -5,6 +5,7 @@ import app.needler.core.domain.model.AlbumListKind
 import app.needler.core.domain.model.AlbumRequest
 import app.needler.core.domain.model.AlbumSyncReport
 import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.ArtistDiscographyPage
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.BatchRequestReceipt
 import app.needler.core.domain.model.CacheEvictionReason
@@ -112,6 +113,23 @@ internal class FakeLibraryRepository(
 
     var refreshAlbumOutcome: Outcome<Unit> = Outcome.Ok
     var refreshDiscographyOutcome: Outcome<Unit> = Outcome.Ok
+
+    /**
+     * What one page of a discography answers, by the offset it was asked for.
+     *
+     * Defaults to honouring [refreshDiscographyOutcome] and reporting a single complete page, so
+     * every test written before the fetch was paged still scripts it the same way. A test about
+     * paging replaces this instead, and [discographyOffsets] is what it asserts the walk against.
+     */
+    var discographyPage: (Int) -> Outcome<ArtistDiscographyPage> = { _ ->
+        when (val outcome: Outcome<Unit> = refreshDiscographyOutcome) {
+            is Outcome.Failure -> outcome
+            is Outcome.Success -> Outcome.Success(ArtistDiscographyPage.UNPAGED)
+        }
+    }
+
+    /** Every offset a discography page was asked for, in order. */
+    val discographyOffsets: MutableList<Int> = mutableListOf()
     var refreshedAlbums: MutableList<ReleaseGroupMbid> = mutableListOf()
 
     /**
@@ -169,6 +187,15 @@ internal class FakeLibraryRepository(
     override suspend fun refreshArtistDiscography(mbid: ArtistMbid): Outcome<Unit> {
         refreshedDiscographies += mbid
         return refreshDiscographyOutcome
+    }
+
+    override suspend fun refreshArtistDiscographyPage(
+        mbid: ArtistMbid,
+        offset: Int,
+    ): Outcome<ArtistDiscographyPage> {
+        refreshedDiscographies += mbid
+        discographyOffsets += offset
+        return discographyPage(offset)
     }
 
     override suspend fun refreshAlbum(mbid: ReleaseGroupMbid): Outcome<Unit> {

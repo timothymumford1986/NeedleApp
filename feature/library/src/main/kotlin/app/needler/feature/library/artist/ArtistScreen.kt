@@ -51,6 +51,7 @@ import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerSectionHeader
 import app.needler.core.design.component.NeedlerStateBadge
 import app.needler.core.design.component.NeedlerStrokeIcon
+import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.PathChevronLeft
 import app.needler.core.design.component.PathPlay
 import app.needler.core.design.component.PathPull
@@ -83,6 +84,14 @@ import app.needler.feature.library.common.showsOnDeviceCheck
  * one line saying why the rest is missing. Failing the whole screen because the
  * optional half of it needs a connection would defeat the mirror.
  *
+ * ## The discography is paged, and says so
+ *
+ * `/api/v1/artists/{mbid}/releases` answers fifty release groups at a time and reports whether
+ * there are more. Nothing used to ask: the first page was fetched, drawn, and presented as the
+ * artist's complete output. The one row under the list - see [ArtistUiState.discographyMoreRow] -
+ * is where the rest is asked for, and it carries the server's own count of how much of the
+ * discography has been looked up.
+ *
  * ## Play, Shuffle and a star
  *
  * This screen had none of the three. The album screen had Play, Shuffle and Pull
@@ -91,7 +100,7 @@ import app.needler.feature.library.common.showsOnDeviceCheck
  * the order this screen lists them; the star is the same binary favourite an album
  * and a track now carry, and `getStarred2` returns starred artists alongside both.
  *
- * Pull local is deliberately **not** here. Pinning is per album - `PinRepository`
+ * Pull to device is deliberately **not** here. Pinning is per album - `PinRepository`
  * is keyed on a release group and REQUIREMENTS.md's storage rules are written per
  * album - so an artist-wide pin would be a new concept rather than a missing
  * button, and it would silently commit a listener to however many gigabytes that
@@ -121,8 +130,17 @@ fun ArtistScreen(
     onPull: (Album) -> Unit,
     onPullArtist: () -> Unit,
     onRetryDiscography: () -> Unit,
+    onShowMoreDiscography: () -> Unit,
     onFindInCatalogue: () -> Unit,
     onOpenArtist: (ArtistMbid) -> Unit,
+    // The namesake rows' own tap, carrying the name and comment the catalogue gave for a
+    // row the mirror has no artist for. Defaulted to [onOpenArtist] so a preview or a
+    // bounds test that has nothing to carry still gets a working tap and today's nameless
+    // header, rather than an inert one; `ArtistRoute` requires it, which is where it
+    // matters that a host cannot forget. See that KDoc for why this is a second callback
+    // and not a wider [onOpenArtist].
+    onOpenCatalogueArtist: (ArtistMbid, String, String?) -> Unit =
+        { mbid, _, _ -> onOpenArtist(mbid) },
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
     onPlayAlbum: (ReleaseGroupMbid) -> Unit,
@@ -271,6 +289,15 @@ fun ArtistScreen(
                         }
                     }
 
+                    // The next page. Outside the block above on purpose: a first page can be fifty
+                    // release groups the user already owns, which the join drops, leaving no
+                    // catalogue rows and a discography that is nonetheless only begun.
+                    moreRowItem(
+                        row = state.discographyMoreRow,
+                        name = state.spokenName,
+                        onClick = onShowMoreDiscography,
+                    )
+
                     if (state.discographyUnavailable) {
                         item(key = "catalogue-unavailable") {
                             SectionSpacer()
@@ -295,7 +322,7 @@ fun ArtistScreen(
                         }
                         namesakeRows(
                             artists = state.catalogueNamesakes,
-                            onOpenArtist = onOpenArtist,
+                            onOpenArtist = onOpenCatalogueArtist,
                         )
                     }
 
@@ -469,15 +496,6 @@ private fun ArtistActions(
                 visualSize = 44.dp,
             )
         }
-        // Last in the row, after every control that has a name. An overflow is not a peer of the
-        // actions beside it: it is where things go that have nowhere else, so it belongs where the
-        // eye stops rather than interrupting the run of named actions. Third, it pushed Pull all -
-        // the one filled green button on the screen - out past the dots.
-        //
-        // Still guarded by `canPlay`: there is nothing to queue from an artist with no owned
-        // records, so the menu is absent rather than present and empty. Composition order is the
-        // drawn order and the spoken order at once, and nothing in this row sets a
-        // `traversalIndex`, so the move keeps them matching.
     }
 }
 
@@ -652,24 +670,39 @@ private fun LazyListScope.ownedRows(
  * Artwork is drawn circular, as the pack draws an artist everywhere one appears, and comes from the
  * `ArtworkRef.Remote` the search response carried; see `CatalogueMappers.artist` for why a
  * letter placeholder is the correct answer when it carried none.
+ *
+ * ## What the tap carries, and what it does not
+ *
+ * The destination is this same screen for an MBID with **no `artist` row behind it** -
+ * `refreshArtistDiscography` writes album rows and never an artist row - so the name has to travel
+ * with the tap or the next header reads "Unknown artist" for an artist whose name is on screen
+ * right now. [onOpenArtist] therefore takes the name as well, and the comment where there is one.
+ *
+ * The comment and not the row's subtitle is what travels. The two differ for a reason: the comment
+ * is the only
+ * part of the row MusicBrainz actually supplied, where the album count comes from the mirror and
+ * [NOT_IN_LIBRARY] is this screen's own wording. Carrying either of those two forward would be
+ * handing the next screen a fact about the library dressed as a fact about the artist, and
+ * `ArtistUiState.subtitle` already has its own honest answer for a row it knows nothing about.
  */
 private fun LazyListScope.namesakeRows(
     artists: List<Artist>,
-    onOpenArtist: (ArtistMbid) -> Unit,
+    onOpenArtist: (ArtistMbid, String, String?) -> Unit,
 ) {
     items(
         count = artists.size,
         key = { index -> "namesake-" + artists[index].mbid.value },
     ) { index ->
         val candidate: Artist = artists[index]
-        val subtitle: String = candidate.disambiguation?.trim()?.takeIf { it.isNotEmpty() }
+        val comment: String? = candidate.disambiguation?.trim()?.takeIf { it.isNotEmpty() }
+        val subtitle: String = comment
             ?: LibraryFormat.plural(candidate.ownedAlbumCount.toLong(), "album")
                 .takeIf { candidate.ownedAlbumCount > 0 }
             ?: NOT_IN_LIBRARY
         NeedlerAlbumRow(
             title = candidate.name,
             subtitle = subtitle,
-            onClick = { onOpenArtist(candidate.mbid) },
+            onClick = { onOpenArtist(candidate.mbid, candidate.name, comment) },
             showDivider = true,
             contentDescription = candidate.name + ", " + subtitle + ", open in the catalogue",
             artwork = {
@@ -747,6 +780,45 @@ private fun AlbumRowArtwork(album: Album) {
         shape = NeedlerTheme.shapes.artworkThumb,
         decorative = true,
     )
+}
+
+/**
+ * The one row under the discography, when there is one.
+ *
+ * A `LazyListScope` extension rather than a composable inside the last album row, for the reason
+ * `:feature:search`'s own more-row gives: it keeps its own key, so changing from "Show more" to
+ * "Looking up more releases…" to nothing animates as that row changing rather than as the list
+ * rebuilding under the reader's thumb.
+ *
+ * Drawn as a `NeedlerTextButton`, which is the control the search lane pages with, so paging looks
+ * and reads the same wherever the app offers it. A disabled one already draws muted, which is exactly
+ * right for the state that is a statement rather than an offer.
+ *
+ * The spoken description names the artist and says where the releases come from, because
+ * REQUIREMENTS.md "Accessibility" makes the description the thing a TalkBack user acts on and "Show
+ * more" alone, read out of a list of albums, does not say more of what. A polite live region, so the
+ * answer is heard without throwing the reader back to the top of the screen.
+ */
+private fun LazyListScope.moreRowItem(
+    row: DiscographyMoreRow?,
+    name: String,
+    onClick: () -> Unit,
+) {
+    if (row == null) return
+    item(key = "discography-more") {
+        val colors = NeedlerTheme.colors
+        NeedlerTextButton(
+            text = row.label,
+            onClick = onClick,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            enabled = row.enabled,
+            // The palette has one emphasis colour and no error colour, so a problem is drawn in the
+            // primary text colour rather than in a red this design system does not have. The same
+            // decision NoticeLine and the search lane's more-row make.
+            color = if (row.isProblem) colors.textPrimary else colors.accent,
+            contentDescription = row.label + ", more of " + name + "'s releases from the catalogue",
+        )
+    }
 }
 
 @Composable
@@ -870,7 +942,7 @@ private fun ArtistNotFound(gutter: Dp, reason: String?) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = "That artist is not here",
+            text = ARTIST_NOT_HERE,
             style = typography.displayCompact,
             color = colors.textPrimary,
             modifier = Modifier.semantics { heading() },
@@ -882,6 +954,16 @@ private fun ArtistNotFound(gutter: Dp, reason: String?) {
         )
     }
 }
+
+/**
+ * The empty screen's heading, and the sentence this whole defect was reported as.
+ *
+ * Named rather than inlined so a test can assert it is **absent**. The claim is reserved for
+ * `ArtistUiState.notFound`, which needs no mirror row, no name from the route and no album of
+ * either kind before it will make it; an artist opened from the namesake rows fails that test on
+ * the name alone, and does so on the first frame, before any discography has arrived.
+ */
+internal const val ARTIST_NOT_HERE: String = "That artist is not here"
 
 /**
  * What to say when the catalogue answered and had nothing.
@@ -953,6 +1035,27 @@ internal const val CATALOGUE_NO_MBID: String =
 
 internal const val CATALOGUE_NOT_IN_CATALOGUE: String =
     "The catalogue has nothing else for this artist. What you own is listed above."
+
+/**
+ * The row that asks for the next page, when the server has not said how many releases there are.
+ *
+ * `source_total_count` is absent while the artist is still warming upstream, and a label that
+ * invented a figure for it would be the only unsourced number on the screen.
+ */
+internal const val SHOW_MORE_RELEASES: String = "Show more from the catalogue"
+
+/** The same row while the page is in flight. Not tappable; see `ArtistUiState.discographyMoreRow`. */
+internal const val LOOKING_UP_MORE_RELEASES: String = "Looking up more releases…"
+
+/**
+ * The same row when the page did not arrive.
+ *
+ * It says to tap, because tapping asks for the same page again - and it says nothing about the list
+ * already on screen, which is intact and which the user is reading. Distinct from
+ * [CATALOGUE_INCOMPLETE], the sentence for a discography that is a cache rather than a short list.
+ */
+internal const val MORE_RELEASES_FAILED: String =
+    "That page of the discography did not arrive. Tap to try it again."
 
 /** A namesake row's subtitle when the catalogue offered no disambiguation and no album count. */
 internal const val NOT_IN_LIBRARY: String = "Not in your library"

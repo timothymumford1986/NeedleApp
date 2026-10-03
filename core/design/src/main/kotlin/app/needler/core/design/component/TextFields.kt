@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.theme.NeedlerTheme
@@ -307,6 +308,9 @@ private const val PathEyeClosed: String = PathEyeOpen + " M4 20 L20 4"
  * A 52dp rounded box on the surface with a 16dp radius, a leading search glyph, and - once there is
  * something to clear - the 32dp round clear button from screen 03. The border turns accent while
  * focused, as the active field on 03 is drawn.
+ *
+ * Takes a [String], so the caret and the selection are Compose's business. A caller that has to
+ * place either one uses the [TextFieldValue] overload below; nothing else differs between them.
  */
 @Composable
 fun NeedlerSearchField(
@@ -339,35 +343,132 @@ fun NeedlerSearchField(
             .fillMaxWidth()
             .semantics { contentDescription = label },
         decorationBox = { innerTextField ->
-            SearchFieldFrame(focused = focused) {
-                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    if (value.isEmpty()) {
-                        Text(
-                            text = placeholder,
-                            style = typography.bodyLarge,
-                            color = colors.textMuted,
-                            maxLines = 1,
-                        )
-                    }
-                    innerTextField()
-                }
-                if (value.isNotEmpty() && onClear != null) {
-                    NeedlerIconButton(
-                        contentDescription = "Clear search",
-                        onClick = onClear,
-                        visualSize = 32.dp,
-                        background = colors.surfaceRaised,
-                    ) {
-                        NeedlerStrokeIcon(
-                            pathData = PathClose,
-                            tint = colors.textSecondary,
-                            size = 16.dp,
-                        )
-                    }
-                }
-            }
+            SearchFieldDecoration(
+                text = value,
+                focused = focused,
+                placeholder = placeholder,
+                onClear = onClear,
+                innerTextField = innerTextField,
+            )
         },
     )
+}
+
+/**
+ * The same field, with the caret and the selection in the caller's hands.
+ *
+ * ## Why the overload exists
+ *
+ * The [String] overload cannot say "arrive with the existing text selected", and Search has to.
+ * `search` is a bottom-navigation destination, so its back-stack entry and its ViewModel survive a
+ * tab switch deliberately - `SearchViewModel.SUBSCRIPTION_TIMEOUT_MS` keeps the query across a
+ * rotation or a trip into an album as well - and REQUIREMENTS.md "Search behaviour" has the field
+ * running that query live from the first keystroke. So the previous search is still in the field
+ * when the user taps the library's search box again, and `BasicTextField`'s [String] overload seeds
+ * its selection to `TextRange(0)`: the caret sat at index 0 and the next keystroke **prepended**.
+ * Typing "beastie" after a previous "dido" produced "beastiedido", then searched for it and found
+ * nothing.
+ *
+ * A [TextFieldValue] lets the caller select the stale query rather than delete it, so the first
+ * keystroke replaces it and a user who came back to keep editing it still can.
+ *
+ * ## The alternative, rejected
+ *
+ * Blanking the query on entry instead - an effect on the route telling the ViewModel to clear it -
+ * re-fires after a configuration change, so a rotation would wipe the very search
+ * `SUBSCRIPTION_TIMEOUT_MS` exists to keep. Stopping that means holding a "fresh arrival" flag in a
+ * `SavedStateHandle`: more state, in a second place, to buy back what selecting the text gives for
+ * nothing. It also throws away a query the user may have come back to edit, which selection does
+ * not.
+ */
+@Composable
+fun NeedlerSearchField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "Artist, album or song",
+    label: String = "Search",
+    enabled: Boolean = true,
+    onClear: (() -> Unit)? = null,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
+) {
+    val colors = NeedlerTheme.colors
+    val typography = NeedlerTheme.typography
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        enabled = enabled,
+        singleLine = true,
+        textStyle = typography.bodyLarge.copy(color = colors.textPrimary),
+        cursorBrush = SolidColor(colors.accent),
+        keyboardOptions = keyboardOptions,
+        keyboardActions = keyboardActions,
+        interactionSource = interactionSource,
+        modifier = modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = label },
+        decorationBox = { innerTextField ->
+            SearchFieldDecoration(
+                text = value.text,
+                focused = focused,
+                placeholder = placeholder,
+                onClear = onClear,
+                innerTextField = innerTextField,
+            )
+        },
+    )
+}
+
+/**
+ * What is inside the search field: the placeholder while [text] is empty, the editor, and the clear
+ * button once there is something to clear.
+ *
+ * Shared by both [NeedlerSearchField] overloads, and that is the only reason it is a function. The
+ * two differ in where their text comes from and in nothing a user can see; a second copy of this
+ * decoration would be free to drift, and a placeholder or a clear button fixed on one overload and
+ * not the other is exactly the difference a screenshot of either one still passes.
+ */
+@Composable
+private fun SearchFieldDecoration(
+    text: String,
+    focused: Boolean,
+    placeholder: String,
+    onClear: (() -> Unit)?,
+    innerTextField: @Composable () -> Unit,
+) {
+    val colors = NeedlerTheme.colors
+    val typography = NeedlerTheme.typography
+    SearchFieldFrame(focused = focused) {
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            if (text.isEmpty()) {
+                Text(
+                    text = placeholder,
+                    style = typography.bodyLarge,
+                    color = colors.textMuted,
+                    maxLines = 1,
+                )
+            }
+            innerTextField()
+        }
+        if (text.isNotEmpty() && onClear != null) {
+            NeedlerIconButton(
+                contentDescription = "Clear search",
+                onClick = onClear,
+                visualSize = 32.dp,
+                background = colors.surfaceRaised,
+            ) {
+                NeedlerStrokeIcon(
+                    pathData = PathClose,
+                    tint = colors.textSecondary,
+                    size = 16.dp,
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -397,8 +498,16 @@ fun NeedlerSearchFieldButton(
             .defaultMinSize(minHeight = NeedlerTheme.sizes.minTouchTarget)
             .needlerPressSurface(
                 shape = searchFieldShape(),
-                interaction = Modifier
-                    .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+                interaction = { source ->
+                    Modifier.clickable(
+                        interactionSource = source,
+                        // The helper draws it, clipped to the field's 16dp corners.
+                        indication = null,
+                        enabled = enabled,
+                        role = Role.Button,
+                        onClick = onClick,
+                    )
+                },
             )
             .semantics { contentDescription = label },
     ) {
