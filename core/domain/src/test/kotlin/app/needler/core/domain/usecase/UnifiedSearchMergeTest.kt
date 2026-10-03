@@ -262,6 +262,66 @@ public class UnifiedSearchMergeTest {
     }
 
     /**
+     * The same duplication at v0.0.13, with the rule above already in the build - because the surplus
+     * copy was the **mirror's** and the rule only read the catalogue half.
+     *
+     * `LibraryRepository.refreshArtistDiscographyPage` caches an artist's MusicBrainz discography as
+     * un-owned rows keyed on MusicBrainz's ids, and those are not the ids the mirror holds for the
+     * records the user owns, so opening Dido's artist screen gives every owned record a second row.
+     * `album_fts` matches those rows on the artist name and `AlbumDao.observeAlbumSearch` filters on
+     * nothing, so the local lane returns both copies.
+     *
+     * There is no catalogue half in this test at all, which is the state the device was in when it
+     * still drew both blocks: the network off.
+     */
+    @Test
+    public fun `the mirror's own cached catalogue copy of an owned album is dropped`() {
+        val merged: List<Album> = UnifiedSearchUseCase.mergeAlbums(
+            local = listOf(
+                album("rg-life", "Life for Rent", AlbumState.Owned, artist = "Dido"),
+                album(
+                    "rg-angel",
+                    "No Angel",
+                    AlbumState.Pinned(OfflineDownloadState.Complete),
+                    artist = "Dido",
+                ),
+                album("mb-life", "Life for Rent", AlbumState.NotOwned, artist = "Dido", year = 2003),
+                album("mb-angel", "No Angel", AlbumState.NotOwned, artist = "Dido", year = 1999),
+                // Genuinely un-owned, and the only row the to-pull block should hold.
+                album("mb-safe", "Safe Trip Home", AlbumState.NotOwned, artist = "Dido", year = 2008),
+            ),
+            catalogue = emptyList(),
+        )
+
+        assertEquals(
+            listOf("rg-life", "rg-angel", "mb-safe"),
+            merged.map { it.releaseGroupMbid.value },
+        )
+    }
+
+    /**
+     * The limit of that rule, now that it reads the local half too: an un-owned mirror row is only
+     * ever matched against a row the server **holds**.
+     *
+     * Two un-owned rows sharing a title and an artist are two release groups the user owns neither
+     * of, which is the same case `two un-owned records sharing a title and an artist are both kept`
+     * settles for the catalogue half. The mirror caches catalogue rows, so it can hold that pair as
+     * easily as one response can carry it.
+     */
+    @Test
+    public fun `two un-owned mirror rows sharing a title and an artist are both kept`() {
+        val merged: List<Album> = UnifiedSearchUseCase.mergeAlbums(
+            local = listOf(
+                album("mb-wonder-1", "Wonder", AlbumState.NotOwned, artist = "Oh Wonder"),
+                album("mb-wonder-2", "Wonder", AlbumState.NotOwned, artist = "Oh Wonder"),
+            ),
+            catalogue = emptyList(),
+        )
+
+        assertEquals(2, merged.size)
+    }
+
+    /**
      * A record the server is still acquiring is not offered for acquisition either.
      *
      * The same question the owned block asks - `SearchUiState.libraryAlbums` is every state except

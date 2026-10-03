@@ -39,6 +39,7 @@ import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.TrackListKind
 import app.needler.core.domain.repository.LibraryRepository
+import app.needler.core.domain.usecase.UnifiedSearchUseCase
 import app.needler.core.network.v1.V1Api
 import app.needler.core.network.v1.dto.ArtistReleasesDto
 import app.needler.core.network.v1.dto.ReleaseItemDto
@@ -102,13 +103,38 @@ public class DefaultLibraryRepository(
     /**
      * Owned albums and the catalogue discography as one list, owned first.
      *
-     * The join key is the release-group MBID, which both lanes agree on, so there is nothing to
-     * merge at read time: the catalogue half was written into the same table by
-     * [refreshArtistDiscography] and a row that is owned is simply the owned row.
+     * ## The two lanes do not agree on the MBID, and this is where that cost is paid
+     *
+     * This KDoc used to say "the join key is the release-group MBID, which both lanes agree on, so
+     * there is nothing to merge at read time". A device disproved it: `/api/v1/search` answers
+     * `in_library: false` for records the OpenSubsonic lane is simultaneously serving, so the two
+     * halves carry different ids for one album - logged as entry 1 of `UPSTREAM-ISSUES.md` and not
+     * repairable here.
+     *
+     * [refreshArtistDiscographyPage] decides "does the mirror already hold this" on that same
+     * disputed id, so caching an artist's discography writes a second, un-owned row for every record
+     * the user owns. The artist screen then drew `No Angel [Server]` directly above `No Angel [Pull]`
+     * - an offer to re-acquire music the server is already serving.
+     *
+     * So the merge runs at read time after all, with `catalogue = emptyList()` because both copies are
+     * local: [UnifiedSearchUseCase.mergeAlbums] drops an un-owned row whose case-folded title and
+     * artist a held row already claims. Reusing search's function rather than writing a second rule
+     * keeps the two screens from drifting, which matters because they draw the same records.
+     *
+     * **The cost, taken deliberately.** A genuinely separate release group that shares a title *and*
+     * an artist with something owned - a reissue titled identically to the original - is hidden from
+     * the discography. That is a real loss and it is the smaller one: it is hypothetical and usually
+     * distinguishable by title, whereas the duplicate is on the user's screen now. Rejected
+     * alternatives: filtering in [refreshArtistDiscographyPage] on the way in, which would make the
+     * offline discography depend on what was owned at cache time; and leaving it, which the device
+     * settled.
      */
     override fun observeArtistDiscography(mbid: ArtistMbid): Flow<List<Album>> =
         albumDao.observeAlbumsByArtist(mbid.value).map { rows ->
-            rows.map { EntityMappers.album(it) }
+            UnifiedSearchUseCase.mergeAlbums(
+                local = rows.map { EntityMappers.album(it) },
+                catalogue = emptyList(),
+            )
         }
 
     // --------------------------------------------------------------------- albums

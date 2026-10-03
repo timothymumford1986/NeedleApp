@@ -318,6 +318,92 @@ public class SearchMergeTest {
         assertEquals(2, merged.artists.first().ownedAlbumCount)
     }
 
+    /**
+     * The Dido duplication, still on the device at v0.0.13, reproduced where it really comes from:
+     * **one lane**.
+     *
+     * The merge's second rule was written against the wrong half. `UnifiedSearchMergeTest` puts the
+     * four MusicBrainz copies in [CatalogueSearchResults], and against that fixture the rule works -
+     * which is why it passed while the device went on drawing eight rows for four albums. The device
+     * gets both copies from the **mirror**.
+     *
+     * How the mirror comes to hold two rows for one record: opening Dido's artist screen pages her
+     * discography through `DefaultLibraryRepository.refreshArtistDiscographyPage`, which writes every
+     * release group the mirror does not already hold as an un-owned row (`CatalogueMappers.albumEntity`,
+     * `state = NOT_OWNED`, `in_library = 0`) so artist detail still renders on a train. Because the two
+     * sides disagree about the ids - the evidence `UnifiedSearchUseCase.mergeAlbums` records - "does
+     * not already hold" is true of every record the user owns, so all four are written a second time
+     * under MusicBrainz's ids. `album_fts` then indexes the artist name on all eight rows and
+     * [app.needler.core.data.local.dao.AlbumDao.observeAlbumSearch] filters on nothing, so the local
+     * lane on its own returns the library block and the to-pull block together.
+     *
+     * The catalogue lane is deliberately absent from this test. With no network at all the screen still
+     * drew both blocks, which is the shortest proof that the second copy was never the catalogue's.
+     */
+    @Test
+    public fun `a catalogue row the mirror cached is not offered for pull beside the album you own`():
+        Unit = runTest {
+        // What the library sync wrote, under the ids DroppedNeedle's import matched.
+        albumDao.rows["rg-still"] = didoRow("rg-still", "Still on My Mind", 2019)
+        albumDao.rows["rg-life"] = didoRow("rg-life", "Life for Rent", 2003)
+        albumDao.rows["rg-angel"] = didoRow("rg-angel", "No Angel", 1999, AlbumStateDb.PINNED)
+        albumDao.rows["rg-safe"] = didoRow("rg-safe", "Safe Trip Home", 2008)
+        // What paging the artist screen's discography wrote, under the ids MusicBrainz returned.
+        albumDao.rows["mb-still"] = didoRow("mb-still", "Still on My Mind", 2019, AlbumStateDb.NOT_OWNED)
+        albumDao.rows["mb-life"] = didoRow("mb-life", "Life for Rent", 2003, AlbumStateDb.NOT_OWNED)
+        albumDao.rows["mb-angel"] = didoRow("mb-angel", "No Angel", 1999, AlbumStateDb.NOT_OWNED)
+        albumDao.rows["mb-safe"] = didoRow("mb-safe", "Safe Trip Home", 2008, AlbumStateDb.NOT_OWNED)
+        // An unrelated record that merely shares the query's spelling. The to-pull block is for this.
+        albumDao.rows["mb-aria"] = albumRow(
+            mbid = "mb-aria",
+            title = "Dido",
+            artist = "Aria",
+            artistMbid = "ar-aria",
+            state = AlbumStateDb.NOT_OWNED,
+            year = 2000,
+        )
+
+        val local: LocalSearchResults = repository.searchLocal("dido").first()
+        val merged: UnifiedSearchResults = UnifiedSearchUseCase.merge(
+            query = "dido",
+            local = local,
+            catalogue = null,
+            lane = CatalogueLaneState.Unavailable(app.needler.core.domain.model.NeedlerError.Offline()),
+        )
+
+        // Four albums the server holds, and one it does not. The order is the DAO's own,
+        // `in_library DESC, title_normalised ASC`, which the merge must not disturb.
+        assertEquals(
+            listOf("Life for Rent", "No Angel", "Safe Trip Home", "Still on My Mind", "Dido"),
+            merged.albums.map { it.title },
+        )
+        // The surviving copy of each is the row that knows where the record is.
+        assertEquals(
+            listOf("rg-life", "rg-angel", "rg-safe", "rg-still", "mb-aria"),
+            merged.albums.map { it.releaseGroupMbid.value },
+        )
+        // And the un-owned half holds only the album the server genuinely does not have.
+        assertEquals(
+            listOf("Aria"),
+            merged.albums.filter { it.state == AlbumState.NotOwned }.map { it.artistName },
+        )
+    }
+
+    /** One Dido row, owned unless told otherwise, as the mirror stores it. */
+    private fun didoRow(
+        mbid: String,
+        title: String,
+        year: Int,
+        state: AlbumStateDb = AlbumStateDb.OWNED,
+    ) = albumRow(
+        mbid = mbid,
+        title = title,
+        artist = "Dido",
+        artistMbid = "ar-dido",
+        state = state,
+        year = year,
+    )
+
     @Test
     public fun `the merge is idempotent for a duplicate MBID within the catalogue half`() {
         val duplicate = app.needler.core.data.mapper.CatalogueMappers.album(

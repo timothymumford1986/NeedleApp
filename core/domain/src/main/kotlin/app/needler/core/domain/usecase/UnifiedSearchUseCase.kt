@@ -296,6 +296,34 @@ public class UnifiedSearchUseCase(
          * that share a title and an artist are both kept, because neither is a record the user owns
          * and either might be the one they want.
          *
+         * ## The second copy is not always the catalogue's, and that is how this shipped broken
+         *
+         * The rule above was applied to the catalogue half alone, and the device went on drawing all
+         * four Dido albums twice at v0.0.13 with the fix in the build. The second copy was coming from
+         * the **mirror**, so nothing the catalogue half was tested against could have caught it: with
+         * the network off entirely, the local lane on its own still returned the library block and the
+         * to-pull block together.
+         *
+         * The mirror holds two rows for one record because it is asked to. `LibraryRepository`'s
+         * `refreshArtistDiscographyPage` writes every release group of an artist's MusicBrainz
+         * discography that the mirror does not already hold as an un-owned row, so artist detail still
+         * renders offline - and "does not already hold" is decided on the MBID, which is the one thing
+         * the two sides disagree about. Opening the artist screen for an artist you own therefore
+         * writes a second, un-owned row for every record of theirs you own. `album_fts` indexes the
+         * artist name on those rows like any other, and `AlbumDao.observeAlbumSearch` filters on
+         * nothing, so the local lane returns both.
+         *
+         * So the key set is built from the whole local half **before** any row is accepted, and an
+         * un-owned local row a held row already covers is dropped exactly as a catalogue row would be.
+         * REQUIREMENTS.md "Search behaviour" rule 3 is a statement about one record appearing once in
+         * the merged list; which lane the surplus copy arrived on was never part of it.
+         *
+         * Rejected: filtering those rows out of `SearchRepository.searchLocal`, or refusing to cache
+         * them in the first place. The first puts a second copy of this rule in the data layer, where
+         * it would answer for the Auto browse tree and the playlist picker as well; the second is the
+         * offline discography, which is the whole reason the rows exist. Neither can see the merged
+         * list, which is where the guarantee is made.
+         *
          * **The year is deliberately not part of the key.** It was the obvious third term and the
          * device ruled it out: the mirror's row for *Safe Trip Home* carried no year at all, so its
          * row read as a bare title while the catalogue copy beside it read "Dido - 2008". A key that
@@ -321,10 +349,16 @@ public class UnifiedSearchUseCase(
         public fun mergeAlbums(local: List<Album>, catalogue: List<Album>): List<Album> {
             val seen: MutableSet<ReleaseGroupMbid> = HashSet(local.size + catalogue.size)
             val merged: MutableList<Album> = ArrayList(local.size + catalogue.size)
+            // Built from the whole local half up front, because the rule has to apply *within* that
+            // half: a set grown from the rows already accepted could not answer for the row being
+            // considered. Taking it from `local` rather than from the accepted rows loses nothing -
+            // the loop below only ever drops a row that is un-owned, which contributes no key, or a
+            // repeated MBID, which contributes the same one.
+            val held: Set<String> = heldRecordKeys(local)
             for (album in local) {
+                if (album.state == AlbumState.NotOwned && isHeldAlready(album, held)) continue
                 if (seen.add(album.releaseGroupMbid)) merged.add(album)
             }
-            val held: Set<String> = heldRecordKeys(merged)
             for (album in catalogue) {
                 if (isHeldAlready(album, held)) continue
                 // Also catches a release group the catalogue half returned twice, which one upstream

@@ -25,6 +25,23 @@ public interface SearchRepository {
      * Artists are part of this, and are found by name rather than by the leading word of their sort
      * name: "wonder" must return "Oh Wonder" when the mirror holds their records, because an owned
      * artist missing from an artist search reads as music the app has lost.
+     *
+     * ## This lane can return one record twice, and every caller must expect it
+     *
+     * [LocalSearchResults.albums] is one row per mirror row, and the mirror holds **more than one row
+     * for some records**. `LibraryRepository.refreshArtistDiscographyPage` caches an artist's
+     * MusicBrainz discography as un-owned rows so artist detail renders offline, keyed on the ids
+     * MusicBrainz returned - and those are not the ids the mirror holds for the same records, which a
+     * device proved twice (see
+     * [app.needler.core.domain.usecase.UnifiedSearchUseCase.mergeAlbums]). An owned album and a cached
+     * catalogue copy of it are then two rows, both matched by `album_fts` on the artist name, and this
+     * query filters on neither state nor `in_library`.
+     *
+     * Collapsing them is [app.needler.core.domain.usecase.UnifiedSearchUseCase.mergeAlbums]'s job and
+     * is deliberately not done here: the rule compares titles and artists across a whole result set,
+     * and a second copy of it in the data layer would be a second thing to keep in step. A caller that
+     * lists these albums without going through the merge - Android Auto's browse tree is the one that
+     * does - will show the duplicate.
      */
     public fun searchLocal(query: String, limit: Int = 50): Flow<LocalSearchResults>
 
