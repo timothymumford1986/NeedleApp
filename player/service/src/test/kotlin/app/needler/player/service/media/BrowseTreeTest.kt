@@ -17,6 +17,7 @@ import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.PinRepository
 import app.needler.core.domain.repository.PlaylistRepository
 import app.needler.core.domain.repository.SearchRepository
+import app.needler.core.domain.usecase.UnifiedSearchUseCase
 import app.needler.player.service.Fixtures
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -379,6 +380,95 @@ class BrowseTreeTest {
 
         assertEquals(listOf("On the server"), rows.map { it.title })
     }
+
+    /**
+     * One record the mirror holds twice reaches the car once.
+     *
+     * `SearchRepository.searchLocal`'s contract says this lane can return one record twice and names this
+     * tree as the caller that would show it: `refreshArtistDiscographyPage` caches an artist's MusicBrainz
+     * discography as un-owned rows keyed on ids the mirror does not already hold, so opening the artist
+     * screen for an artist you own writes a second row for every record of theirs you own - same title, same
+     * artist, different release-group MBID, un-owned.
+     *
+     * The surviving row is the owned one, which is the half of this that matters in a car: its media id is
+     * the id with files behind it, so the row plays. A twin that won would open an empty list.
+     */
+    @Test
+    fun `an album the mirror holds twice is one row in the car`() = runTest {
+        every { search.searchLocal(any(), any()) } returns flowOf(duplicatedInTheMirror)
+
+        val rows = tree.searchRows("dido", page = 0, pageSize = 20)
+
+        assertEquals(listOf("Safe Trip Home"), rows.map { it.title })
+        assertEquals(MediaId.forAlbum(ReleaseGroupMbid(Fixtures.ALBUM_A)), rows.single().mediaId)
+        assertEquals(1, tree.searchRowCount("dido"))
+    }
+
+    /** And a spoken "play ..." lands on the same row, rather than on the copy with no files. */
+    @Test
+    fun `a spoken query cannot reach the copy that is not owned`() = runTest {
+        every { search.searchLocal(any(), any()) } returns flowOf(duplicatedInTheMirror)
+        every { library.observeAlbumTracks(ReleaseGroupMbid(Fixtures.ALBUM_A)) } returns
+            flowOf(listOf(Fixtures.track()))
+
+        assertEquals(listOf("Track 1"), tree.tracksForQuery("dido").map { it.title })
+    }
+
+    /**
+     * And running the merge the other screens run would make no difference, which is why this tree does not.
+     *
+     * `BrowseTree.searchRows` records the decision; this is the evidence for it. Every row
+     * [UnifiedSearchUseCase.mergeAlbums] drops from a local-only call is a row the owned-only filter drops
+     * anyway, so calling it before the filter would add a dependency and change nothing. Asserted rather than
+     * argued, so that a change to either side has to answer for the difference.
+     */
+    @Test
+    fun `the unified merge would collapse no row this tree does not`() = runTest {
+        val merged: LocalSearchResults = duplicatedInTheMirror.copy(
+            albums = UnifiedSearchUseCase.mergeAlbums(
+                local = duplicatedInTheMirror.albums,
+                catalogue = emptyList(),
+            ),
+        )
+        every { search.searchLocal(any(), any()) } returns flowOf(duplicatedInTheMirror)
+        val withoutTheMerge = tree.searchRows("dido", page = 0, pageSize = 20)
+
+        every { search.searchLocal(any(), any()) } returns flowOf(merged)
+        val withTheMerge = BrowseTree(
+            library = library,
+            playlists = playlists,
+            favourites = favourites,
+            pins = pins,
+            search = search,
+        ).searchRows("dido", page = 0, pageSize = 20)
+
+        assertEquals(withTheMerge, withoutTheMerge)
+    }
+
+    /**
+     * One record, two mirror rows: the shape the device proved, with the un-owned copy second.
+     *
+     * The ids differ because that is the whole defect - the two lanes disagree about the release-group
+     * MBID - and the title and artist match because that is what makes them one record. The artist is
+     * carried too, since `album_fts` matched both rows on it.
+     */
+    private val duplicatedInTheMirror: LocalSearchResults = LocalSearchResults(
+        query = "dido",
+        albums = listOf(
+            Fixtures.album(
+                mbid = Fixtures.ALBUM_A,
+                title = "Safe Trip Home",
+                artistName = "Dido",
+                state = AlbumState.Owned,
+            ),
+            Fixtures.album(
+                mbid = Fixtures.ALBUM_B,
+                title = "Safe Trip Home",
+                artistName = "Dido",
+                state = AlbumState.NotOwned,
+            ),
+        ),
+    )
 
     /**
      * A browser asks for the count and then for the pages of the same query. Asking the mirror again each time

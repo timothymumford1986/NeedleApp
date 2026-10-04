@@ -35,6 +35,29 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * `pull` has no foreign key and is not an FTS content table, so rules 1 to 3 below do not apply. The
  * `album` and `track` triggers are untouched.
  *
+ * ## Version 4: splitting the composite genre strings already stored
+ *
+ * [MIGRATION_3_4] rewrites data and changes no schema at all, which is why its exported schema is
+ * version 3's with a new number on it. The server joins several genres into one field with a
+ * semicolon and the mirror stored the whole string as one genre, so the device's Genres screen
+ * reported 138 genres with a five-name row among them; `GenreCodec` now splits on ingest.
+ *
+ * **Re-ingesting on the next sync is not enough, and that is the whole reason this migration
+ * exists.** A delta sync asks `getIndexes` with `ifModifiedSince` and rewrites only the albums the
+ * server reports as changed - see `SyncDecision`, where a full sync happens on first connect or a
+ * server identity change and at no other time - so an album nobody re-tags keeps its composite
+ * column for ever. `GenreCodec.decode` splitting on read fixes the *list* without this, but not the
+ * queries behind it: `album.genres LIKE '%|Indie Rock|%'` cannot match `|Acoustic Rock;Indie Rock|`,
+ * so every tapped genre would have opened an empty screen. Rejected alternatives: issuing four
+ * `LIKE` patterns per genre to cover the delimiter pairs, which multiplies every genre query by four
+ * for ever to paper over one upgrade; and forcing a full sync on upgrade, which re-downloads the
+ * whole mirror over whatever connection the user happens to be on to fix one column.
+ *
+ * `album` *is* an FTS content table, so rule 1 deserves an explicit answer: it does not apply,
+ * because nothing is dropped, created or renamed. `UPDATE` fires `album_fts_before_update` and
+ * `album_fts_after_update`, which delete and reinsert the row's index entry, so the index follows the
+ * write rather than going stale behind it - and `genres` is not an indexed column in any case.
+ *
  * ## Writing one
  *
  * Rules that apply to every migration in this database, learned from the shape of the schema:
@@ -128,10 +151,41 @@ public object NeedlerMigrations {
     }
 
     /**
+     * Rewrites `album.genres` so a composite value already stored becomes several delimited genres.
+     *
+     * One `UPDATE`, no schema change: the stored form is `|a;b;c|` and the wanted form is `|a|b|c|`,
+     * which is three nested `REPLACE` calls rather than the recursive CTE a general split would need.
+     * The first two collapse a space either side of the separator, because `|Rock; Pop|` would
+     * otherwise become `|Rock| Pop|` and `GenreCodec.likePattern` trims the term it brackets, so
+     * `%|Pop|%` would not match `| Pop|`. The third does the actual substitution.
+     *
+     * `WHERE genres LIKE '%;%'` so the statement touches only rows that need it. Without it every
+     * album row in the mirror is rewritten, every one fires the two `album_fts` update triggers, and
+     * a library of five thousand albums pays for that on an upgrade that changes nothing for it.
+     *
+     * De-duplication is deliberately not attempted in SQL. A composite naming the same genre twice
+     * becomes `|Rock|rock|`, which `GenreCodec.decode` folds to one and which `observeAlbumCountForGenre`
+     * counts once anyway because it counts album rows, not occurrences - so the only thing SQL could
+     * add here is a way to get it wrong.
+     *
+     * See this file's header for why this runs at all rather than waiting for the next sync, and for
+     * why rule 1 does not apply to an `UPDATE` on a content table.
+     */
+    internal val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "UPDATE `album` SET `genres` = " +
+                    "REPLACE(REPLACE(REPLACE(`genres`, ' ;', ';'), '; ', ';'), ';', '|') " +
+                    "WHERE `genres` LIKE '%;%'",
+            )
+        }
+    }
+
+    /**
      * Every migration, in ascending order. Passed to `addMigrations` as a whole, so Room can also
      * compose them to skip versions.
      */
-    public val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+    public val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
     /**
      * Convenience for a migration that has rewritten `album` or `track`: drops the search triggers,

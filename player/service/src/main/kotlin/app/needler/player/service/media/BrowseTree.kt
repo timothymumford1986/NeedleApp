@@ -160,6 +160,38 @@ public class BrowseTree(
      * through the server, takes seconds when it works at all, and returns albums whose only action is
      * **Pull** - which REQUIREMENTS.md "Android Auto" rules out while driving. Local FTS answers from the
      * mirror in under 50 ms with no network, which is the only latency a car should be asked to accept.
+     *
+     * ## The mirror returns one record twice, and this is where that is answered
+     *
+     * [SearchRepository.searchLocal]'s contract is explicit that it can: `refreshArtistDiscographyPage`
+     * caches an artist's MusicBrainz discography as un-owned rows so artist detail renders offline, keyed
+     * on the ids MusicBrainz returned, and those are not the ids the mirror already holds for the same
+     * records. Opening the artist screen for an artist you own therefore writes a second, un-owned row for
+     * every record of theirs you own, `album_fts` indexes it like any other, and the lane returns both.
+     * That contract names this class as the caller that would show the duplicate.
+     *
+     * It does not, and the reason is [albumRows] rather than anything added here. **Auto draws owned albums
+     * only**, so the surplus copy - which is un-owned, by construction, since that is what the discography
+     * cache writes - is dropped by the predicate this tree applies to every album list it builds. The
+     * duplicate cannot reach a row in a car, and the screens that *do* show both lanes need
+     * `UnifiedSearchUseCase.mergeAlbums` precisely because they have no such predicate to hide behind.
+     *
+     * ## So Auto deliberately does not call the merge
+     *
+     * Calling it before [albumRows] would change nothing - every row the merge drops here is a row the
+     * owned-only filter drops anyway, since the merge only ever discards an un-owned local row or a
+     * catalogue one, and there is no catalogue half in a car. What it would add is a dependency on a use
+     * case this class has no other reason to know, under a name that claims to fix a duplicate it cannot
+     * reach.
+     *
+     * The merge also takes a trade the search screen judged worth it and a car should not: it collapses on
+     * case-folded title **and** artist, so a genuinely separate release group sharing both with something
+     * owned is hidden. There that costs a shopping-list entry. Here the equivalent reach - collapsing two
+     * *owned* rows that share a title and an artist, which is the only duplicate that could still reach a
+     * car row, from a record acquired under the second id before that merge existed - would hide music the
+     * user owns and can play, in the one place they cannot go looking for it. A duplicate row costs a
+     * driver one glance; a record missing from the car is the kind of fault that gets reported as lost
+     * music. Left as it is, deliberately.
      */
     public suspend fun searchRows(query: String, page: Int, pageSize: Int): List<BrowseRow> =
         windowFor(page, pageSize).slice(searchResults(query))
@@ -265,6 +297,13 @@ public class BrowseTree(
         return if (tracks.size <= MAX_ENQUEUED_TRACKS) tracks else tracks.take(MAX_ENQUEUED_TRACKS)
     }
 
+    /**
+     * Owned albums only, which is also what collapses the mirror's duplicate rows - see [searchRows].
+     *
+     * The filter is load-bearing twice over and both are stated where they are decided: an un-owned album
+     * has no files behind it and its one action is **Pull**, and an un-owned album is what a cached
+     * discography page writes as a second copy of a record the server already has.
+     */
     private fun albumRows(albums: List<Album>): List<BrowseRow> =
         albums.filter(Album::isOwned).map(::albumRow)
 

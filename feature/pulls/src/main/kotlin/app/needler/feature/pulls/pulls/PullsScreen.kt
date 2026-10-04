@@ -672,7 +672,7 @@ private fun ActivePullRow(
     val fraction: Float? = pull.progress.fraction
     val percent: Int? = PullsFormat.percent(fraction)
     val spoken: String = PullsFormat.spokenRow(pull, now)
-    val cancelLabel: String = "Cancel the pull of " + PullsFormat.albumPhrase(pull)
+    val cancelLabel: String = "Stop the pull of " + PullsFormat.albumPhrase(pull)
     val cancellable: Boolean = pull.canCancel
 
     Row(
@@ -746,7 +746,7 @@ private fun ActivePullRow(
             if (cancellable) {
                 RowAction(label = cancelLabel) {
                     NeedlerPillButton(
-                        text = "Cancel",
+                        text = "Stop",
                         onClick = { onCancel(pull) },
                         enabled = !busy,
                     )
@@ -898,18 +898,30 @@ private fun PullArtwork(pull: Pull, ring: Float?) {
 }
 
 /**
- * The row's second line: the artist, and whatever the badge beside it does not already say.
+ * The row's second line: **the artist**, and whatever else fits beside the artist.
  *
- * Normally [PullsFormat.subtitle] verbatim. The one departure is the state whose **badge label is
- * itself the whole explanation**, where drawing both printed the same fact twice — once in full in
- * the trailing column, and once wrapped and truncated under the title where the artist belongs.
- * A device with 35 pulls parked for a manual source pick showed it on all 35 rows:
+ * Normally [PullsFormat.subtitle] verbatim, with two departures, both of them the same defect in
+ * two shapes. A device with 35 pulls parked for a manual source pick drew the first on all 35 rows:
  *
  * ```
  * Death's Dateless Night              Needs attention on the server
  * Paul Kelly · a source
  * needs picking on th...                               [ Cancel ]
  * ```
+ *
+ * and, once the state was suppressed, the second on the same rows:
+ *
+ * ```
+ * Death's Dateless Night              Needs attention on the server
+ * Paul Kelly · Try MP3
+ * 320-plus kbps, the...                                [ Cancel ]
+ * ```
+ *
+ * The slot had not changed; only which sentence was being poured into it. So the rule is about the
+ * slot. **The subtitle is the artist's line**, and a part joins it only when it is short enough to
+ * share it: a badge's own explanation is dropped by [badgeSaysTheDetail], and a server-written
+ * quality sentence by [qualityProse], which carries the measurements and says where that string is
+ * drawn in full instead.
  *
  * ## Why this is a narrow fix and not "put only the artist in the subtitle"
  *
@@ -925,28 +937,98 @@ private fun PullArtwork(pull: Pull, ring: Float?) {
  * identical reason — it filters the state out of its own detail parts, with a comment about
  * "cancelled, cancelled". A screen reader was protected from this and a sighted user was not.
  *
- * ## What is not fixed here
+ * ## The other half, since fixed
  *
- * `NeedlerAlbumBadge.NeedsAttention` renders the sentence "Needs attention on the server" in a
- * 13sp/600 trailing column, which is what squeezed the subtitle into two narrow lines in the first
- * place. A shorter label would fix the layout as well as the repetition, but that string is
- * `:core:design`'s and not this work's to change. It is in the handover notes.
+ * `NeedlerAlbumBadge.NeedsAttention` used to render the sentence "Needs attention on the server" in
+ * a 13sp/600 trailing column, which is what squeezed the subtitle into two narrow lines in the first
+ * place - this file could only stop *adding* to a slot the badge had already taken. That string was
+ * `:core:design`'s and was shortened to "Needs attention" on 2026-10-04, returning 81dp to the text
+ * column and with it every parked title that had been ellipsised. The full sentence survives in the
+ * badge's spoken label, so nothing was lost but the width.
  */
 internal fun rowSubtitle(pull: Pull, now: Instant): String {
     val stated: String? = PullsFormat.stateDetail(pull).takeIf { badgeSaysTheDetail(pull) }
+    val prose: String? = qualityProse(pull)
     val parts: List<String> = buildList {
         if (pull.artistName.isNotBlank()) add(pull.artistName)
-        // Exactly the filter `PullsFormat.spokenRow` applies to the same list, so what is read and
-        // what is heard stay the same facts.
-        addAll(PullsFormat.detailParts(pull, now).filterNot { it == stated })
+        // `stated` is exactly the filter `PullsFormat.spokenRow` applies to the same list, so a
+        // repeat is dropped from both; `prose` is this line's alone, because the spoken reading has
+        // no column to overflow and is the one place the whole sentence still lands.
+        addAll(PullsFormat.detailParts(pull, now).filterNot { it == stated || it == prose })
     }
-    // Suppressing a repeat must never empty the line. A pull whose album the mirror cannot name an
+    if (parts.isNotEmpty()) return parts.joinToString(separator = " · ")
+    // Suppressing something must never empty the line. A pull whose album the mirror cannot name an
     // artist for has nothing else to say, and a blank second line under a title is the hole this
-    // screen was once unusable for - see `PullsFormat.albumTitle`. Better to repeat the badge than
-    // to draw nothing, so in that one case the suppression is given back.
-    if (parts.isEmpty()) return PullsFormat.subtitle(pull, now)
-    return parts.joinToString(separator = " · ")
+    // screen was once unusable for - see `PullsFormat.albumTitle`. Better to repeat the badge, or
+    // even to draw the long sentence, than to draw nothing, so in that one case what was taken out
+    // is given back - the shorter of the two first.
+    return stated ?: prose ?: PullsFormat.subtitle(pull, now)
 }
+
+/**
+ * `quality_snapshot_summary` when the server sent a sentence rather than a label, which this row
+ * does not draw.
+ *
+ * ## The slot is one line and the server writes to no length
+ *
+ * The device measured it. `screenshots/pulls-queue-phone.png` and
+ * `screenshots/pulls-all-awaiting-review-phone.png` are the same row at its two widths: the text
+ * column is about 198dp beside a short trailing column. It was about 70dp beside the then
+ * sentence-long `Needs attention on the server` badge - roughly 34 and 12 characters of 13sp `meta` -
+ * and is about 155dp now that the badge draws "Needs attention". The slot is the artist's, and
+ * whatever shares it has one line at best even at the recovered width.
+ *
+ * Every other part of [PullsFormat.detailParts] is written to fit that: the counters are figures,
+ * the relative day is two words, and the state explanations are this app's own wording, the longest
+ * of them 33 characters. `quality_snapshot_summary` is the one part the **server** writes, with no
+ * length contract anywhere in the API, and a server that answered `Try MP3 320-plus kbps, the
+ * server will keep looking for FLAC` put a 60-character sentence in a 12-character slot. It drew as
+ * `320-plus kbps, the...`, which tells the reader nothing while costing the row its second line.
+ *
+ * ## Which is why the advice goes where the requirement already puts it
+ *
+ * REQUIREMENTS.md "Design pack discrepancies" settles where this string is shown: "the album
+ * screen, the request sheet, and the pull's own detail". A row in a list is none of the three. All
+ * three draw it as wrapping body copy with room for a sentence - `AlbumScreen` renders it under the
+ * **Pull** button and `RequestSheetState.qualityNote` carries it into the sheet - and tapping this
+ * row opens exactly that album screen. Nothing is lost by leaving it out here, and a reader who
+ * wants it is one tap from all of it.
+ *
+ * It is also still **spoken** in full: the row's content description is `PullsFormat.spokenRow`,
+ * which composes the same detail parts and is not touched by this. A screen reader has no column to
+ * run out of, so the one reading that can carry a sentence keeps it.
+ *
+ * A label still draws, because a label fits and the pack asks for it: screen 06 writes `FLAC` and
+ * `MP3 320` on its finished rows, and those arrive in this very field. The cut is at
+ * [QUALITY_LABEL_MAX_CHARS], which is about the slot rather than about the string's grammar - there
+ * is no reliable way to tell prose from a label by punctuation, and a 24-character label is one
+ * that can still share a line with an artist's name.
+ *
+ * ## Rejected
+ *
+ *  * **A third line in the row.** [ActivePullRow] lays out its own column and could take one;
+ *    [FinishedPullRow] is `NeedlerAlbumRow`, whose column is fixed at title and subtitle, and
+ *    `:core:design` is not this module's to change. The advice would appear on active rows and
+ *    vanish on finished ones, which is worse than consistent absence - and a taller row makes the
+ *    clipping at the foot of the list, which a device already reported, strictly worse.
+ *  * **Dropping the field from the row outright.** It would take `FLAC` and `MP3 320` off the
+ *    finished rows with it, which is the pack's own content and fits the slot it is drawn in.
+ *  * **A blanket cap on every detail part.** The failure reason can be [Pull.error], which the
+ *    server also writes freely - but it is the only account of a failure the user will ever get,
+ *    and `PullsFormat.failureReason` says so. A truncated reason beats no reason; truncated advice
+ *    about what to request next time does not beat the full copy of it one tap away.
+ */
+private fun qualityProse(pull: Pull): String? = pull.qualityPolicySummary
+    ?.takeIf { it.isNotBlank() && it.trim().length > QUALITY_LABEL_MAX_CHARS }
+
+/**
+ * The longest `quality_snapshot_summary` this row will draw.
+ *
+ * 24 characters is what fits beside an artist's name on the wider of the two slots measured in
+ * [qualityProse]: about 34 characters of 13sp `meta`, less a twelve-character artist and the
+ * three-character separator. `FLAC` and `MP3 320` are 4 and 7; the sentence a device sent was 60.
+ */
+private const val QUALITY_LABEL_MAX_CHARS: Int = 24
 
 /**
  * Whether the badge beside this row already says what [PullsFormat.stateDetail] would say.

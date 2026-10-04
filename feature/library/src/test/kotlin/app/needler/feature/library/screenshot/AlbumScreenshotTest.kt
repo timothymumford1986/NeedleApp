@@ -420,6 +420,7 @@ class AlbumScreenshotTest {
             onRetryPull = {},
             onDownloadToDevice = {},
             onRemoveFromDevice = {},
+            onStopDownload = {},
             onRetryTrack = {},
             onOpenArtist = {},
             onDismissNotice = {},

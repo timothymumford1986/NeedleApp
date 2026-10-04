@@ -10,6 +10,7 @@ import app.needler.core.domain.model.Pin
 import app.needler.core.domain.model.PinSource
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RemovedDownload
+import app.needler.core.domain.model.StoppedDownload
 import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
 import app.needler.core.domain.model.TrackFetchHandle
@@ -118,6 +119,50 @@ public interface PinRepository {
 
     /** Restarts a failed or partial pinned download. */
     public suspend fun retryPinnedDownload(mbid: ReleaseGroupMbid): Outcome<Unit>
+
+    /**
+     * **Stops** a download in flight and keeps what has already arrived: the Stop action.
+     *
+     * Named for what it does to the *download*, because the pin is precisely what it does not touch.
+     * [unpinAlbum] is the other half of the pair: it deletes the bytes and reports what it freed.
+     * This one cancels the job, leaves every track that landed where it is, and leaves the album
+     * pinned - so the record keeps playing offline. REQUIREMENTS.md "The download in flight is a
+     * badge, not a banner": "stopping leaves what has landed as a part-downloaded pin, which plays,
+     * while removing deletes the bytes and reports what it freed. The album offers whichever one can
+     * still apply."
+     *
+     * It is not [retryPinnedDownload]'s inverse either. Nothing here resumes and nothing here
+     * deletes: [retryPinnedDownload] starts the download again, [unpinAlbum] removes what is here,
+     * and this stops what is happening.
+     *
+     * ## Where the pin lands
+     *
+     * [OfflineDownloadState.Partial], always - including when nothing had arrived yet. The whole
+     * argument is on [OfflineDownloadState.Partial]; the half that belongs here is that the state has
+     * to be one the start-up resume sweep does not re-enqueue. A stop that left the row at
+     * [OfflineDownloadState.Queued] or [OfflineDownloadState.Downloading] would hold until the next
+     * cold start and then undo itself, which is the un-exitable download this action exists to let
+     * the user out of.
+     *
+     * ## Why this has a default implementation
+     *
+     * There is nothing to delegate to - no other member stops anything - so the default answers
+     * [StoppedDownload.nothing]: a source with no downloader behind it has no job to cancel and
+     * nothing of its own to keep. That is an honest answer rather than an invented one, the same
+     * shape as [LibraryRepository.refreshArtistDiscographyPage]'s default, and it keeps the five test
+     * doubles in `:app`, `:feature:library`, `:feature:player`, `:core:data` and `:player:service`
+     * compiling without each inventing a stop. Two of them override it anyway, to refuse: a fake
+     * whose own contract is that an unexpected call fails loudly is worse off with a plausible
+     * default than without one.
+     *
+     * The one implementation that owns the `WorkManager` job overrides it for real, and it is the
+     * only one that could stop anything. It fails with
+     * [app.needler.core.domain.model.NeedlerError.NotFound] when the album is not pinned at all,
+     * because there is then no download of it to stop - a different answer from "stopped nothing",
+     * which would tell the caller a tap worked on a row that has gone.
+     */
+    public suspend fun stopPinnedDownload(mbid: ReleaseGroupMbid): Outcome<StoppedDownload> =
+        Outcome.Success(StoppedDownload.nothing(mbid))
 
     /** The cached row for one track, or null when nothing is on the device. */
     public suspend fun getCachedAudio(key: TrackKey): CachedAudio?

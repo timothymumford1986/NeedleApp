@@ -14,6 +14,7 @@ import app.needler.core.domain.model.Pin
 import app.needler.core.domain.model.PinSource
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RemovedDownload
+import app.needler.core.domain.model.StoppedDownload
 import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
 import app.needler.core.domain.model.TrackFetchHandle
@@ -108,6 +109,19 @@ internal class FakePinRepository(
 
     override suspend fun retryPinnedDownload(mbid: ReleaseGroupMbid): Outcome<Unit> =
         unreachable("retryPinnedDownload")
+
+    /**
+     * Unreachable despite the interface having a default, on this file's own rule.
+     *
+     * The default on [PinRepository.stopPinnedDownload] answers "nothing stopped" so that every test
+     * double keeps compiling, which is right for the interface and wrong for this fake: the whole
+     * point of the throws above is that a quietly plausible answer turns "this screen reached past
+     * its own concern" into a passing test. The Storage screen removes downloads and reports what
+     * that freed; stopping one in flight belongs to the album screen, which is where the progress is
+     * shown.
+     */
+    override suspend fun stopPinnedDownload(mbid: ReleaseGroupMbid): Outcome<StoppedDownload> =
+        unreachable("stopPinnedDownload")
 
     override suspend fun getCachedAudio(key: TrackKey): CachedAudio? = unreachable("getCachedAudio")
 

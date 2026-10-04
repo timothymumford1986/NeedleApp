@@ -323,8 +323,8 @@ class PullsFormatTest {
         assertEquals("this album", PullsFormat.albumPhrase(SamplePulls.titleAllSpaces))
         assertEquals("Fever", PullsFormat.albumPhrase(SamplePulls.searching))
 
-        val label: String = "Cancel the pull of " + PullsFormat.albumPhrase(SamplePulls.untitled)
-        assertEquals("Cancel the pull of this album", label)
+        val label: String = "Stop the pull of " + PullsFormat.albumPhrase(SamplePulls.untitled)
+        assertEquals("Stop the pull of this album", label)
     }
 
     @Test
@@ -339,7 +339,7 @@ class PullsFormatTest {
             assertTrue("blank phrase for " + pull.releaseGroupMbid.value, phrase.isNotBlank())
             assertTrue("blank title for " + pull.releaseGroupMbid.value, drawn.isNotBlank())
             for (label in listOf(
-                "Cancel the pull of " + phrase,
+                "Stop the pull of " + phrase,
                 "Retry the pull of " + phrase,
                 "Play " + phrase,
             )) {

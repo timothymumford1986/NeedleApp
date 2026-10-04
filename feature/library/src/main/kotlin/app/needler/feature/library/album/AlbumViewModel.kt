@@ -16,6 +16,7 @@ import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RemovedDownload
 import app.needler.core.domain.model.RequestReceipt
 import app.needler.core.domain.model.ServerCapabilities
+import app.needler.core.domain.model.StoppedDownload
 import app.needler.core.domain.model.StreamFormat
 import app.needler.core.domain.model.StreamOverrideScope
 import app.needler.core.domain.model.StreamRung
@@ -445,12 +446,45 @@ class AlbumViewModel @Inject constructor(
     }
 
     /**
+     * Stop the download and keep what has arrived.
+     *
+     * **Not [onRemoveFromDevice] under a kinder label.** The album screen used
+     * to offer only "Device. Remove … from this device" while a download ran,
+     * so the only way to end one was to delete everything it had fetched —
+     * observed on a device at "Pulling to device, 31 percent, playing now".
+     * REQUIREMENTS.md "The download in flight is a badge, not a banner" makes
+     * them two actions with two outcomes: "stopping leaves what has landed as a
+     * part-downloaded pin, which plays, while removing deletes the bytes and
+     * reports what it freed."
+     *
+     * Inside [runExclusively] like every other write here, and for a sharper
+     * reason than most: Stop and Remove are drawn in the same slot of the
+     * action row, and the row redraws the moment the pin row changes. Two taps
+     * racing could otherwise send a stop and a removal for the same album.
+     */
+    fun onStopDownload() {
+        runExclusively {
+            when (
+                val result: Outcome<StoppedDownload> = pins.stopPinnedDownload(releaseGroupMbid)
+            ) {
+                is Outcome.Success -> AlbumNotice.DownloadStopped(result.value.tracksOnDevice)
+                is Outcome.Failure -> AlbumNotice.Problem(problemMessage(result.error))
+            }
+        }
+    }
+
+    /**
      * Remove the download.
      *
      * REQUIREMENTS.md is emphatic that this deletes the bytes there and then
      * and reports how many were freed, rather than demoting the album into the
      * listening tier — which is why the notice carries the figure the
      * repository returned rather than a bare "done".
+     *
+     * [onStopDownload] is the other half of the pair, and the domain decides
+     * which of the two is offered: `AlbumState.Pinned.offeredActions` holds
+     * `CANCEL` while the download is in flight and `REMOVE_FROM_DEVICE` once it
+     * rests, never both.
      */
     fun onRemoveFromDevice() {
         runExclusively {

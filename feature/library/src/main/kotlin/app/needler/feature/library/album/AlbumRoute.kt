@@ -46,6 +46,7 @@ fun AlbumRoute(
         onRetryPull = viewModel::onRetryPull,
         onDownloadToDevice = viewModel::onDownloadToDevice,
         onRemoveFromDevice = viewModel::onRemoveFromDevice,
+        onStopDownload = viewModel::onStopDownload,
         onRetryTrack = viewModel::onRetryTrack,
         onOpenArtist = { state.album?.artistMbid?.let(onOpenArtist) },
         onDismissNotice = viewModel::onDismissNotice,

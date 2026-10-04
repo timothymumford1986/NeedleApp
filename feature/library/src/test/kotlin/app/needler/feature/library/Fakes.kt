@@ -40,6 +40,7 @@ import app.needler.core.domain.model.ServerIdentity
 import app.needler.core.domain.model.ServerProbe
 import app.needler.core.domain.model.SleepTimer
 import app.needler.core.domain.model.SessionState
+import app.needler.core.domain.model.StoppedDownload
 import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
 import app.needler.core.domain.model.SyncReport
@@ -426,9 +427,19 @@ internal class FakePinRepository : PinRepository {
 
     var pinOutcome: Outcome<Unit> = Outcome.Ok
     var unpinOutcome: Outcome<RemovedDownload>? = null
+    var stopOutcome: Outcome<StoppedDownload>? = null
 
     val pinned: MutableList<ReleaseGroupMbid> = mutableListOf()
     val unpinned: MutableList<ReleaseGroupMbid> = mutableListOf()
+
+    /**
+     * Albums whose download was stopped.
+     *
+     * A separate list from [unpinned] on purpose: the defect this fake is used to pin was the album
+     * screen offering a removal where a stop belonged, and a fake that recorded both in one list
+     * could not tell the two apart.
+     */
+    val stopped: MutableList<ReleaseGroupMbid> = mutableListOf()
 
     override fun observePins(): Flow<List<Pin>> = pins.map { it.values.toList() }
 
@@ -457,6 +468,13 @@ internal class FakePinRepository : PinRepository {
         unpinned += mbid
         return unpinOutcome ?: Outcome.Success(
             RemovedDownload(releaseGroupMbid = mbid, removedTracks = 8, freedBytes = 412_000_000L),
+        )
+    }
+
+    override suspend fun stopPinnedDownload(mbid: ReleaseGroupMbid): Outcome<StoppedDownload> {
+        stopped += mbid
+        return stopOutcome ?: Outcome.Success(
+            StoppedDownload(releaseGroupMbid = mbid, tracksOnDevice = 4, tracksTotal = 12),
         )
     }
 

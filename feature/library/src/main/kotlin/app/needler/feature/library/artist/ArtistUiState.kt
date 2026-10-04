@@ -350,6 +350,17 @@ data class ArtistUiState(
      */
     val displayName: String get() = LibraryFormat.artistName(artist?.name ?: knownName)
 
+    /**
+     * The artist this page is about, as a name, or null when the page itself does not know one.
+     *
+     * The difference from [displayName] is the whole point of having both: that one is never null
+     * because a header must say something, this one is null precisely when nothing is known, so a
+     * caller can leave the artist out rather than assert ignorance. Fed to
+     * [discographyRowSubtitle]; see it for what the rows do with it.
+     */
+    val creditedName: String?
+        get() = (artist?.name ?: knownName)?.trim()?.takeIf { it.isNotEmpty() }
+
     /** The name to put inside a sentence, e.g. a content description. */
     val spokenName: String get() = LibraryFormat.artistLabel(artist?.name ?: knownName)
 
@@ -446,6 +457,51 @@ data class ArtistUiState(
         /** The words catalogue search itself uses for an artist the library does not have. */
         const val NOT_IN_LIBRARY_YET: String = "Not in your library yet"
     }
+}
+
+/**
+ * `Dido · 1999`, or `1999` alone — the subtitle of one row in an artist's discography.
+ *
+ * ## What was wrong
+ *
+ * The real Dido's page listed forty releases and all but one read **"Unknown artist · 1999"**. The
+ * exception was the one record that also existed in the mirror from an earlier search. The chain:
+ * `ReleaseItemDto` carries no artist field at all — `GET /api/v1/artists/{mbid}/releases` does not
+ * repeat the credit on every row of one artist's discography, which is reasonable of it — so
+ * `DefaultLibraryRepository.refreshArtistDiscographyPage` substitutes the mirror's own artist row,
+ * and there is no such row: that fetch writes albums and never an artist. The name went in blank,
+ * and `LibraryFormat.albumRowSubtitle` drew the placeholder it draws for a blank one.
+ *
+ * ## Why this is the artist screen's own function
+ *
+ * **On an artist's page the artist is already known.** REQUIREMENTS.md "Library browse" is explicit
+ * about what this screen is - "Artist detail is where the two lanes meet visibly. It shows the albums
+ * the server has from the mirror and the artist's full discography" - and both lanes are one artist's.
+ * The header above these rows names them, from the mirror or from the name the tap carried. So the
+ * row needs no placeholder and no second opinion: [credit] is the page's
+ * [ArtistUiState.creditedName], and a row the catalogue gave no credit for takes the one the page is
+ * about.
+ *
+ * With neither — an un-named artist reached by MBID alone — the artist is dropped and the row reads
+ * as the year. Rejected: `LibraryFormat.albumRowSubtitle`, which is the right answer on the Library
+ * and Search screens and the wrong one here. There a row's artist is information the reader does not
+ * otherwise have, so a placeholder marks a real gap; here it would be the screen claiming not to know
+ * the name printed at the top of it. Showing nothing is better than asserting ignorance when the
+ * surrounding context already supplies the answer.
+ *
+ * The row's own credit still wins where it has one, because a discography contains collaborations
+ * and various-artists records, and overwriting "Faithless" with "Dido" on her page would be
+ * inventing a fact rather than filling a gap.
+ *
+ * Returns an empty string when there is neither a credit nor a year. The caller draws that as a
+ * blank line rather than a placeholder, and leaves it out of the spoken label — a content
+ * description that ends in ", " is the shape of bug the device audit reads out loud.
+ */
+fun discographyRowSubtitle(album: Album, credit: String?): String {
+    val name: String? = album.artistName.trim().takeIf { it.isNotEmpty() }
+        ?: credit?.trim()?.takeIf { it.isNotEmpty() }
+    val parts: List<String> = listOfNotNull(name, album.year?.toString())
+    return parts.joinToString(separator = " · ")
 }
 
 /**

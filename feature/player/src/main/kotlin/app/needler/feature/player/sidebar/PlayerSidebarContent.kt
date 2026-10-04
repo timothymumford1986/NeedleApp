@@ -350,6 +350,11 @@ private fun SidebarCrate(
                     } else {
                         null
                     },
+                    // This list holds Up next and nothing else - the Playing row is the panel above
+                    // it, not a row - so the rule `CrateScreen` states is already satisfied by the
+                    // list's contents. All that is left is the lone-row case: one queued track has
+                    // nowhere to go, so it gets no handle rather than one that does nothing.
+                    canReorder = upNext.size > 1,
                     onRemove = { onRemove(item.id) },
                     subtitle = crate.rowSubtitle(item),
                     showArtwork = crate.showsRowArtwork,

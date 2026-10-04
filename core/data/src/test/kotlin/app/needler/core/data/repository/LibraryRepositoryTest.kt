@@ -397,6 +397,68 @@ public class LibraryRepositoryTest {
         assertEquals(2, genres.first().albumCount)
     }
 
+    /**
+     * An album tagged with five genres appears under all five.
+     *
+     * The device's Genres screen reported 138 genres and carried
+     * `Acoustic Rock;Alternative Rock;Folk Rock;Indie Rock;Pop Rock` as one of them, owning one
+     * album - so the count was inflated, the row was unreadable, and the five genres the album
+     * actually has had no bucket at all.
+     */
+    @Test
+    public fun `a composite genre field becomes one bucket per genre`(): Unit = runTest {
+        albumDao.rows["a"] = albumRow(
+            mbid = "a",
+            genres = GenreCodec.encode(listOf("Folk Rock;Indie Rock;Pop Rock")),
+        )
+        albumDao.rows["b"] = albumRow(mbid = "b", genres = GenreCodec.encode(listOf("Indie Rock")))
+
+        val genres: List<Genre> = repository.observeGenres().first()
+
+        assertEquals(listOf("Folk Rock", "Indie Rock", "Pop Rock"), genres.map { it.name })
+        assertEquals(1, genres.single { it.name == "Folk Rock" }.albumCount)
+        assertEquals(2, genres.single { it.name == "Indie Rock" }.albumCount)
+    }
+
+    /**
+     * A column written before genres were split still reads as several genres.
+     *
+     * `NeedlerMigrations.MIGRATION_3_4` rewrites those columns, but a delta sync never re-reports an
+     * unchanged album, so the list must not depend on the migration having run - an in-memory
+     * database never applies one either.
+     */
+    @Test
+    public fun `a composite column already stored is counted as several genres`(): Unit = runTest {
+        albumDao.rows["a"] = albumRow(mbid = "a", genres = "|Folk Rock;Indie Rock|")
+
+        val genres: List<Genre> = repository.observeGenres().first()
+
+        assertEquals(listOf("Folk Rock", "Indie Rock"), genres.map { it.name })
+    }
+
+    /** "Indie Rock" and "indie rock" are one genre with one count, not two with half each. */
+    @Test
+    public fun `case and whitespace variants are one genre`(): Unit = runTest {
+        albumDao.rows["a"] = albumRow(mbid = "a", genres = GenreCodec.encode(listOf("Indie Rock")))
+        albumDao.rows["b"] = albumRow(mbid = "b", genres = GenreCodec.encode(listOf("indie rock")))
+        albumDao.rows["c"] = albumRow(mbid = "c", genres = GenreCodec.encode(listOf("INDIE  ROCK")))
+
+        val genres: List<Genre> = repository.observeGenres().first()
+
+        assertEquals(1, genres.size)
+        assertEquals(3, genres.single().albumCount)
+    }
+
+    /** A slash is part of a genre's name on this server; splitting on it would invent two. */
+    @Test
+    public fun `a genre whose name contains a slash stays one genre`(): Unit = runTest {
+        albumDao.rows["a"] = albumRow(mbid = "a", genres = GenreCodec.encode(listOf("Hip-Hop/Rap")))
+
+        val genres: List<Genre> = repository.observeGenres().first()
+
+        assertEquals(listOf("Hip-Hop/Rap"), genres.map { it.name })
+    }
+
     @Test
     public fun `the genre like pattern brackets the term so rock does not match rockabilly`() {
         val pattern: String = GenreCodec.likePattern("rock")

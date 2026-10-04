@@ -11,6 +11,7 @@ import app.needler.core.data.local.entity.PlaylistTrackEntity
 import app.needler.core.data.local.entity.TrackEntity
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.network.subsonic.dto.ChildDto
+import app.needler.core.network.subsonic.dto.ItemGenreDto
 import app.needler.core.network.subsonic.dto.PlaylistDto
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -61,6 +62,46 @@ public class SubsonicMappersTest {
 
         assertEquals(AlbumStateDb.PINNED, row.state)
         assertTrue(row.inLibrary)
+    }
+
+    /**
+     * The ingest point for the composite genre strings the server sends.
+     *
+     * `genre` is one field holding several names joined with a semicolon, and the mirror stored it
+     * whole - which is what put `Acoustic Rock;Alternative Rock;Folk Rock;Indie Rock;Pop Rock` on the
+     * device's Genres screen as a single entry owning a single album. Both wire fields go through the
+     * same split, because the server fills either or both.
+     */
+    @Test
+    public fun `a composite genre field is stored as one genre per genre`() {
+        val row: AlbumEntity = SubsonicMappers.albumEntity(
+            albumDto().copy(genre = "Folk Rock;Indie Rock;Pop Rock"),
+            now,
+        )!!
+
+        assertEquals(listOf("Folk Rock", "Indie Rock", "Pop Rock"), GenreCodec.decode(row.genres))
+    }
+
+    @Test
+    public fun `the two genre fields are merged and folded rather than both stored`() {
+        val row: AlbumEntity = SubsonicMappers.albumEntity(
+            albumDto().copy(
+                genre = "Indie Rock;Pop Rock",
+                genres = listOf(ItemGenreDto(name = "indie rock"), ItemGenreDto(name = "Shoegaze")),
+            ),
+            now,
+        )!!
+
+        assertEquals(listOf("Indie Rock", "Pop Rock", "Shoegaze"), GenreCodec.decode(row.genres))
+    }
+
+    /** A slash is part of the name on this server, so the bucket survives the trip whole. */
+    @Test
+    public fun `a genre whose name contains a slash is not split`() {
+        val row: AlbumEntity =
+            SubsonicMappers.albumEntity(albumDto().copy(genre = "Hip-Hop/Rap"), now)!!
+
+        assertEquals(listOf("Hip-Hop/Rap"), GenreCodec.decode(row.genres))
     }
 
     // ------------------------------------------------------------------- tracks

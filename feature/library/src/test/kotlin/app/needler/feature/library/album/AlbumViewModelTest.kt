@@ -623,6 +623,68 @@ class AlbumViewModelTest {
         assertEquals(listOf(mbid), pins.pinned)
     }
 
+    /**
+     * Stopping a download is not removing one, and the notice has to say so.
+     *
+     * The screen offered only "Device. Remove ... from this device" while a download ran - observed
+     * on a device under a badge reading "Pulling to device, 31 percent, playing now" - so the only
+     * way to end a download was to delete what it had fetched. REQUIREMENTS.md "The download in
+     * flight is a badge, not a banner": "stopping leaves what has landed as a part-downloaded pin,
+     * which plays, while removing deletes the bytes and reports what it freed."
+     *
+     * The assertion that the removal was **not** called is the half that would still pass if Stop
+     * were wired to `onRemoveFromDevice` under a kinder label, which is precisely the mistake worth
+     * guarding.
+     */
+    @Test
+    fun `stopping the download keeps the album and says what still plays`() = runTest {
+        ownedSubmarine()
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onStopDownload()
+            advanceUntilIdle()
+            var current = awaitItem()
+            while (current.notice == null) current = awaitItem()
+            assertEquals(AlbumNotice.DownloadStopped(tracksOnDevice = 4), current.notice)
+            assertEquals(
+                "4 tracks kept on this device and still playable.",
+                requireNotNull(current.notice).message.substringAfter("Stopped. "),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf(mbid), pins.stopped)
+        assertTrue("a stop must not unpin anything", pins.unpinned.isEmpty())
+    }
+
+    /** A stop before anything landed says that, rather than claiming to have kept something. */
+    @Test
+    fun `stopping before anything landed says nothing was kept`() = runTest {
+        ownedSubmarine()
+        pins.stopOutcome = Outcome.Success(
+            app.needler.core.domain.model.StoppedDownload(
+                releaseGroupMbid = mbid,
+                tracksOnDevice = 0,
+                tracksTotal = 12,
+            ),
+        )
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            awaitItem()
+            model.onStopDownload()
+            advanceUntilIdle()
+            var current = awaitItem()
+            while (current.notice == null) current = awaitItem()
+            assertEquals(
+                "Stopped. Nothing had arrived yet, so nothing is kept on this device.",
+                requireNotNull(current.notice).message,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
     @Test
     fun `removing a download reports the bytes it actually freed`() = runTest {
         ownedSubmarine()
@@ -636,6 +698,10 @@ class AlbumViewModelTest {
             while (current.notice == null) current = awaitItem()
             val notice = current.notice as AlbumNotice.RemovedFromDevice
             assertEquals(412_000_000L, notice.freedBytes)
+            // And the figure has to reach the sentence. REQUIREMENTS.md "Offline and caching" has
+            // removal "report how many were freed", and it is also how the user tells this apart
+            // from the Stop that now shares its slot in the action row.
+            assertEquals("Removed from this device, freeing 393 MB.", notice.message)
             cancelAndIgnoreRemainingEvents()
         }
         assertEquals(listOf(mbid), pins.unpinned)

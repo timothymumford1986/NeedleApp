@@ -62,7 +62,38 @@ public sealed interface OfflineDownloadState {
     /** Every track of the album is on the device. This is what draws the green check on artwork. */
     public data object Complete : OfflineDownloadState
 
-    /** Some tracks are on the device and the rest failed or were evicted as stale. */
+    /**
+     * Some tracks are on the device and nothing further is coming.
+     *
+     * Four endings land here, and they are deliberately one state because to a listener they are one
+     * fact: part of this record plays from the device, the rest streams, and no job is going to
+     * change that by itself. The endings are a track the server has no file for, a track that failed
+     * permanently, a track evicted as stale, and the user stopping the download.
+     *
+     * ## Why a stopped download rests here rather than anywhere else
+     *
+     * REQUIREMENTS.md "The download in flight is a badge, not a banner": "stopping leaves what has
+     * landed as a part-downloaded pin, which plays, while removing deletes the bytes and reports what
+     * it freed". The state that carries a stop therefore has two jobs, and only this one does both.
+     * It must be a state that is **not** [isInFlight], or the badge keeps drawing a percentage for a
+     * download that has stopped and the screen keeps offering Stop for a job that is gone. And it
+     * must be a state the start-up resume sweep skips - `DownloadStateDb.RESUMABLE_DB_VALUES` in
+     * `:core:data` - or the next cold start silently re-enqueues the very download the user just
+     * stopped, which is the "downloading for ever" fault that file's KDoc exists to prevent.
+     *
+     * Three alternatives were rejected, and each would have been a different bug.
+     * [Failed] demands a [NeedlerError] for something nobody got wrong, and it draws the retry
+     * framing of an acquisition that could not find a source. [Queued] is in the resumable set, so a
+     * stop would last until the next cold start and then undo itself. A new `Stopped` state was
+     * rejected for saying nothing this one does not: the widgets, the car tree, the Wear tile and
+     * `albumBadge` all branch on this type, so a fourth word for "some here, nothing more coming"
+     * would be four readers to teach and one more arm for the next change to forget.
+     *
+     * A stop with **nothing** landed is still this state, with [tracksComplete] at zero. The badge
+     * already draws that honestly - `albumBadge` reads zero complete as the server's own word rather
+     * than claiming the device holds something - which is exactly the ending REQUIREMENTS.md's table
+     * gives as "Server, or Device if any track remains".
+     */
     public data class Partial(
         val tracksComplete: Int,
         val tracksTotal: Int,
@@ -89,7 +120,9 @@ public sealed interface OfflineDownloadState {
      * [Partial] and [Failed] are deliberately **not** in flight. Both are what the downloader leaves
      * behind when it stops, so a UI that treated them as progress would be the un-exitable state
      * again: nothing further is coming, and the album is either partly on the device and playing or
-     * wholly absent and retryable.
+     * wholly absent and retryable. This is also the predicate the Stop action is offered behind and
+     * the one that withdraws it, which is why a stopped download has to land outside it - see
+     * [Partial] and [app.needler.core.domain.repository.PinRepository.stopPinnedDownload].
      */
     public val isInFlight: Boolean
         get() = this is Queued || this is Downloading || this is WaitingForUnmeteredNetwork
@@ -278,6 +311,44 @@ public data class RemovedDownload(
             releaseGroupMbid = releaseGroupMbid,
             removedTracks = 0,
             freedBytes = 0L,
+        )
+    }
+}
+
+/**
+ * What stopping a download left on the device.
+ *
+ * The counterpart of [RemovedDownload], and the two report opposite things because the two actions
+ * do opposite things. Removal says what **left** the disk, because it is the user's only lever on a
+ * full device. Stopping says what **stayed**, because that is the whole claim REQUIREMENTS.md "The
+ * download in flight is a badge, not a banner" makes for it: "stopping leaves what has landed as a
+ * part-downloaded pin, which plays". The two controls sit a tap apart on the album screen, so a stop
+ * that reported only "done" would leave the user checking whether they had just deleted the record.
+ *
+ * [tracksOnDevice] is counted from the cache index after the job is cancelled, so it is tracks that
+ * will actually play offline - not the progress figure the pin row happened to be showing, which can
+ * be a track ahead of what finished being written.
+ */
+public data class StoppedDownload(
+    val releaseGroupMbid: ReleaseGroupMbid,
+    val tracksOnDevice: Int,
+    val tracksTotal: Int,
+) {
+    /** True when the stop left playable audio behind, which is the ordinary case. */
+    public val keptAnything: Boolean get() = tracksOnDevice > 0
+
+    public companion object {
+        /**
+         * Nothing had arrived when the download was stopped.
+         *
+         * Also what an implementation with no downloader behind it answers: see
+         * [app.needler.core.domain.repository.PinRepository.stopPinnedDownload], whose default
+         * cannot stop a job it does not have and must not claim to have kept anything.
+         */
+        public fun nothing(releaseGroupMbid: ReleaseGroupMbid): StoppedDownload = StoppedDownload(
+            releaseGroupMbid = releaseGroupMbid,
+            tracksOnDevice = 0,
+            tracksTotal = 0,
         )
     }
 }

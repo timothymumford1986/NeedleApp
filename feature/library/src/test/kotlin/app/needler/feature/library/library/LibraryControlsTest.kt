@@ -263,6 +263,37 @@ class LibraryControlsTest {
 
         show(LOADED.copy(tab = LibraryTab.ARTISTS))
         compose.onNodeWithContentDescription(TOGGLE_TO_LIST).assertDoesNotExist()
+    }
+
+    /**
+     * The sort control goes too, because on Artists it reported an order it could not apply.
+     *
+     * `LibraryViewModel` calls `LibraryRepository.observeArtists()` for that tab with no ordering -
+     * the repository takes none, and `ArtistDao.observeArtists` is a single
+     * `ORDER BY sort_name_normalised ASC` - so the list is alphabetical whatever the pill says.
+     * With Recent selected the pill read "Recent" over a list sorted by name, which is the fault
+     * [LibrarySort]'s own notes give as the reason "Played" was removed: "a sort that reports an
+     * order it did not apply".
+     *
+     * The tab it is hidden on is also the tab that gains the alphabet jump, and the two are the same
+     * decision: an index over a list whose order is fixed is meaningful, and over one the user can
+     * re-sort it is not.
+     */
+    @Test
+    fun `the sort control is absent on the artists tab, where it could not change the order`() {
+        showLibrary()
+        compose.onNodeWithContentDescription(SORT_RECENT).assertExists()
+
+        show(LOADED.copy(tab = LibraryTab.ARTISTS))
+        compose.onNodeWithContentDescription(SORT_RECENT).assertDoesNotExist()
+    }
+
+    /** It is back on Songs, which does read the sort - through `LibrarySort.trackKind`. */
+    @Test
+    fun `the sort control stays on the songs tab`() {
+        showLibrary()
+
+        show(LOADED.copy(tab = LibraryTab.SONGS))
         compose.onNodeWithContentDescription(SORT_RECENT).assertExists()
     }
 

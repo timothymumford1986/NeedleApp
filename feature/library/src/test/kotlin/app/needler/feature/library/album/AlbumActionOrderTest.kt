@@ -172,6 +172,7 @@ class AlbumActionOrderTest {
                             onRetryPull = {},
                             onDownloadToDevice = {},
                             onRemoveFromDevice = {},
+                            onStopDownload = {},
                             onRetryTrack = {},
                             onOpenArtist = {},
                             onDismissNotice = {},

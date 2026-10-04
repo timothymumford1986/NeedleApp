@@ -22,6 +22,17 @@ import app.needler.feature.player.ui.PlayerFormat
 /**
  * One row of the crate, with the drag gesture and the lift the pack gives a dragged card.
  *
+ * @param canReorder whether this row can move at all. False for the Playing row, and for a lone Up
+ *   next row that has nowhere to go.
+ *
+ *   It gates the handle and the gesture together, which is the point: a row that draws a handle it
+ *   will not respond to is worse than a row with no handle, because the handle is the app's own
+ *   promise that the row moves. Before this, the Playing row drew a handle and accepted a drag while
+ *   offering neither "Move up in the crate" nor "Move down in the crate" - so the gesture could do
+ *   something no TalkBack user could ask for, which is the inverse of what REQUIREMENTS.md
+ *   "Accessibility" requires: "TalkBack must reach the crate's reordering through an accessible
+ *   action, not only by dragging." [CrateScreen] carries the rule the two routes now share.
+ *
  * @param onRemove drops this one row from the crate, or null where removal is not offered.
  *
  *   The crate had drag-to-reorder and a Clear action and no way at all to drop a single track, which
@@ -54,6 +65,7 @@ internal fun CrateRow(
     onClick: () -> Unit,
     onMoveUp: (() -> Unit)?,
     onMoveDown: (() -> Unit)?,
+    canReorder: Boolean,
     onRemove: (() -> Unit)? = null,
     subtitle: String = PlayerFormat.artistAndAlbum(item),
     showArtwork: Boolean = true,
@@ -66,6 +78,7 @@ internal fun CrateRow(
         title = item.track.title,
         subtitle = subtitle,
         isPlaying = isPlaying,
+        showHandle = canReorder,
         onClick = onClick,
         onMoveUp = onMoveUp,
         onMoveDown = onMoveDown,
@@ -109,17 +122,23 @@ internal fun CrateRow(
             .zIndex(if (dragging) 1f else 0f)
             .graphicsLayer { translationY = offset }
             .shadow(elevation = if (dragging) 8.dp else 0.dp)
-            .pointerInput(key) {
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { reorder.onDragStart(key) },
-                    onDragEnd = { reorder.onDragEnd() },
-                    onDragCancel = { reorder.onDragEnd() },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        reorder.onDrag(dragAmount.y)
-                    },
-                )
-            },
+            .then(
+                if (!canReorder) {
+                    Modifier
+                } else {
+                    Modifier.pointerInput(key) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { reorder.onDragStart(key) },
+                            onDragEnd = { reorder.onDragEnd() },
+                            onDragCancel = { reorder.onDragEnd() },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                reorder.onDrag(dragAmount.y)
+                            },
+                        )
+                    }
+                },
+            ),
     )
 }
 

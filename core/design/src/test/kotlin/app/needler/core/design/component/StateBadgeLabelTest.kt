@@ -210,8 +210,182 @@ class StateBadgeLabelTest {
         )
     }
 
+    // ---------------------------------------------------------------- the width of the words
+
+    /**
+     * The defect this section exists for, in the two numbers that describe it.
+     *
+     * `NeedlerAlbumBadge.NeedsAttention` drew "Needs attention on the server": 29 characters of
+     * 13sp/600 beside a 16dp glyph, which is 196dp by [drawnWidthDp] and 192dp measured off
+     * `screenshots/pulls-all-awaiting-review-phone.png`. A phone row has [ROW_SHARED_DP] to divide
+     * between the text column and the trailing one, and the trailing one is unweighted - it takes
+     * what it asks for and the title gets what is left, which was 74dp.
+     *
+     * The assertion is on the slot rather than on the string, for the reason
+     * `PullsRowCompositionTest` gives about the subtitle it had to fix twice: a test that pins the
+     * one sentence someone complained about is passed by the next sentence.
+     */
+    @Test
+    fun `the parked state's badge is a label and not a sentence`() {
+        assertEquals("Needs attention", NeedlerAlbumBadge.NeedsAttention.label())
+
+        val drawn: Float = drawnWidthDp(NeedlerAlbumBadge.NeedsAttention)
+        assertTrue(
+            "the badge is " + drawn.toInt() + "dp and leaves " +
+                (ROW_SHARED_DP - drawn).toInt() + "dp for the title",
+            drawn <= HALF_ROW_DP,
+        )
+        // And the repair stated as a size rather than as a word, which is the figure anyone asking
+        // "was it worth shortening" actually wants.
+        val retired: Float = widthDp("Needs attention on the server", META_STRONG_DP) + GLYPH_DP
+        assertEquals(
+            "the title column got back fourteen characters of `meta` and eleven of `rowTitle`",
+            84f,
+            retired - drawn,
+            0.01f,
+        )
+    }
+
+    /**
+     * And nothing is lost by it, because the one reading with no column to run out of keeps it all.
+     *
+     * "on the server" is the part that says a human has to act in DroppedNeedle's web interface and
+     * that there is nothing on this phone to tap. A listener is told; a reader is told by the
+     * screen's banner and by the screen's name.
+     */
+    @Test
+    fun `the parked state still says where, spoken`() {
+        assertEquals(
+            "Needs attention on the server",
+            NeedlerAlbumBadge.NeedsAttention.accessibleLabel(),
+        )
+        assertTrue(
+            "the drawn label is the spoken one's opening, so the two are one vocabulary",
+            NeedlerAlbumBadge.NeedsAttention.accessibleLabel()
+                .startsWith(NeedlerAlbumBadge.NeedsAttention.label()),
+        )
+    }
+
+    /**
+     * Every badge against the same slot, not just the one that was reported.
+     *
+     * A badge names the row it sits beside, so it must not take more of the row than it leaves. The
+     * widest after the repair are the two destination phrases at 124dp, and both are the vocabulary
+     * doing its job rather than prose: REQUIREMENTS.md "Vocabulary" fixes **Pull to device** as the
+     * action, and "The Wi-Fi-only setting is mislabelled" is why the hold names Wi-Fi.
+     */
+    @Test
+    fun `no badge label takes more of a phone row than it leaves`() {
+        ALL_BADGES.forEach { badge ->
+            val label: Float = labelWidthDp(badge)
+            assertTrue(
+                badge.label() + " is " + label.toInt() + "dp of a " + ROW_SHARED_DP.toInt() +
+                    "dp row, leaving " + (ROW_SHARED_DP - label).toInt() + "dp for the title",
+                label <= HALF_ROW_DP,
+            )
+        }
+    }
+
+    /**
+     * A ceiling the vocabulary sets rather than a number someone picked.
+     *
+     * The longest label a badge may draw is the longest the three states and the one verb can
+     * produce, and that is "Pulling to device". Anything longer is prose arriving in a label column
+     * again, which is what this whole section is about.
+     */
+    @Test
+    fun `nothing is wider than the longest phrase the vocabulary forces`() {
+        val widest: NeedlerAlbumBadge = ALL_BADGES.maxBy { labelWidthDp(it) }
+
+        assertEquals(
+            widthDp("Pulling to device", META_STRONG_DP) + GLYPH_DP,
+            labelWidthDp(widest),
+            0.01f,
+        )
+    }
+
+    /**
+     * The one thing this component draws that is still past half a row, measured and left alone.
+     *
+     * [NeedlerAlbumBadge.PullingToDevice] draws its percentage as a second run beside the label, so
+     * a pin downloading at 62% is 148dp - 15dp past half - and `ArtistScreen` puts exactly that in
+     * the trailing column of a 390dp discography row. It is not shortened here because the only way
+     * to shorten it is to break "Pull to device" apart, and the badge's cost is bounded instead: a
+     * percentage may add the 6dp `Arrangement.spacedBy` and three digits, and no more.
+     *
+     * Recorded as a measurement so the next person reads a figure rather than rediscovering it on a
+     * device, which is how this file's other numbers were found.
+     */
+    @Test
+    fun `a percentage costs the title no more than its own digits`() {
+        val bare: Float = drawnWidthDp(NeedlerAlbumBadge.PullingToDevice())
+        val counting: Float = drawnWidthDp(NeedlerAlbumBadge.PullingToDevice(percent = 62))
+
+        assertEquals(24f, counting - bare, 0.01f)
+        assertTrue(
+            "the widest thing a badge draws is " + counting.toInt() + "dp",
+            counting <= 150f,
+        )
+    }
+
+    /**
+     * What the row got back, in the units the user reads: characters of the album title.
+     *
+     * `Death's Dateless Night` is the title the device drew as `Death's Dateles...` on all 35 of
+     * its rows. `rowTitle` is 16sp/600 and averages 7.4dp a character over the committed renders -
+     * `Black Classical Music` is 21 characters in 157dp and `Back Street Crawler` 19 in 141dp in
+     * `screenshots/pulls-every-state-phone.png` - and the row gives the title two lines. So the
+     * assertion is that the first line now holds the wrap point, which is the difference between a
+     * title read and a title recognised.
+     */
+    @Test
+    fun `the recovered column fits the title the device could not show`() {
+        val slot: Float = ROW_SHARED_DP - drawnWidthDp(NeedlerAlbumBadge.NeedsAttention)
+
+        assertTrue("the title column is " + slot.toInt() + "dp", slot >= 150f)
+        assertTrue(
+            "the first line holds " + (slot / ROW_TITLE_DP).toInt() + " characters",
+            widthDp("Death's Dateless", ROW_TITLE_DP) <= slot,
+        )
+    }
+
     private companion object {
         val COLOURS = NeedlerDarkColors
+
+        // ------------------------------------------------------------ the width model
+        //
+        // Arithmetic over the design tokens, because the alternative is rendering and what is being
+        // asserted is a size rather than a pixel. The model is `PullsRowCompositionTest`'s, which
+        // calibrated it against `screenshots/pulls-every-state-phone.png` at 2px to the dp and lands
+        // within 4dp of every row in that image: `Waiting` is seven characters in 65dp there and 64dp
+        // here, `Partly delivered` sixteen in 92dp and 96dp, and the sentence this change removed 192dp
+        // and 196dp. 4dp is accuracy enough for a defect that was out by a factor of three.
+        //
+        // It is restated here rather than shared because `:core:design` cannot see `:feature:pulls`,
+        // and because the row this file is measuring against is `NeedlerAlbumRow`, which lives here.
+
+        /**
+         * What a 390dp phone row has left for the text column and the trailing one together.
+         *
+         * 390 phone, less `spacing.phoneGutter` at 20dp on both sides, less `sizes.artworkRow` at
+         * 56dp, less two 14dp gaps from `NeedlerAlbumRow`'s own `Arrangement.spacedBy`.
+         */
+        const val ROW_SHARED_DP: Float = 266f
+
+        /** A badge that takes more than this takes more of the row than it leaves. */
+        const val HALF_ROW_DP: Float = ROW_SHARED_DP / 2f
+
+        /** 13sp `metaStrong`, averaged over the committed renders. */
+        const val META_STRONG_DP: Float = 6.0f
+
+        /** 16sp/600 `rowTitle`, averaged over the same renders. */
+        const val ROW_TITLE_DP: Float = 7.4f
+
+        /** `NeedlerStateBadge`'s own `Arrangement.spacedBy(6.dp)`, between every run it draws. */
+        const val ICON_GAP_DP: Float = 6f
+
+        /** A 16dp glyph and that gap, on the badges that have one. */
+        const val GLYPH_DP: Float = 16f + ICON_GAP_DP
 
         /** Every badge, with a representative percentage for the two that carry one. */
         val ALL_BADGES: List<NeedlerAlbumBadge> = listOf(
@@ -258,6 +432,44 @@ class StateBadgeLabelTest {
 
             NeedlerAlbumBadge.NoSource -> COLOURS.textMuted
         }
+
+        /** How wide the badge's **word** draws, glyph and its gap included. */
+        fun labelWidthDp(badge: NeedlerAlbumBadge): Float =
+            glyphWidthDp(badge) + widthDp(badge.label(), META_STRONG_DP)
+
+        /**
+         * How wide the badge draws in full, which for two of them is the word and then a figure.
+         *
+         * `NeedlerStateBadge` puts the percentage in a second `Text` with the same 6dp
+         * `Arrangement.spacedBy` the glyph uses, so it costs the gap as well as its digits.
+         */
+        fun drawnWidthDp(badge: NeedlerAlbumBadge): Float {
+            val percent: Int? = when (badge) {
+                is NeedlerAlbumBadge.Pulling -> badge.percent
+                is NeedlerAlbumBadge.PullingToDevice -> badge.percent
+                else -> null
+            }
+            val figure: Float = percent
+                ?.let { ICON_GAP_DP + widthDp(it.toString() + "%", META_STRONG_DP) }
+                ?: 0f
+            return labelWidthDp(badge) + figure
+        }
+
+        /**
+         * The glyph rule from `NeedlerStateBadge`, restated for the same reason [badgeTint] is.
+         *
+         * The four end states draw no icon: nothing in the icon set says "stopped" without also
+         * saying "error", and the label is the whole signal there.
+         */
+        fun glyphWidthDp(badge: NeedlerAlbumBadge): Float = when (badge) {
+            NeedlerAlbumBadge.NoSource,
+            NeedlerAlbumBadge.Failed,
+            NeedlerAlbumBadge.PartlyDelivered,
+            NeedlerAlbumBadge.Cancelled -> 0f
+            else -> GLYPH_DP
+        }
+
+        fun widthDp(text: String, perCharacter: Float): Float = text.length * perCharacter
 
         /** WCAG 2.1 relative luminance, on the sRGB channels Compose holds as 0f..1f. */
         fun luminance(colour: Color): Double {

@@ -517,10 +517,51 @@ sealed interface AlbumNotice {
             get() = "Downloading this album leaves your device low on free space."
     }
 
-    /** The download finished and the bytes are gone. */
+    /**
+     * The download is gone and the device has the bytes back.
+     *
+     * The figure is in the sentence rather than carried beside it. REQUIREMENTS.md "Offline and
+     * caching" has removal "delete the bytes there and then" and "report how many were freed", and
+     * a removal that reports nothing is the line it calls out as making the Storage screen
+     * untrustworthy. It is also how the user tells this apart from [DownloadStopped], which is one
+     * tap away in the same place and keeps its bytes.
+     *
+     * A removal that freed nothing says so by saying nothing: a pin whose download never landed is a
+     * normal thing to remove, and "freeing 0 B" would be worse than silence.
+     */
     data class RemovedFromDevice(val freedBytes: Long?) : AlbumNotice {
         override val message: String
-            get() = "Removed from this device."
+            get() {
+                val freed: String? = LibraryFormat.bytes(freedBytes?.takeIf { it > 0L })
+                return if (freed == null) {
+                    "Removed from this device."
+                } else {
+                    "Removed from this device, freeing " + freed + "."
+                }
+            }
+    }
+
+    /**
+     * The download was stopped and what had arrived is still here.
+     *
+     * The count is the point of the sentence. REQUIREMENTS.md "The download in flight is a badge,
+     * not a banner" settled Stop as a different action from Remove rather than a politer name for
+     * it - "stopping leaves what has landed as a part-downloaded pin, which plays" - and on this
+     * screen the two occupy the same slot in the action row. A bare "Stopped." would leave the user
+     * checking whether they had just deleted the record; saying how much of it still plays answers
+     * that before they have to look.
+     *
+     * The wording agrees for one track as well as for twenty, as [AddedToCrate]'s does, so there is
+     * one sentence per outcome rather than a singular and a plural of each.
+     */
+    data class DownloadStopped(val tracksOnDevice: Int) : AlbumNotice {
+        override val message: String
+            get() = if (tracksOnDevice > 0) {
+                "Stopped. " + LibraryFormat.plural(tracksOnDevice.toLong(), "track") +
+                    " kept on this device and still playable."
+            } else {
+                "Stopped. Nothing had arrived yet, so nothing is kept on this device."
+            }
     }
 
     /** Something went wrong, in whatever words the domain error justified. */

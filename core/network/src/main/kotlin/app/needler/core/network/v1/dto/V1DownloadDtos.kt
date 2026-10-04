@@ -25,7 +25,8 @@ public data class DownloadListDto(
  * `cancelled`. (`retrying` and `awaiting_review` exist but only on the per-task SSE stream, which
  * v1 does not use.) Two states are derived client-side exactly as the web UI derives them:
  *  * `queued` with no [searchJobId] → **Searching**;
- *  * `queued` with a [searchJobId] but no [candidateIndex] → **Needs attention on the server**.
+ *  * `queued` with a [searchJobId] but no [candidateIndex] → **Needs attention** (spoken in full as
+ *    "Needs attention on the server").
  *
  * Cancel is only offered while searching, queued or downloading; retry only on `failed`,
  * `cancelled` and `partial`.

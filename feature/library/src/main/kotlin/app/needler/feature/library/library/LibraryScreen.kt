@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -87,6 +88,8 @@ import app.needler.feature.library.common.LibraryFormat
 import app.needler.feature.library.common.albumFormatSpokenLabel
 import app.needler.feature.library.common.hasPlayableFile
 import app.needler.feature.library.common.showsOnDeviceCheck
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * The Library screen: screens 02 (album grid), 13 (list with format badges) and
@@ -332,6 +335,34 @@ private fun LibraryHeader(
 // Controls: tabs, sort, grid/list toggle
 // ---------------------------------------------------------------------------
 
+/**
+ * The control row: segmented tabs, and the two controls that apply to the tab in front of them.
+ *
+ * ## The sort control is hidden on Artists, not disabled
+ *
+ * The Artists tab has exactly one order and the sort control could never change it.
+ * `LibraryViewModel` calls `LibraryRepository.observeArtists()` for that tab and passes it no
+ * ordering at all - the repository has none to take, and `ArtistDao.observeArtists` is a single
+ * `ORDER BY sort_name_normalised ASC`. REQUIREMENTS.md "Library browse" fixes it there too: Artists
+ * is "Alphabetical", with no alternative named, which is why the query has no parameter.
+ *
+ * So the pill was reporting an order the tab was not in. Switch to Artists with Recent selected and
+ * the control read "Recent" over a list sorted by name. That is the fault [LibrarySort]'s own notes
+ * describe as the reason "Played" was removed - "a sort that reports an order it did not apply" -
+ * and the resolution there was removal rather than a disabled row offering a word that is not true.
+ *
+ * Hidden rather than disabled, for the reason that note gives: a disabled control is permanent dead
+ * space, and nothing is coming that could enable this one. The grid/list toggle beside it already
+ * disappears on this tab on the same grounds, so the row has the precedent as well as the argument.
+ * Nothing is lost by hiding it - the selection is held in the view model and is still in force on
+ * Albums and Songs when the user tabs back.
+ *
+ * **The alternative, rejected:** make `observeArtists` take an ordering, so the control means
+ * something. It is a change to `:core:domain` and `:core:data` to add orders REQUIREMENTS.md does
+ * not ask for, in service of a control that happens to be drawn nearby. The index strip above the
+ * artist list is what that scrolling cost actually wanted, and it is only meaningful *because* the
+ * order is fixed: an alphabet jump over a list sorted by anything else points at nothing.
+ */
 @Composable
 private fun LibraryControls(
     state: LibraryUiState,
@@ -374,7 +405,9 @@ private fun LibraryControls(
                 label = "Browse by",
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
             )
-            SortControl(sort = state.sort, onSortSelect = onSortSelect)
+            if (state.tab != LibraryTab.ARTISTS) {
+                SortControl(sort = state.sort, onSortSelect = onSortSelect)
+            }
         }
         if (state.tab == LibraryTab.ALBUMS) {
             ViewModeToggle(viewMode = state.viewMode, onToggle = onViewModeToggle)
@@ -779,33 +812,139 @@ private fun AlbumList(
     }
 }
 
+/**
+ * The Artists tab: the alphabet strip, then every artist as a row.
+ *
+ * REQUIREMENTS.md "Library browse" asks for "Alphabetical, with index jump". The list was
+ * alphabetical and there was no jump, so on the reference library - 289 albums - reaching D meant
+ * scrolling past every A, B and C. [ArtistIndex] decides which letters exist and where each starts;
+ * [ArtistIndexStrip] is the control.
+ *
+ * The strip is above the list rather than down the right-hand edge, which is where this control
+ * usually goes. Three reasons, in the order they decided it:
+ *
+ *  * **The design pack draws nothing for it.** Screens 02, 09 and 13 are the Library at three
+ *    widths and none of them has an index, a scroll thumb or a section header - the Artists tab is
+ *    drawn as a plain list. So the form is chosen here rather than ported, and it is chosen against
+ *    REQUIREMENTS.md "Accessibility" instead: "transport controls are at least 48 dp" and "Text must
+ *    scale to 200% without clipping".
+ *  * **A vertical A-Z rail cannot be 48dp per letter.** Twenty-seven targets down an 844dp phone is
+ *    31dp each at normal text and less once the list has a header above it, and the number does not
+ *    improve at 200% text - it is a function of the screen's height. A horizontal strip is bounded by
+ *    width instead, and width is the one axis that can scroll: the strip is 27 chips wide at any text
+ *    size and scrolls to reach the rest, which is exactly what `NeedlerSegmentedTabs` does a few
+ *    composables up this file and for exactly the same reason.
+ *  * **A fast-scroll thumb is a drag and nothing else.** REQUIREMENTS.md "Accessibility" is explicit
+ *    that reordering the crate "must" be reachable "not only by dragging"; a jump control whose only
+ *    form is a dragged thumb fails the same standard. Sticky section headers were the third
+ *    candidate and were rejected for a plainer reason: a heading says where you *are*. It is not a
+ *    jump, and the requirement asks for a jump.
+ */
 @Composable
 private fun ArtistList(
     artists: List<Artist>,
     gutter: Dp,
     onArtistClick: (ArtistMbid) -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = gutter,
-            end = gutter,
-            bottom = NeedlerTheme.spacing.step12,
-        ),
+    val listState: LazyListState = rememberLazyListState()
+    val scope: CoroutineScope = rememberCoroutineScope()
+    val reducedMotion: Boolean = NeedlerTheme.reducedMotion
+    val entries: List<ArtistIndexEntry> = remember(artists) { ArtistIndex.entriesFor(artists) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        ArtistIndexStrip(
+            entries = entries,
+            gutter = gutter,
+            onJump = { index ->
+                // REQUIREMENTS.md "Accessibility": "Motion honours the reduced-motion setting." A
+                // jump of two hundred rows is the longest animation this screen can produce, so it
+                // is the one that most needs to be skippable.
+                scope.launch {
+                    if (reducedMotion) {
+                        listState.scrollToItem(index)
+                    } else {
+                        listState.animateScrollToItem(index)
+                    }
+                }
+            },
+        )
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = gutter,
+                end = gutter,
+                bottom = NeedlerTheme.spacing.step12,
+            ),
+        ) {
+            items(items = artists, key = { it.mbid.value }) { artist ->
+                NeedlerAlbumRow(
+                    title = LibraryFormat.artistName(artist.name),
+                    subtitle = LibraryFormat.artistRowSubtitle(
+                        ownedAlbumCount = artist.ownedAlbumCount,
+                        catalogueAlbumCount = artist.catalogueAlbumCount,
+                    ),
+                    onClick = { onArtistClick(artist.mbid) },
+                    showDivider = true,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The alphabet jump: `#`, then A to Z, each a real button.
+ *
+ * `NeedlerToolbarPill` rather than a bare `Text` with a `clickable`, because it is the pack's pill
+ * and it already solves the two things a hand-rolled chip gets wrong: it is drawn at 36dp and
+ * touched at 48dp through `minimumInteractiveComponentSize`, and it takes a content description
+ * separate from its label - which a one-character label needs more than any other control in the
+ * app, since "A" on its own says neither that it is a control nor what it does.
+ *
+ * An empty letter is `enabled = false`: drawn in the muted colour, still focusable, and announced
+ * as having nothing under it. [ArtistIndexEntry.spokenLabel] carries that word, because
+ * REQUIREMENTS.md "Accessibility" does not accept colour as the only carrier of a state - and the
+ * muted grey it would be carried in is the one the same section measures at 3.82:1 on the surface
+ * these pills are filled with, under the 4.5:1 it needs. Hiding the empty
+ * letters instead was rejected in [ArtistIndex]: it shifts every letter after the gap, so the strip
+ * rearranges itself as the library grows.
+ */
+@Composable
+private fun ArtistIndexStrip(
+    entries: List<ArtistIndexEntry>,
+    gutter: Dp,
+    onJump: (Int) -> Unit,
+) {
+    val spacing = NeedlerTheme.spacing
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(start = gutter, end = gutter, bottom = spacing.step4)
+            .semantics { contentDescription = ARTIST_INDEX_LABEL },
+        horizontalArrangement = Arrangement.spacedBy(spacing.step1),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        items(items = artists, key = { it.mbid.value }) { artist ->
-            NeedlerAlbumRow(
-                title = LibraryFormat.artistName(artist.name),
-                subtitle = LibraryFormat.artistRowSubtitle(
-                    ownedAlbumCount = artist.ownedAlbumCount,
-                    catalogueAlbumCount = artist.catalogueAlbumCount,
-                ),
-                onClick = { onArtistClick(artist.mbid) },
-                showDivider = true,
+        entries.forEach { entry ->
+            val target: Int? = entry.firstArtistIndex
+            NeedlerToolbarPill(
+                text = entry.label,
+                contentDescription = entry.spokenLabel,
+                enabled = target != null,
+                onClick = { if (target != null) onJump(target) },
             )
         }
     }
 }
+
+/**
+ * What a screen reader announces before the twenty-seven chips.
+ *
+ * The same job `NeedlerSegmentedTabs`' "Browse by" does for the three tabs: a strip of
+ * single-character buttons with no group name is twenty-seven unexplained letters in the traversal
+ * order, and the name is what makes it one control a user can skip past or step into.
+ */
+private const val ARTIST_INDEX_LABEL: String = "Jump to a letter"
 
 /**
  * The Songs tab: every track in the library as a row, with its duration on the

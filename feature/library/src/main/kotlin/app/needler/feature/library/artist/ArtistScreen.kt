@@ -259,6 +259,7 @@ fun ArtistScreen(
                         }
                         ownedRows(
                             albums = state.ownedAlbums,
+                            credit = state.creditedName,
                             busy = state.busy,
                             onAlbumClick = onAlbumClick,
                             onPlayAlbum = onPlayAlbum,
@@ -273,6 +274,7 @@ fun ArtistScreen(
                         }
                         catalogueRows(
                             albums = state.catalogueAlbums,
+                            credit = state.creditedName,
                             busy = state.busy,
                             onAlbumClick = onAlbumClick,
                             onPull = onPull,
@@ -587,9 +589,13 @@ private fun ArtistHeader(state: ArtistUiState) {
  * rows draw exactly the content the library's list view draws. Both now use
  * [AlbumFormatLabel] and both put a 48dp-target play control in the trailing slot,
  * so an album row behaves the same way whichever screen it is on.
+ *
+ * [credit] is the artist this page is about, for the rows the catalogue gave no credit for. See
+ * [discographyRowSubtitle].
  */
 private fun LazyListScope.ownedRows(
     albums: List<Album>,
+    credit: String?,
     busy: Boolean,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onPlayAlbum: (ReleaseGroupMbid) -> Unit,
@@ -602,18 +608,23 @@ private fun LazyListScope.ownedRows(
         val album: Album = albums[index]
         val onDevice: Boolean = album.showsOnDeviceCheck
         val title: String = LibraryFormat.albumTitle(album.title)
+        val subtitle: String = discographyRowSubtitle(album, credit)
         var crateMenuOpen: Boolean by remember(album.releaseGroupMbid.value) {
             mutableStateOf(false)
         }
         NeedlerAlbumRow(
             title = title,
-            subtitle = LibraryFormat.albumRowSubtitle(album),
+            subtitle = subtitle,
             onClick = { onAlbumClick(album.releaseGroupMbid) },
             showDivider = true,
             contentDescription = buildString {
                 append(title)
-                append(", ")
-                append(LibraryFormat.albumRowSubtitle(album))
+                // Omitted when it is empty, rather than appended behind a comma: a row with
+                // neither a credit nor a year would otherwise be read out as "Tweez, ".
+                if (subtitle.isNotEmpty()) {
+                    append(", ")
+                    append(subtitle)
+                }
                 albumFormatSpokenLabel(album.quality, onDevice)?.let {
                     append(", ")
                     append(it)
@@ -719,8 +730,16 @@ private fun LazyListScope.namesakeRows(
     }
 }
 
+/**
+ * The un-owned half: one row per release group, each with a Pull.
+ *
+ * [credit] is the artist this page is about. These are the rows the defect was reported on — the
+ * catalogue sends no artist with a discography item — and [discographyRowSubtitle] records the whole
+ * chain.
+ */
 private fun LazyListScope.catalogueRows(
     albums: List<Album>,
+    credit: String?,
     busy: Boolean,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onPull: (Album) -> Unit,
@@ -733,7 +752,7 @@ private fun LazyListScope.catalogueRows(
         val title: String = LibraryFormat.albumTitle(album.title)
         NeedlerAlbumRow(
             title = title,
-            subtitle = LibraryFormat.albumRowSubtitle(album),
+            subtitle = discographyRowSubtitle(album, credit),
             onClick = { onAlbumClick(album.releaseGroupMbid) },
             showDivider = true,
             artwork = { AlbumRowArtwork(album) },

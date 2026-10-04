@@ -1,6 +1,7 @@
 package app.needler.core.data.local
 
 import androidx.sqlite.db.SupportSQLiteDatabase
+import app.needler.core.data.mapper.GenreCodec
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -35,7 +36,13 @@ import org.junit.Test
  *  * **the TEXT default carries its quotes.** Rule 4: Room reads `dflt_value` back out of
  *    `PRAGMA table_info` and compares it against its own exported schema, so `DEFAULT album`
  *    instead of `DEFAULT 'album'` fails validation on the *next* version rather than on this one -
- *    which is the worst possible place for it to surface.
+ *    which is the worst possible place for it to surface;
+ *  * **the data rewrite agrees with the codec it exists to catch up with.**
+ *    [NeedlerMigrations.MIGRATION_3_4] changes no schema at all, so Room's own validation has
+ *    nothing to say about it. What can go wrong is drift: `GenreCodec` changing which character it
+ *    splits on while the migration keeps substituting the old one, which leaves a genre list that is
+ *    right and every genre screen behind it empty. The statement is therefore asserted against the
+ *    codec's constants rather than against its own literals.
  */
 public class NeedlerMigrationsTest {
 
@@ -52,7 +59,7 @@ public class NeedlerMigrationsTest {
     }
 
     @Test
-    public fun `the newest migration only adds columns to pull`() {
+    public fun `MIGRATION_2_3 only adds columns to pull`() {
         val statements: List<String> = statementsOf(NeedlerMigrations.MIGRATION_2_3)
 
         assertEquals(2, statements.size)
@@ -92,6 +99,48 @@ public class NeedlerMigrationsTest {
 
         assertFalse(sql, sql.contains("NOT NULL"))
         assertFalse(sql, sql.contains("DEFAULT"))
+    }
+
+    /**
+     * [NeedlerMigrations.MIGRATION_3_4] rewrites data and nothing else.
+     *
+     * The guard is the part worth pinning. Without `WHERE genres LIKE '%;%'` the statement rewrites
+     * every album row in the mirror and fires the two `album_fts` update triggers for each, which on
+     * a five-thousand-album library is a long upgrade to change nothing.
+     */
+    @Test
+    public fun `MIGRATION_3_4 rewrites only the album rows holding a composite genre`() {
+        val sql: String = statementsOf(NeedlerMigrations.MIGRATION_3_4).single()
+
+        assertTrue(sql, sql.contains("UPDATE `album`"))
+        assertTrue(sql, sql.contains("WHERE `genres` LIKE '%;%'"))
+        // Rule 1 in NeedlerMigrations is skipped on the strength of this: an UPDATE keeps the FTS
+        // index in step through the triggers, where a drop-and-recreate would not.
+        listOf("DROP", "RENAME", "CREATE", "DELETE", "ALTER").forEach { forbidden ->
+            assertFalse(forbidden + " in: " + sql, sql.contains(forbidden))
+        }
+    }
+
+    /**
+     * The migration substitutes exactly the separator [GenreCodec] splits on, for exactly the
+     * delimiter it encodes with.
+     *
+     * Asserted against the constants rather than against the literals, so that changing either one
+     * in the codec and leaving the migration behind fails here instead of on a device, where the
+     * symptom is a genre list that is right and a genre screen that is empty.
+     */
+    @Test
+    public fun `MIGRATION_3_4 substitutes the codec's separator for the codec's delimiter`() {
+        val sql: String = statementsOf(NeedlerMigrations.MIGRATION_3_4).single()
+        val separator: String = GenreCodec.COMPOSITE_SEPARATOR
+        val delimiter: String = GenreCodec.DELIMITER
+
+        // The outermost REPLACE is the substitution itself...
+        assertTrue(sql, sql.contains("'" + separator + "', '" + delimiter + "'"))
+        // ...and the two inner ones collapse a space on either side of the separator first, because
+        // `likePattern` trims the term it brackets and `| Pop|` would then match nothing.
+        assertTrue(sql, sql.contains("' " + separator + "', '" + separator + "'"))
+        assertTrue(sql, sql.contains("'" + separator + " ', '" + separator + "'"))
     }
 
     /** Every `execSQL` a migration issues, in order. */

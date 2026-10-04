@@ -459,7 +459,7 @@ A `monitor_artist` flag on the request body subscribes the user to that artist's
 The server's download task statuses are `queued`, `downloading`, `processing`, `completed`, `partial`, `failed` and `cancelled`. Two further states are derived client-side, exactly as the web UI derives them:
 
 - `queued` with no `search_job_id` means the server is still searching for sources. Show as **Searching**.
-- `queued` with a `search_job_id` but no `candidate_index` means a manual source pick is parked. Show as **Needs attention on the server**.
+- `queued` with a `search_job_id` but no `candidate_index` means a manual source pick is parked. Draw as **Needs attention**; speak it as **Needs attention on the server**. The long form was drawn until 2026-10-04 and it took 192dp of a 350dp row, leaving about twelve characters for the title and artist, and nothing at all at 200% text. The badge is laid out before the text column it sits beside, so a sentence there starves the name of the record. The server is named in the screen's own banner, in the row's detail line and in the spoken label, so the three words that fit lose nothing.
 
 ```mermaid
 flowchart LR

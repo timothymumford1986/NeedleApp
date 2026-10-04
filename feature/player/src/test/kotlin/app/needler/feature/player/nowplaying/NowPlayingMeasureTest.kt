@@ -1,12 +1,18 @@
 package app.needler.feature.player.nowplaying
 
 import android.app.Application
+import android.graphics.Insets
+import android.view.View
+import android.view.WindowInsets as PlatformWindowInsets
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -20,7 +26,6 @@ import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.feature.player.PlayerUiState
 import app.needler.feature.player.fake.PlayerFixtures
 import app.needler.feature.player.screenshot.PlayerScreenshots
-import app.needler.feature.player.ui.SleepTimerChoice
 import app.needler.feature.player.ui.SleepTimerOptions
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -31,48 +36,64 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The sleep timer's choices, measured inside a phone rather than rendered at whatever height they
- * need.
+ * The sleep timer's choices, measured inside a phone that has a system bar at the bottom of it.
  *
  * ## Why this is not a screenshot
  *
  * `PlayerScreenshotTest` already renders the panel, and `player-sleep-timer-choices-phone.png` is a
  * perfectly good picture of six pills that proves nothing about this bug: Roborazzi draws a canvas as
  * tall as it is asked for, so a column taller than the screen renders as a column taller than the
- * screen and the image looks right. The device report was "they extend below the viewable screen",
- * which is a statement about the *viewport*, and the only way to assert it is to lay the real screen
- * out inside one and read the bounds back.
+ * screen and the image looks right. The device report is a statement about the *viewport*, and the only
+ * way to assert it is to lay the real screen out inside one and read the bounds back.
  * [app.needler.feature.player.sidebar.PlayerSidebarMeasureTest] is the precedent, and it exists for
  * the same class of failure: a measure pass nobody had measured.
  *
- * ## Why two phones, and why the short one is the real test
+ * ## Why the system bar is a dispatched inset and not a shorter box
  *
- * Measured, with the expansion open and nothing scrolled: the pills occupy 627 to 707 dp and the
- * column ends at 743 dp. On the pack's own 390 by 844 artboard that fits above a navigation bar with
- * room to spare, which is why this defect survived both a screenshot and a reading of the layout - at
- * the pack's height there is nothing wrong with it.
+ * This file used to model the navigation bar by shortening the box it laid the screen out in, on the
+ * grounds that "Robolectric's window has no insets to read, so a test that faked them would be
+ * asserting against the fake". That reasoning was wrong twice, and the result was a test that passed
+ * while the device failed.
  *
- * [SHORT_PHONE_HEIGHT] is where it breaks, and it is not a contrived number: 1080 by 1920 at 420 dpi
- * is 411 by 731 dp, which is the same device `PlayerSidebarMeasureTest` cites for the landscape P0.
- * 731 dp less a navigation bar leaves 683 dp, the bottom row of pills lands at 671 to 707, and a
- * listener watches two of the six choices disappear under the system bar.
+ *  - A shortened box tests **does it fit**. It cannot test **does the automatic scroll put it there**,
+ *    because the thing being asserted - the bottom of the box - is also the bottom of the scrollable's
+ *    viewport, so a [androidx.compose.foundation.relocation.BringIntoViewRequester] that brings the
+ *    pills no further than the viewport's own edge satisfies the assertion by definition. That is
+ *    exactly the defect: on the device the pills landed on the screen's last pixel row, which is inside
+ *    the viewport and underneath the gesture bar.
+ *  - Robolectric's window has no insets by default, but it takes them: `dispatchApplyWindowInsets` on
+ *    the view Compose hangs its `WindowInsetsHolder` off reaches `WindowInsets.safeDrawing` like any
+ *    other inset change. So the bar can be the real thing rather than a fake, and the screen reads it
+ *    the same way it reads it on a phone. Measured: `safeDrawing` bottom is 0 before the dispatch and
+ *    the dispatched pixel count after it.
  *
- * ## The navigation bar is modelled by shortening the box
+ * The box is therefore the **whole** screen, bar included, which is what Now Playing is actually given
+ * - it is a sibling of Home in the outer nav graph with no scaffold under it - and the assertion is
+ * against the safe area inside that box.
  *
- * Not by dispatching real window insets. `windowInsetsPadding` reads the window, and Robolectric's
- * window has no insets to read, so a test that faked them would be asserting against the fake.
- * Shortening the viewport asserts the same thing from the other side and is harder to get wrong:
- * whatever the screen draws, it has to fit in the part of the phone the system bar does not own.
- * 48 dp is the taller of the two bars - a gesture handle is 24 dp - so a panel that fits here fits
- * there.
+ * ## Bounds are read in the phone's coordinates, not the root's
+ *
+ * `setContent` **centres** a child larger than Robolectric's own 320 by 470 window, so a required-size
+ * box of phone dimensions is placed at negative coordinates: measured, the dismiss control of a 844 dp
+ * screen reports its top at -135 dp, which is 52 dp less half the 374 dp of overflow. Wrapping the box
+ * in a `fillMaxSize` parent aligned to top-start was tried and does not move it by a pixel, so the
+ * centring happens above anything this file can reach.
+ *
+ * The old assertions compared root-space bounds against the box's own height regardless, and that is
+ * the second reason they passed while the device failed: every bound had been shifted up by more than
+ * the navigation bar they were looking for. So the box reports where it was put, through
+ * `onGloballyPositioned`, and every bound below is read relative to that. [assertHeaderIsAtTheTop]
+ * fails if the translation is ever wrong, by measuring the one row of this screen whose position the
+ * pack fixes.
  *
  * ## What is asserted
  *
- * Every one of the six pills, by the bounds of its own node, against the top and bottom of the
- * viewport. Not `assertIsDisplayed`: that test is made against the host *window*, which Robolectric
- * sizes for itself and which is not the box the screen was given. The two failures guarded against
- * are a pill below the fold - the bug, which `SessionControls` fixes by asking to be scrolled to -
- * and a pill scrolled off the top, which is what an over-eager scroll would do instead.
+ * Every one of the six pills, by the bounds of its own node, against the safe area - not the viewport.
+ * Not `assertIsDisplayed`: that test is made against the host *window*, which Robolectric sizes for
+ * itself and which is not the box the screen was given. The three failures guarded against are a pill
+ * under the system bar - the bug - a pill scrolled off the top, which is what an over-eager scroll
+ * would do instead, and a pill measured at zero height, which is the shape of the landscape failure
+ * [app.needler.feature.player.sidebar.PlayerSidebarMeasureTest] exists for.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -83,44 +104,94 @@ class NowPlayingMeasureTest {
     val compose = createComposeRule()
 
     /**
-     * The reported case: a 411 by 731 dp phone, where the panel does not fit and has to be scrolled
-     * to. Without that scroll the last two choices sit 24 dp under the navigation bar.
+     * The device the defect was measured on: an OPPO Find X9, 1080 by 2374, with a gesture bar
+     * roughly 110 px tall.
+     *
+     * At 2.75 the screen is 392.7 by 863.3 dp and the expanded column overruns the scrollable by 83 dp,
+     * so the automatic scroll runs - and before the fix it stopped with the bottom row of pills at
+     * 2275 to 2374, ending on the screen's last pixel row, which is the figure the device audit
+     * reported to the pixel. With the fix they land at 2165 to 2264: 110 px higher, which is the bar,
+     * and the pack's own 36 dp gap is still below them unspent.
      */
     @Test
-    fun `the sleep timer's choices fit a 1080 by 1920 phone once they unfold`() =
-        assertChoicesFit(width = SHORT_PHONE_WIDTH, height = SHORT_PHONE_HEIGHT, fontScale = 1f)
+    fun `the sleep timer's choices clear the gesture bar on a 1080 by 2374 phone`() =
+        assertChoicesClearTheSystemBar(
+            widthPx = 1080,
+            heightPx = 2374,
+            bottomInsetPx = 110,
+            density = 2.75f,
+            fontScale = 1f,
+        )
 
-    /** The pack's own artboard, which is the height at which this was never wrong. */
+    /**
+     * The pack's own 390 by 844 artboard, with a three-button navigation bar under it.
+     *
+     * 48 dp is the taller of the two bars - a gesture handle is 24 dp - so a panel that clears this
+     * clears a gesture bar on the same screen.
+     */
     @Test
-    fun `the choices fit the pack's phone artboard`() =
-        assertChoicesFit(width = PHONE_WIDTH, height = PHONE_HEIGHT, fontScale = 1f)
+    fun `the choices clear a navigation bar on the pack's phone artboard`() =
+        assertChoicesClearTheSystemBar(
+            widthPx = 390,
+            heightPx = 844,
+            bottomInsetPx = 48,
+            density = 1f,
+            fontScale = 1f,
+        )
 
     /**
      * The text scale REQUIREMENTS.md names.
      *
      * "Text must scale to 200% without clipping", and at 200% the pills take more rows and every
-     * control above them is taller, so the expansion adds the most height to a column that already
-     * did not fit. Measured at 758 to 799 dp unscrolled against a 796 dp viewport: short by 3 dp on
-     * the pack's *own* artboard, before any shorter phone is considered.
+     * control above them is taller, so the expansion adds the most height to a column that already did
+     * not fit.
      */
     @Test
-    fun `the choices still fit at 200 percent text`() =
-        assertChoicesFit(width = PHONE_WIDTH, height = PHONE_HEIGHT, fontScale = 2f)
+    fun `the choices still clear it at 200 percent text`() =
+        assertChoicesClearTheSystemBar(
+            widthPx = 390,
+            heightPx = 844,
+            bottomInsetPx = 48,
+            density = 1f,
+            fontScale = 2f,
+        )
 
     /**
-     * Lays Now Playing out in a phone-sized viewport, opens the sleep timer, and asserts that every
-     * choice is inside it.
+     * Lays Now Playing out in a whole phone, hands the window a bottom inset, opens the sleep timer and
+     * asserts that every choice came to rest inside the safe area.
+     *
+     * @param widthPx the screen, in pixels, as a device reports it.
+     * @param heightPx the same, including the strip the system bar sits on.
+     * @param bottomInsetPx the bar's height. Dispatched as a real `systemBars` inset.
+     * @param density the pixel density those figures are in, so the dp the screen lays out in are the
+     *   dp the device lays out in.
+     * @param fontScale the text scale, independent of [density] exactly as `fontScale` is on a device.
      */
-    private fun assertChoicesFit(width: Dp, height: Dp, fontScale: Float) {
-        val viewport: Dp = height - NAVIGATION_INSET
+    private fun assertChoicesClearTheSystemBar(
+        widthPx: Int,
+        heightPx: Int,
+        bottomInsetPx: Int,
+        density: Float,
+        fontScale: Float,
+    ) {
+        val screenWidth: Dp = (widthPx / density).dp
+        val screenHeight: Dp = (heightPx / density).dp
+        val safeBottom: Dp = ((heightPx - bottomInsetPx) / density).dp
+
+        // The view Compose reads window insets through: WindowInsetsHolder listens on the
+        // AndroidComposeView itself, so this is the one view a dispatch has to reach.
+        var host: View? = null
+        // Where the root put the phone. Read rather than assumed; see the note above.
+        var screenTopInRoot = 0f
         compose.setContent {
-            val density = LocalDensity.current
-            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+            host = LocalView.current
+            CompositionLocalProvider(LocalDensity provides Density(density, fontScale)) {
                 NeedlerTheme(reducedMotion = true) {
                     Box(
                         modifier = Modifier
-                            .requiredWidth(width)
-                            .requiredHeight(viewport),
+                            .requiredWidth(screenWidth)
+                            .requiredHeight(screenHeight)
+                            .onGloballyPositioned { screenTopInRoot = it.positionInRoot().y },
                     ) {
                         NowPlayingScreen(
                             state = PlayerUiState(
@@ -148,6 +219,15 @@ class NowPlayingMeasureTest {
                 }
             }
         }
+        compose.waitForIdle()
+
+        // Before the expansion, so the screen has already reserved the bar by the time anything asks
+        // to be scrolled to - which is the order a device does it in.
+        compose.runOnUiThread { host!!.dispatchApplyWindowInsets(systemBarsOf(bottomInsetPx)) }
+        compose.waitForIdle()
+
+        val origin: Dp = (screenTopInRoot / density).dp
+        assertHeaderIsAtTheTop(origin)
 
         // The semantics action rather than a tap: on a short phone the chip itself starts below the
         // fold, and a click needs coordinates inside the window while this needs none. What is under
@@ -159,39 +239,61 @@ class NowPlayingMeasureTest {
         for (choice in SleepTimerOptions.offered) {
             val label: String = SleepTimerOptions.spokenLabel(choice)
             val bounds = compose.onNodeWithContentDescription(label).getUnclippedBoundsInRoot()
+            val top: Dp = bounds.top - origin
+            val bottom: Dp = bounds.bottom - origin
             assertTrue(
-                label + " is " + (bounds.bottom - viewport) + " below a " + viewport + " viewport",
-                bounds.bottom <= viewport,
+                label + " ends at " + bottom + " on a " + screenHeight + " screen whose safe area " +
+                    "ends at " + safeBottom + ": " + (bottom - safeBottom) + " under the system bar",
+                bottom <= safeBottom,
             )
             assertTrue(
-                label + " is " + (0.dp - bounds.top) + " above a " + viewport + " viewport",
-                bounds.top >= 0.dp,
+                label + " starts at " + top + ", which is " + (0.dp - top) + " above the top of a " +
+                    screenHeight + " screen",
+                top >= 0.dp,
             )
-        }
-
-        // Guards the assertion itself: six pills all reporting zero bounds would satisfy the two
-        // above, and that is exactly the shape of the landscape failure PlayerSidebarMeasureTest
-        // exists for.
-        val first: String = SleepTimerOptions.spokenLabel(SleepTimerChoice.OFF)
-        compose.onNodeWithContentDescription(first).getUnclippedBoundsInRoot().let { bounds ->
             assertTrue(
-                first + " was laid out " + (bounds.bottom - bounds.top) + " tall",
-                (bounds.bottom - bounds.top) >= MIN_PILL_HEIGHT,
+                label + " was laid out " + (bottom - top) + " tall",
+                (bottom - top) >= MIN_PILL_HEIGHT,
             )
         }
     }
 
+    /**
+     * Fails if the translation out of root space into the phone's own is wrong.
+     *
+     * The header is the one part of this screen whose position is fixed by the pack rather than by a
+     * scroll - 96 dp tall, with the dismiss control inside it - so it is the cheapest thing to check
+     * the origin against. Without it, a wrong origin is a whole suite going quietly green: that is
+     * precisely what the shortened-box version of this file did.
+     */
+    private fun assertHeaderIsAtTheTop(origin: Dp) {
+        val bounds = compose
+            .onNodeWithContentDescription(CLOSE_NOW_PLAYING)
+            .getUnclippedBoundsInRoot()
+        assertTrue(
+            "the header's dismiss control is at " + (bounds.top - origin) + " to " +
+                (bounds.bottom - origin) + " in a screen whose header is " + HEADER_HEIGHT +
+                " tall, so every bound below is offset",
+            (bounds.top - origin) >= 0.dp && (bounds.bottom - origin) <= HEADER_HEIGHT,
+        )
+    }
+
     private companion object {
-        /** The pack's phone artboard. */
-        val PHONE_WIDTH: Dp = 390.dp
-        val PHONE_HEIGHT: Dp = 844.dp
 
-        /** 1080 by 1920 at 420 dpi: the phone the expanded panel did not fit on. */
-        val SHORT_PHONE_WIDTH: Dp = 411.dp
-        val SHORT_PHONE_HEIGHT: Dp = 731.dp
+        /**
+         * A bottom `systemBars` inset, visible, and nothing else.
+         *
+         * `safeDrawing` is the union of the system bars, the display cutout and the IME, so setting
+         * the bars alone is enough to move it - and leaves the top at zero, which is what the screen's
+         * own `only(WindowInsetsSides.Bottom)` filter would reduce it to anyway.
+         */
+        fun systemBarsOf(bottomPx: Int): PlatformWindowInsets = PlatformWindowInsets.Builder()
+            .setInsets(PlatformWindowInsets.Type.systemBars(), Insets.of(0, 0, 0, bottomPx))
+            .setVisible(PlatformWindowInsets.Type.systemBars(), true)
+            .build()
 
-        /** A three-button navigation bar: the tallest thing that takes height off the bottom. */
-        val NAVIGATION_INSET: Dp = 48.dp
+        /** The pack's header, from [NowPlayingScreen]'s own measurements. */
+        val HEADER_HEIGHT: Dp = 96.dp
 
         /**
          * A pill, less slack for rounding.
@@ -203,5 +305,8 @@ class NowPlayingMeasureTest {
 
         /** The half of [app.needler.feature.player.ui.SleepTimerChip]'s label that names the action. */
         const val CHANGE_THE_TIMER: String = "Change the sleep timer"
+
+        /** [NowPlayingScreen]'s dismiss control, used only to find the top of the screen. */
+        const val CLOSE_NOW_PLAYING: String = "Close now playing"
     }
 }

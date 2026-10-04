@@ -296,23 +296,42 @@ public class DefaultLibraryRepository(
      * browser being handed four hundred `Genre` objects to draw twenty of - and `drop` then `take`
      * rather than an index range, so no `offset + limit` can overflow when the caller's window is
      * unbounded.
+     *
+     * ## Why the bucket key is not the name
+     *
+     * Buckets are keyed on `GenreCodec.fold` and labelled with the first spelling that arrived under
+     * each key. The server supplies both the legacy `genre` string, which is whatever the tagger
+     * wrote, and its own `genres` index, so "Indie Rock" and "indie rock" reach the mirror as two
+     * strings for one genre - and keying on the string put both in the list, each with part of the
+     * count, which is two wrong answers rather than one right one.
+     *
+     * Rejected: folding the *display* name too, which would list every genre in lower case, and
+     * title-casing it instead, which renders "IDM" as "Idm". Neither is a name the server ever said.
+     * The spelling shown is therefore arbitrary among variants - the mirror decides which column is
+     * read first - and that is the honest cost of refusing to invent one.
      */
     override fun observeGenres(limit: Int, offset: Int): Flow<List<Genre>> =
         albumDao.observeGenreColumns().map { encoded ->
+            val labels: MutableMap<String, String> = LinkedHashMap()
             val counts: MutableMap<String, Int> = LinkedHashMap()
             for (column in encoded) {
+                // `decode` splits the composite values the server joins with a semicolon and drops
+                // repeats within one column, so an album is counted once per genre it names however
+                // many of its fields named it.
                 for (genre in GenreCodec.decode(column)) {
-                    counts[genre] = (counts[genre] ?: 0) + 1
+                    val key: String = GenreCodec.fold(genre)
+                    if (!labels.containsKey(key)) labels[key] = genre
+                    counts[key] = (counts[key] ?: 0) + 1
                 }
             }
             counts.entries
-                .sortedBy { it.key.lowercase() }
+                .sortedBy { it.key }
                 // Coerced because these are Kotlin list operations and both throw on a negative
                 // count, where SQLite would have treated the same values as "from the start" and
                 // "no limit". A browser that computed a page badly must not crash a head unit.
                 .drop(offset.coerceAtLeast(0))
                 .take(limit.coerceAtLeast(0))
-                .map { Genre(name = it.key, albumCount = it.value) }
+                .map { Genre(name = labels[it.key] ?: it.key, albumCount = it.value) }
         }
 
     override fun observeTracksByGenre(genre: String, limit: Int, offset: Int): Flow<List<Track>> =

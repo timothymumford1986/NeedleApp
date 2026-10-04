@@ -34,6 +34,7 @@ import app.needler.core.domain.model.Pin
 import app.needler.core.domain.model.PinSource
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RemovedDownload
+import app.needler.core.domain.model.StoppedDownload
 import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
 import app.needler.core.domain.model.TrackFetchHandle
@@ -251,6 +252,69 @@ public class DefaultPinRepository(
                     freedBytes = freed,
                 )
             },
+        )
+    }
+
+    /**
+     * Stops the download and keeps what arrived: the Stop action, which is not a removal.
+     *
+     * Not a byte is deleted and the pin is not touched, which is the entire difference from
+     * [unpinAlbum] - REQUIREMENTS.md "The download in flight is a badge, not a banner": "stopping
+     * leaves what has landed as a part-downloaded pin, which plays, while removing deletes the bytes
+     * and reports what it freed". So there is no transaction here and no file work: one cancelled
+     * job, one rewritten row.
+     *
+     * ## PARTIAL, and never QUEUED
+     *
+     * [markPinPartial] drops to [DownloadStateDb.QUEUED] when nothing is on the device, because a
+     * staleness eviction *wants* the start-up sweep to fetch the album again. A stop wants the exact
+     * opposite, so this writes [DownloadStateDb.PARTIAL] whatever the count:
+     * [DownloadStateDb.RESUMABLE_DB_VALUES] excludes `partial`, and that exclusion is the only reason
+     * a stop survives a restart. Left at `queued` or `downloading`, the row would be re-enqueued by
+     * `DownloadResumeCoordinator` on the next cold start and the stop would quietly undo itself -
+     * the un-exitable download, re-entered through the control that exists to escape it.
+     *
+     * ## The job first, then the row
+     *
+     * Both orders leave a window, because `WorkManager` cancellation is asynchronous, and this is
+     * the order whose window is harmless. Cancelling first means the job is already being torn down
+     * while the row is rewritten, and a cancelled coroutine cannot write: `AlbumDownloader` re-throws
+     * `CancellationException` untouched, and every write it makes is a suspending Room call, which
+     * fails rather than lands once its job is cancelled. Writing the row first invites the opposite -
+     * a track finishing a millisecond later records `downloading` over the `partial` just written,
+     * and the row is back in the resumable set. The residual window is the moment between the cancel
+     * and the write, and the worst it can cost is a stop that did not take; a stop that took and then
+     * reverted on the next app start is the failure worth designing against.
+     *
+     * ## Why the count comes from the cache index
+     *
+     * `pin.tracks_complete` is progress the downloader was reporting; the index is what is on the
+     * disk. Only the second one is what will still play, and they differ by exactly the track that
+     * was in flight when the user tapped Stop.
+     */
+    override suspend fun stopPinnedDownload(mbid: ReleaseGroupMbid): Outcome<StoppedDownload> {
+        val pin: PinEntity = pinDao.getPin(mbid.value)
+            ?: return Outcome.Failure(NeedlerError.NotFound("pin " + mbid.value))
+        workScheduler.cancelAlbumDownload(mbid.value)
+        val onDevice: Int = audioCacheDao.getAlbumRows(mbid.value).count { it.complete }
+        pinDao.setDownloadProgress(
+            releaseGroupMbid = mbid.value,
+            downloadState = DownloadStateDb.PARTIAL,
+            tracksComplete = onDevice,
+            tracksTotal = pin.tracksTotal,
+            downloadedBytes = pin.downloadedBytes,
+            totalBytes = pin.totalBytes,
+            // Cleared deliberately. A stop is not a failure, and a reason left on the row would be
+            // read as one by the album screen.
+            error = null,
+            updatedAt = nowMillis(),
+        )
+        return Outcome.Success(
+            StoppedDownload(
+                releaseGroupMbid = mbid,
+                tracksOnDevice = onDevice,
+                tracksTotal = pin.tracksTotal,
+            ),
         )
     }
 

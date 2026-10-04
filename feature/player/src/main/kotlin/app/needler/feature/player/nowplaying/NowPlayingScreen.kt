@@ -114,6 +114,17 @@ fun NowPlayingScreen(
                 // clear rather than a band carved out of the viewport, and so the pack's own
                 // 36dp gap below the chips is preserved on top of it.
                 //
+                // Measured, with the sleep timer open on a 1080 by 2374 phone with a 110px
+                // gesture bar: the viewport is the full 2374 and the scroll can travel 229px,
+                // of which the bar is 110 and the pack's gap the other 99. That is what being
+                // inside the scroll buys, and it is load-bearing - the scroll
+                // [app.needler.feature.player.ui.SessionControls] asks for needs 130 of those
+                // 229px, and a `windowInsetsPadding` applied *outside* the `verticalScroll`
+                // would leave only 119 and strand the last row of pills 11px short. What it
+                // does not buy is the scroll itself landing clear: a bring-into-view is
+                // satisfied by the viewport, which this padding deliberately leaves reaching
+                // under the bar. See `SessionControls` for how the request is widened instead.
+                //
                 // This screen is the one that has to read the inset for itself. Every other
                 // destination sits inside `NeedlerNavigationScaffold`, which pads the bottom
                 // safe area with its own chrome and then calls `consumeWindowInsets` so a

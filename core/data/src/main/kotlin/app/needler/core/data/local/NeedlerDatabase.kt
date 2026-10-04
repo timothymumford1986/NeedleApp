@@ -265,11 +265,15 @@ public abstract class NeedlerDatabase : RoomDatabase() {
     public companion object {
 
         /**
-         * Schema version 3: `pull.request_kind` and `pull.recording_mbid` added. Bumping this
-         * requires a hand-written migration in [NeedlerMigrations.ALL] - there is no destructive
-         * fallback, by requirement.
+         * Schema version 4: no schema change, a data rewrite - `album.genres` holding one composite
+         * string per album becomes one delimited genre per genre. A version is spent on it because
+         * a delta sync never rewrites an unchanged album, so there is no other moment at which rows
+         * already in the mirror could be corrected; see [NeedlerMigrations.MIGRATION_3_4].
+         *
+         * Bumping this requires a hand-written migration in [NeedlerMigrations.ALL] - there is no
+         * destructive fallback, by requirement.
          */
-        public const val VERSION: Int = 3
+        public const val VERSION: Int = 4
 
         public const val DATABASE_NAME: String = "needler.db"
 

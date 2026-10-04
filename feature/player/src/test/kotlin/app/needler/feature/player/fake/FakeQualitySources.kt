@@ -16,6 +16,7 @@ import app.needler.core.domain.model.RemovedDownload
 import app.needler.core.domain.model.ServerCapabilities
 import app.needler.core.domain.model.ServerProbe
 import app.needler.core.domain.model.SessionState
+import app.needler.core.domain.model.StoppedDownload
 import app.needler.core.domain.model.StoragePreferences
 import app.needler.core.domain.model.StorageUsage
 import app.needler.core.domain.model.TrackFetchHandle
@@ -71,6 +72,17 @@ internal class FakePins(
         error("not used by :feature:player")
 
     override suspend fun retryPinnedDownload(mbid: ReleaseGroupMbid): Outcome<Unit> =
+        error("not used by :feature:player")
+
+    /**
+     * Fails loudly despite the interface having a default, on this file's own rule.
+     *
+     * The default on `PinRepository.stopPinnedDownload` answers "nothing stopped" so that every test
+     * double keeps compiling, which is right for the interface and wrong here: a fake that quietly
+     * accepts a call the player never makes is a fake that keeps passing when the player starts
+     * making it. Stopping a download belongs to the screen showing its progress.
+     */
+    override suspend fun stopPinnedDownload(mbid: ReleaseGroupMbid): Outcome<StoppedDownload> =
         error("not used by :feature:player")
 
     override suspend fun getCachedAudio(key: TrackKey): CachedAudio? = cachedAudio.value

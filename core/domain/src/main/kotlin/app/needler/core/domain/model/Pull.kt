@@ -125,7 +125,8 @@ public enum class PullState {
 
     /**
      * `queued` with a `search_job_id` but no `candidate_index`: a manual source pick is parked.
-     * Badge: "Needs attention on the server". Manual source selection is a web-UI job in v1.
+     * Badge: "Needs attention" drawn, "Needs attention on the server" spoken. Manual source
+     * selection is a web-UI job in v1.
      */
     AWAITING_SOURCE_REVIEW,
 

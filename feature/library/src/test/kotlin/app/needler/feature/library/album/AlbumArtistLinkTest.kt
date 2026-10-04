@@ -107,6 +107,7 @@ class AlbumArtistLinkTest {
                             onRetryPull = {},
                             onDownloadToDevice = {},
                             onRemoveFromDevice = {},
+                            onStopDownload = {},
                             onRetryTrack = {},
                             onOpenArtist = onOpenArtist,
                             onDismissNotice = {},

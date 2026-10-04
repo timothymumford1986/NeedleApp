@@ -98,7 +98,7 @@ fun NeedlerAlbumSource.tagLabel(): String = label() + ":"
  * | `PendingApproval` | Waiting | secondary |
  * | `Failed` | no source found | muted |
  * | (pull, searching) | Searching | secondary |
- * | (pull, parked) | Needs attention on the server | secondary |
+ * | (pull, parked) | Needs attention | secondary |
  * | (pull, complete) | Ready | positive |
  * | (pull, failed) | Failed | secondary |
  * | (pull, part-delivered) | Partly delivered | secondary |
@@ -216,7 +216,54 @@ sealed interface NeedlerAlbumBadge {
     /** `queued` with no search job: the server is still looking for sources (06). */
     data object Searching : NeedlerAlbumBadge
 
-    /** `queued` with a search job but no candidate: a manual pick is parked on the server. */
+    /**
+     * `queued` with a search job but no candidate: a manual pick is parked on the server.
+     *
+     * ## Why the drawn label no longer says where
+     *
+     * It read "Needs attention on the server", and a badge is laid out before the text column it
+     * sits beside: the trailing column is unweighted, so it takes the width it asks for and the
+     * title gets the remainder. Measured off `screenshots/pulls-all-awaiting-review-phone.png` at
+     * 2px to the dp, that sentence drew 192dp of the 266dp a 390dp phone row has to divide, leaving
+     * 74dp for the album title and the artist - about ten characters of `rowTitle` a line. Every
+     * title on that render is cut to `Death's Dateles...`, a twelve-character artist name wraps to
+     * two lines, and in `screenshots/pulls-every-state-phone.png` a long artist fills the second
+     * line on its own and the row loses its state line entirely. The user's device has all 35 of
+     * its pulls in this state, so that was not an edge case, it was the screen.
+     *
+     * Fifteen characters draw about 112dp and give the title column 154dp back - roughly twenty
+     * characters a line instead of ten, which is a title read rather than recognised.
+     *
+     * ## What "on the server" was earning, and where it went
+     *
+     * A real distinction, and not one the user can act on from the phone: REQUIREMENTS.md
+     * "Acquisition lifecycle" derives this state client-side precisely because a human has to pick
+     * a source in DroppedNeedle's own web interface, so the badge was saying "not your move". That
+     * fact now lives in the three places with room for it. The Pulls screen's banner says the items
+     * are held for review on the server; the row's spoken description says the whole sentence; and
+     * [accessibleLabel] keeps "Needs attention on the server" for anything that reads this badge on
+     * its own. The screen is called Pulls and a pull is a thing the server does, so the shortened
+     * label is read in a context that already answers "where".
+     *
+     * It also settles a divergence. `PullWidget` has drawn "Needs attention" since the widget was
+     * written, because the long form is four words past what a 166dp card holds, and its own notes
+     * require the home screen and the app to use the same words for a stage. They now do.
+     *
+     * ## Rejected
+     *
+     * **Cap the title instead** - a fixed width on the text column, or an ellipsis sooner. The
+     * title is the thing the user is scanning for; trading it for a sentence that repeats what the
+     * screen is called is the wrong way round.
+     *
+     * **Drop the badge on this state** and leave the explanation to the subtitle. The Pulls row
+     * deliberately empties its subtitle of that sentence *because* the badge names the state, so
+     * removing both would leave the one state that needs a human the only unnamed state on the
+     * list.
+     *
+     * **Let the label wrap** - it already may, at [NeedlerStateBadge]'s `maxLines = 2`. That spends
+     * row height instead of row width and does not give the title back a single dp, because the
+     * trailing column still measures itself first.
+     */
     data object NeedsAttention : NeedlerAlbumBadge
 
     /** The pull landed and the album is playable. Positive green with a check (06). */
@@ -351,7 +398,7 @@ fun NeedlerAlbumBadge.label(): String = when (this) {
     NeedlerAlbumBadge.Waiting -> "Waiting"
     NeedlerAlbumBadge.WaitingForWifi -> "Waiting for Wi-Fi"
     NeedlerAlbumBadge.Searching -> "Searching"
-    NeedlerAlbumBadge.NeedsAttention -> "Needs attention on the server"
+    NeedlerAlbumBadge.NeedsAttention -> "Needs attention"
     NeedlerAlbumBadge.Ready -> "Ready"
     NeedlerAlbumBadge.NoSource -> "no source found"
     NeedlerAlbumBadge.Failed -> "Failed"
@@ -366,8 +413,12 @@ fun NeedlerAlbumBadge.label(): String = when (this) {
  * a sentence gives a screen-reader user a second vocabulary to learn for the same three facts, which
  * is the opposite of what reducing nine words to three was for.
  *
- * [NeedlerAlbumBadge.PullingToDevice] is the exception and says one thing more, because the thing a
+ * Two of the lifecycle states say one thing more, and neither of them is a location.
+ * [NeedlerAlbumBadge.PullingToDevice] adds that the album plays meanwhile, because the thing a
  * listener most needs to know about a download in flight is that it is not in their way.
+ * [NeedlerAlbumBadge.NeedsAttention] adds **where** the attention is needed, which the drawn label
+ * had to give up for the room it was taking; a listener has no column to run out of, so this is the
+ * reading that keeps the whole phrase.
  */
 fun NeedlerAlbumBadge.accessibleLabel(): String = when (this) {
     is NeedlerAlbumBadge.Pulling ->
@@ -378,6 +429,7 @@ fun NeedlerAlbumBadge.accessibleLabel(): String = when (this) {
         } else {
             "Pulling to device, $percent percent, playing now"
         }
+    NeedlerAlbumBadge.NeedsAttention -> "Needs attention on the server"
     NeedlerAlbumBadge.NoSource -> "No source found"
     else -> label()
 }

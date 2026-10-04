@@ -71,7 +71,8 @@ public data class PullEntity(
     /**
      * Present so the client-side status derivation works: `queued` with no [searchJobId] means the
      * server is still searching (show "Searching"); `queued` with a [searchJobId] but no
-     * [candidateIndex] means a manual source pick is parked (show "Needs attention on the server").
+     * [candidateIndex] means a manual source pick is parked (drawn as "Needs attention", spoken as
+     * "Needs attention on the server").
      *
      * REQUIREMENTS.md's schema table **does** list both, and says why in "Notes on the schema": the
      * first draft required the two derived states while specifying a schema that stored neither,

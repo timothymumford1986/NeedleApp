@@ -222,14 +222,18 @@ private fun titleLine(model: PullCardModel, context: Context): String {
  * to avoid. They must stay the same words - a pull that reads "Searching" in the app and something else
  * on the home screen is a bug even though neither is wrong.
  *
- * Two deliberate differences from the badge, both because a 166dp card is not a 390dp row:
+ * One deliberate difference from the badge, because a 166dp card is not a 390dp row:
  *
- *  * `AWAITING_SOURCE_REVIEW` is "Needs attention" rather than the badge's "Needs attention on the
- *    server". The long form is four words past what fits, and the card's tap opens Pulls, which draws
- *    the full sentence.
  *  * `PROCESSING` is "Importing" rather than the badge's "Pulling". The Pulls screen already uses that
  *    word for this state in its own subtitle, and here it is the only thing distinguishing a pull that
  *    is moving files from one that is still fetching them.
+ *
+ * `AWAITING_SOURCE_REVIEW` used to be the second difference: this card said "Needs attention" while
+ * the badge said "Needs attention on the server", and the note here recorded that the long form was
+ * "four words past what fits". It was right, and it was right about the 390dp row as well - the badge
+ * was shortened to these same three words on 2026-10-04 after the sentence was measured taking 192dp
+ * of a 350dp row. The divergence this paragraph used to describe is gone, and the rule above it - the
+ * same words for a stage in both places - now holds without an exception.
  *
  * The four finished states cannot reach this function - `PullCardModel.of` keeps only active pulls, and
  * a finished pull is by definition not one - but the `when` names them rather than falling through, so

@@ -60,6 +60,16 @@ class CrateViewModelTest {
         }
     }
 
+    /**
+     * The view model's own contract, which is wider than what the crate screen offers.
+     *
+     * No gesture can produce this move any more - `CrateScreen` restricts both the drag and the
+     * accessible actions to Up next, because a row above `currentIndex` is drawn in neither of that
+     * screen's two sections. The assertion stays, and at this layer, because the rule it protects is
+     * `PlayQueue.withItemMoved`'s: the current index follows the *item*. Wear, Android Auto and any
+     * later surface reach `PlaybackController.moveQueueItem` without going through screen 08, and
+     * the day one of them sends a move across the playing row this is what says playback holds.
+     */
     @Test
     fun `dragging a row past the playing row does not change what is playing`() = runTest {
         val viewModel = CrateViewModel(controller)

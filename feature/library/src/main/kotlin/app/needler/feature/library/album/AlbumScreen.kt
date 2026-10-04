@@ -73,6 +73,7 @@ import app.needler.core.design.component.PathPull
 import app.needler.core.design.component.tagLabel
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
+import app.needler.core.domain.model.AlbumAction
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.StreamRung
 import app.needler.feature.library.common.AlbumArtwork
@@ -100,7 +101,7 @@ import app.needler.feature.library.library.LibraryTrackRow
  * | `PendingApproval` | The Waiting badge, and why no progress is moving |
  * | `Acquiring` | Pulling with its percentage, a progress bar, and Cancel |
  * | `Owned` | The transport control, Shuffle, Pull to device, and the track list |
- * | `Pinned` | The same, with the on-device mark and Remove from device |
+ * | `Pinned` | The same, plus Stop while bytes arrive and Remove from device once they have |
  * | `Failed` | What went wrong, in words, and Retry |
  *
  * A part-delivered album is `Owned` and plays what arrived; the tracks that
@@ -141,6 +142,7 @@ fun AlbumScreen(
     onRetryPull: () -> Unit,
     onDownloadToDevice: () -> Unit,
     onRemoveFromDevice: () -> Unit,
+    onStopDownload: () -> Unit,
     onRetryTrack: (AlbumTrack) -> Unit,
     onOpenArtist: () -> Unit,
     onDismissNotice: () -> Unit,
@@ -190,6 +192,7 @@ fun AlbumScreen(
                     onRetryPull = onRetryPull,
                     onDownloadToDevice = onDownloadToDevice,
                     onRemoveFromDevice = onRemoveFromDevice,
+                    onStopDownload = onStopDownload,
                     onRetryTrack = onRetryTrack,
                     onOpenArtist = onOpenArtist,
                     onDismissNotice = onDismissNotice,
@@ -210,6 +213,7 @@ fun AlbumScreen(
                     onRetryPull = onRetryPull,
                     onDownloadToDevice = onDownloadToDevice,
                     onRemoveFromDevice = onRemoveFromDevice,
+                    onStopDownload = onStopDownload,
                     onRetryTrack = onRetryTrack,
                     onOpenArtist = onOpenArtist,
                     onDismissNotice = onDismissNotice,
@@ -251,6 +255,7 @@ private fun PhoneAlbum(
     onRetryPull: () -> Unit,
     onDownloadToDevice: () -> Unit,
     onRemoveFromDevice: () -> Unit,
+    onStopDownload: () -> Unit,
     onRetryTrack: (AlbumTrack) -> Unit,
     onOpenArtist: () -> Unit,
     onDismissNotice: () -> Unit,
@@ -297,6 +302,7 @@ private fun PhoneAlbum(
                     onRetryPull = onRetryPull,
                     onDownloadToDevice = onDownloadToDevice,
                     onRemoveFromDevice = onRemoveFromDevice,
+                    onStopDownload = onStopDownload,
                 )
                 state.notice?.let { notice ->
                     NoticeCard(
@@ -347,6 +353,7 @@ private fun TabletAlbum(
     onRetryPull: () -> Unit,
     onDownloadToDevice: () -> Unit,
     onRemoveFromDevice: () -> Unit,
+    onStopDownload: () -> Unit,
     onRetryTrack: (AlbumTrack) -> Unit,
     onOpenArtist: () -> Unit,
     onDismissNotice: () -> Unit,
@@ -391,6 +398,7 @@ private fun TabletAlbum(
                 onRetryPull = onRetryPull,
                 onDownloadToDevice = onDownloadToDevice,
                 onRemoveFromDevice = onRemoveFromDevice,
+                onStopDownload = onStopDownload,
             )
             state.notice?.let { notice ->
                 NoticeCard(
@@ -809,6 +817,33 @@ private fun AlbumQualityTags(
  * The shuffle control is relabelled from the same value rather than disabled. Why, and the two
  * alternatives rejected, are recorded on [AlbumTransport].
  *
+ * ## The third slot has three faces
+ *
+ * One control, three states of the same record, because they are three answers to one question -
+ * what can be done about this record and this device:
+ *
+ * | State | Control | What it does |
+ * | --- | --- | --- |
+ * | `Owned` | **Pull to device** | starts the download |
+ * | `Pinned`, download in flight | **Stop** | cancels the job and keeps what landed |
+ * | `Pinned`, download resting | **Device** | removes it and reports what that freed |
+ *
+ * **Stop replaces Remove while a download runs; it never sits beside it.** The row before this drew
+ * the Device control in every pinned state, so the only action offered during a download was
+ * "Device. Remove … from this device", which deletes - observed on a device under a badge reading
+ * "Pulling to device, 31 percent, playing now". REQUIREMENTS.md "The download in flight is a badge,
+ * not a banner" is explicit that these are two actions with two outcomes and that "the album offers
+ * whichever one can still apply", and `AlbumState.Pinned.offeredActions` agrees: `CANCEL` while the
+ * download is in flight, `REMOVE_FROM_DEVICE` once it rests, never both. Offering both would put a
+ * delete and a stop side by side under one badge, a thumb's width apart, with only the words to
+ * tell them apart - and it would be the UI disagreeing with the domain about what is legal.
+ *
+ * Stop is deliberately plain: no device glyph, no positive green, no selected state. All three of
+ * those say "this record is on the device", which is the thing a download in flight has not finished
+ * doing. It is the same plain secondary control the `ACQUIRING` arm offers for stopping the
+ * server's acquisition, which is the other transition the user can start and therefore has to be
+ * able to end.
+ *
  * ## Where the overflow sits
  *
  * The `PLAY` row reads Play, Shuffle, Pull to device, then the crate menu. The menu was third, between
@@ -839,6 +874,7 @@ private fun AlbumActions(
     onRetryPull: () -> Unit,
     onDownloadToDevice: () -> Unit,
     onRemoveFromDevice: () -> Unit,
+    onStopDownload: () -> Unit,
 ) {
     val album: Album = state.album ?: return
     val colors = NeedlerTheme.colors
@@ -857,6 +893,10 @@ private fun AlbumActions(
         when (state.primaryAction) {
             AlbumPrimaryAction.PLAY -> {
                 val pinned: Boolean = album.state is AlbumState.Pinned
+                // Read off the domain rather than from `state.download`, because
+                // `AlbumState.offeredActions` is the one place that decides which of Stop and
+                // Remove can still apply, and it is what the widgets and the car tree read as well.
+                val stoppable: Boolean = AlbumAction.CANCEL in album.offeredActions
                 val transport: AlbumTransport = state.transport
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -897,20 +937,36 @@ private fun AlbumActions(
                     // administrator has turned library download off, rather than
                     // letting it fail on a 403 after the tap.
                     if (state.downloadAllowed) {
-                        NeedlerSecondaryButton(
-                            text = if (pinned) "Device" else "Pull to device",
-                            onClick = if (pinned) onRemoveFromDevice else onDownloadToDevice,
-                            size = NeedlerButtonSize.Medium,
-                            enabled = !state.busy,
-                            selected = pinned,
-                            reportSelection = true,
-                            leadingIcon = { tint -> NeedlerOnDeviceIcon(tint = tint) },
-                            contentDescription = if (pinned) {
-                                "Device. Remove " + label + " from this device"
-                            } else {
-                                "Pull to device. Download " + label + " to this device"
-                            },
-                        )
+                        if (stoppable) {
+                            // Stop, in the slot Remove would otherwise hold - never beside it.
+                            // Why is on [AlbumActions] under "The third slot has three faces".
+                            NeedlerSecondaryButton(
+                                text = "Stop",
+                                onClick = onStopDownload,
+                                size = NeedlerButtonSize.Medium,
+                                enabled = !state.busy,
+                                // No device glyph, no green, and not reported as a selection: all
+                                // three say "this record is here", and the point of this control is
+                                // that it is still arriving. What is left is a plain secondary
+                                // action, which is what the `Acquiring` arm's own stop control is.
+                                contentDescription = "Stop downloading " + label + " to this device",
+                            )
+                        } else {
+                            NeedlerSecondaryButton(
+                                text = if (pinned) "Device" else "Pull to device",
+                                onClick = if (pinned) onRemoveFromDevice else onDownloadToDevice,
+                                size = NeedlerButtonSize.Medium,
+                                enabled = !state.busy,
+                                selected = pinned,
+                                reportSelection = true,
+                                leadingIcon = { tint -> NeedlerOnDeviceIcon(tint = tint) },
+                                contentDescription = if (pinned) {
+                                    "Device. Remove " + label + " from this device"
+                                } else {
+                                    "Pull to device. Download " + label + " to this device"
+                                },
+                            )
+                        }
                     }
                     // Last in the row, after every control that has a name. Why is on
                     // [AlbumActions] under "Where the overflow sits".
@@ -998,11 +1054,11 @@ private fun AlbumActions(
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 NeedlerSecondaryButton(
-                    text = "Cancel",
+                    text = "Stop",
                     onClick = onCancelPull,
                     size = NeedlerButtonSize.Medium,
                     enabled = !state.busy,
-                    contentDescription = "Cancel the pull of " + label,
+                    contentDescription = "Stop the pull of " + label,
                 )
             }
 

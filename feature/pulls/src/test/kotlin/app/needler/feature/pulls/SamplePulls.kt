@@ -228,6 +228,41 @@ internal object SamplePulls {
         updatedAt = renderedAt - Duration.parse("128h"),
     )
 
+    // ---- the quality policy, as prose ---------------------------------------
+
+    /**
+     * `quality_snapshot_summary` as a server writes it when it writes advice rather than a label.
+     *
+     * Every fixture above carries the pack's own `FLAC` and `MP3 320`, which are four and seven
+     * characters and fit anywhere. Nothing in the API says they have to be: the field is free text
+     * from the server's quality policy. The device report caught the first twenty-two characters of
+     * one, `Try MP3 320-plus kbps, the` — the row cut it there — and the rest of this string is
+     * written to that shape rather than copied, since the device never showed the rest. What is
+     * load-bearing is the length, and the length is the server's to choose.
+     */
+    const val QUALITY_ADVICE: String = "Try MP3 320-plus kbps, the server will keep looking for FLAC"
+
+    /**
+     * The row the device drew: parked for a source pick, with [QUALITY_ADVICE] attached.
+     *
+     * Its album and artist are the ones in the device report, so what a test asserts and what was
+     * reported are the same row. [awaitingSourceReview] is deliberately left without the
+     * summary - it is the pack's own parked row, and a fixture set where every row carries a server
+     * sentence would stop proving that a short label still draws.
+     */
+    val awaitingWithQualityAdvice: Pull = awaitingSourceReview.copy(
+        releaseGroupMbid = mbid("dateless-night"),
+        albumTitle = "Death's Dateless Night",
+        artistName = "Paul Kelly",
+        qualityPolicySummary = QUALITY_ADVICE,
+    )
+
+    /** The same sentence on a row the badge leaves room on: the slot is wider, the string is not. */
+    val landedWithQualityAdvice: Pull = landedToday.copy(
+        releaseGroupMbid = mbid("two-star-advice"),
+        qualityPolicySummary = QUALITY_ADVICE,
+    )
+
     // ---- pulls the server could not name ------------------------------------
 
     /**

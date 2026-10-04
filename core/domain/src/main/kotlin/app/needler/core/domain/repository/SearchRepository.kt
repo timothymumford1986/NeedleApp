@@ -40,8 +40,15 @@ public interface SearchRepository {
      * Collapsing them is [app.needler.core.domain.usecase.UnifiedSearchUseCase.mergeAlbums]'s job and
      * is deliberately not done here: the rule compares titles and artists across a whole result set,
      * and a second copy of it in the data layer would be a second thing to keep in step. A caller that
-     * lists these albums without going through the merge - Android Auto's browse tree is the one that
-     * does - will show the duplicate.
+     * lists these albums without going through the merge will show the duplicate.
+     *
+     * **This used to name Android Auto's browse tree as that caller, and it was wrong.** The tree
+     * filters its album rows on `Album::isOwned`, and the surplus row the discography cache writes is
+     * `NotOwned` by construction, so the duplicate cannot reach a car row - verified by tests in
+     * `BrowseTreeTest` rather than by reading. Auto also has a reason not to adopt the merge even if
+     * it could: the title-and-artist rule only ever drops an **un-owned** row, which on the search
+     * screen is a shopping-list entry, whereas the equivalent reach in a browse tree would collapse
+     * two **owned** rows and hide playable music in the one place a listener cannot go looking for it.
      */
     public fun searchLocal(query: String, limit: Int = 50): Flow<LocalSearchResults>
 
