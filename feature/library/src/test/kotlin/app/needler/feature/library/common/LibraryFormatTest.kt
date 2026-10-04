@@ -255,13 +255,22 @@ class LibraryFormatTest {
         }
     }
 
+    /**
+     * An album row drops a nameless artist, exactly as a song row always has.
+     *
+     * This asserted `startsWith("Unknown artist")` until 2026-10-04, when a device showed what
+     * that costs: `GET /api/v1/artists/{mbid}/releases` carries no artist field, so a catalogue
+     * discography drew `Unknown artist · 1999` on forty rows underneath a header naming the
+     * artist. The separator guard is the part worth keeping and it is kept - the fault being
+     * guarded against was a subtitle reading ` · 2024`, which dropping the part also prevents.
+     */
     @Test
-    fun `a row subtitle names an unknown artist rather than starting with a separator`() {
+    fun `a row subtitle drops a nameless artist rather than starting with a separator`() {
         SampleLibrary.namelessAlbums.forEach { album ->
             val subtitle: String = LibraryFormat.albumRowSubtitle(album)
-            assertTrue(subtitle.isNotBlank())
             assertFalse("starts with a separator: '" + subtitle + "'", subtitle.startsWith(" ·"))
-            assertTrue(subtitle.startsWith("Unknown artist"))
+            assertFalse("names the gap: '" + subtitle + "'", subtitle.contains("Unknown artist"))
+            album.year?.let { assertEquals(it.toString(), subtitle) }
         }
     }
 

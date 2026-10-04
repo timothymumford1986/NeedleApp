@@ -289,12 +289,22 @@ internal object LibraryFormat {
     /**
      * `The Marías · 2024`, the subtitle on an album row in a list.
      *
-     * The artist goes through [artistName], so a row whose artist the catalogue did
-     * not supply reads `Unknown artist · 2024` rather than ` · 2024`.
+     * A blank artist is **dropped**, so such a row reads `2024` rather than
+     * `Unknown artist · 2024`. This used to placehold, and [songRowSubtitle] three
+     * declarations below has always done the opposite with the better argument: a row's
+     * subtitle is optional context beside a title that is already drawn, so an empty one
+     * costs nothing, while an "Unknown artist" on every row of a badly-tagged library is
+     * noise on every line. Two builders of the same kind of string disagreed; they agree now.
+     *
+     * The device settled which way. `GET /api/v1/artists/{mbid}/releases` carries no artist
+     * field at all, so a catalogue discography of forty records read `Unknown artist · 1999`
+     * forty times - underneath a header naming the very artist it claimed not to know.
+     * [artistName] and its `Unknown artist` remain for the places that genuinely have to
+     * name the gap rather than pass over it, such as a screen's own header.
      */
     fun albumRowSubtitle(album: Album): String {
         val parts: List<String> = buildList {
-            add(artistName(album.artistName))
+            album.artistName.trim().takeIf { it.isNotEmpty() }?.let { add(it) }
             album.year?.let { add(it.toString()) }
         }
         return parts.joinToString(separator = " · ")
