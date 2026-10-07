@@ -54,17 +54,9 @@ public data class ServerCapabilitiesDto(
     public val transcodingUsable: Boolean
         get() = transcodingEnabled && hasExtension(EXTENSION_TRANSCODING)
 
-    /** Whether `getLyricsBySongId` may be offered (v2 in the UI, but cheap to record). */
-    public val lyricsUsable: Boolean get() = hasExtension(EXTENSION_SONG_LYRICS)
-
     public companion object {
-        public const val EXTENSION_API_KEY_AUTHENTICATION: String = "apiKeyAuthentication"
-        public const val EXTENSION_FORM_POST: String = "formPost"
-        public const val EXTENSION_TRANSCODE_OFFSET: String = "transcodeOffset"
         public const val EXTENSION_TRANSCODING: String = "transcoding"
         public const val EXTENSION_SONG_LYRICS: String = "songLyrics"
-        public const val EXTENSION_PLAYBACK_REPORT: String = "playbackReport"
-        public const val EXTENSION_INDEX_BASED_QUEUE: String = "indexBasedQueue"
     }
 }
 
@@ -85,10 +77,6 @@ public sealed interface CapabilityProbeResult {
      */
     public data class SubsonicDisabled(
         public val partial: ServerCapabilitiesDto,
-        /** The server-side setting an administrator must switch on. */
-        public val settingKey: String = "subsonic_enabled",
-        /** Where it lives in DroppedNeedle's web UI. */
-        public val settingLocation: String = "Settings → Connect Apps → Subsonic API",
     ) : CapabilityProbeResult
 
     /**

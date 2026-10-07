@@ -52,7 +52,10 @@ public enum class PlayerStatus {
     ;
 
     public companion object {
-        /** Mirrors `Player.STATE_IDLE`, `STATE_BUFFERING`, `STATE_READY`, `STATE_ENDED` in that order. */
+        /**
+         * Mirrors `Player.STATE_BUFFERING`, `STATE_READY` and `STATE_ENDED`. `Player.STATE_IDLE` is
+         * the fallback rather than a case, so a state this build does not know degrades to idle.
+         */
         public fun fromPlayerState(state: Int): PlayerStatus = when (state) {
             PLAYER_STATE_BUFFERING -> BUFFERING
             PLAYER_STATE_READY -> READY
@@ -60,7 +63,6 @@ public enum class PlayerStatus {
             else -> IDLE
         }
 
-        internal const val PLAYER_STATE_IDLE: Int = 1
         internal const val PLAYER_STATE_BUFFERING: Int = 2
         internal const val PLAYER_STATE_READY: Int = 3
         internal const val PLAYER_STATE_ENDED: Int = 4
@@ -163,7 +165,4 @@ public class QueueBuilder {
         items = rows,
         currentIndex = currentIndex?.takeIf { it in rows.indices },
     )
-
-    /** The current sequence, so a test can assert ids do not repeat. */
-    public val sequenceWatermark: Long get() = nextSequence
 }

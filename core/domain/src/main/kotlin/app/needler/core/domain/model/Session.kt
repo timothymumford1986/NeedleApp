@@ -148,9 +148,6 @@ public data class ServerCapabilities(
 ) {
     public fun supports(extension: OpenSubsonicExtension): Boolean = extensions.contains(extension)
 
-    /** True when the app may offer anything at all: without Subsonic there is no library lane. */
-    public val canUseLibrary: Boolean get() = subsonicEnabled
-
     public companion object {
         /** A pessimistic default: everything optional off until negotiation says otherwise. */
         public val Unknown: ServerCapabilities = ServerCapabilities(

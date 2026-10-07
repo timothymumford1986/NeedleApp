@@ -43,8 +43,7 @@ import org.robolectric.annotation.GraphicsMode
  * and no section headers. With a library of 289 albums, reaching D means scrolling the whole way."
  * REQUIREMENTS.md "Library browse" had asked for it all along - Artists is `getArtists`,
  * "Alphabetical, with index jump" - and the mirror was built for it: `ArtistDao.observeArtists`
- * documents the letter as "derivable from `sort_name_normalised`" and `SortKeys.indexLetter` was
- * written and never called.
+ * documents the letter as "derivable from `sort_name_normalised`" and nothing read it.
  *
  * ## Why these assertions and not a screenshot
  *

@@ -31,13 +31,6 @@ public object FtsQuery {
         }.joinToString(separator = " ")
     }
 
-    /** Builds a MATCH expression that requires whole words only, for an explicit "search" action. */
-    public fun forExactSearch(input: String?): String? {
-        val terms: List<String> = tokenise(input)
-        if (terms.isEmpty()) return null
-        return terms.joinToString(separator = " ") { quote(it) }
-    }
-
     /**
      * Splits on anything that is not a letter, digit or apostrophe. FTS4's unicode61 tokeniser
      * would split the same way, so nothing searchable is lost, and the pieces that remain contain

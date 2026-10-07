@@ -38,9 +38,6 @@ public enum class AlbumStateDb(public val dbValue: String) {
     public companion object {
         public fun fromDbValue(value: String?): AlbumStateDb =
             entries.firstOrNull { it.dbValue == value } ?: NOT_OWNED
-
-        /** The states that make an album part of the owned library, as SQL literals. */
-        public val IN_LIBRARY_DB_VALUES: List<String> = listOf(OWNED.dbValue, PINNED.dbValue)
     }
 }
 

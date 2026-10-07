@@ -472,7 +472,7 @@ object LicenceCatalogue {
             name = "MockK",
             licence = Licence.Apache2,
             scope = DependencyScope.TestOnly,
-            coordinates = listOf("io.mockk:mockk", "io.mockk:mockk-android"),
+            coordinates = listOf("io.mockk:mockk"),
         ),
         LicencedComponent(
             name = "Turbine",

@@ -44,6 +44,7 @@ import app.needler.core.design.component.NeedlerArtwork
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerButtonTone
 import app.needler.core.design.component.NeedlerCrateControl
+import app.needler.core.design.component.NeedlerFavouriteButton
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerPullButton
@@ -64,12 +65,12 @@ import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.common.AlbumArtwork
 import app.needler.feature.library.common.AlbumFormatLabel
-import app.needler.feature.library.common.FavouriteButton
 import app.needler.feature.library.common.LibraryFormat
 import app.needler.feature.library.common.RequestSheet
 import app.needler.feature.library.common.RequestSheetState
 import app.needler.feature.library.common.albumBadge
 import app.needler.feature.library.common.albumFormatSpokenLabel
+import app.needler.feature.library.common.favouriteContentDescription
 import app.needler.feature.library.common.showsOnDeviceCheck
 
 /**
@@ -182,9 +183,12 @@ fun ArtistScreen(
                 // has never heard of would be a write it cannot key, and `getStarred2` would
                 // never return it - so the control is absent rather than present and futile.
                 if (state.artist != null) {
-                    FavouriteButton(
+                    NeedlerFavouriteButton(
                         isFavourite = state.isFavourite,
-                        name = state.spokenName,
+                        contentDescription = favouriteContentDescription(
+                            isFavourite = state.isFavourite,
+                            name = state.spokenName,
+                        ),
                         onToggle = onToggleFavourite,
                         visualSize = 44.dp,
                         glyphSize = 22.dp,

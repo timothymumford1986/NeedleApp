@@ -33,12 +33,4 @@ public object WireTime {
     }
 
     public fun toEpochMillis(value: Instant?): Long? = value?.toEpochMilliseconds()
-
-    /** ISO-8601 first, then epoch seconds, for fields whose shape differs between server versions. */
-    public fun fromIsoOrEpochSeconds(value: String?): Instant? {
-        val parsed: Instant? = fromIso(value)
-        if (parsed != null) return parsed
-        val asDouble: Double = value?.trim()?.toDoubleOrNull() ?: return null
-        return fromEpochSeconds(asDouble)
-    }
 }

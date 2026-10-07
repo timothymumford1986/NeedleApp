@@ -47,10 +47,6 @@ data class WearOnWatchState(
 
     val tracksOnWatch: Int get() = rows.sumOf { row -> row.heldTracks }
 
-    /** True when the selection is full, so the screen can say why an add did nothing. */
-    val selectionFull: Boolean
-        get() = rows.count { row -> row.wanted } >= WearPlaybackProtocol.MAX_WANTED_ALBUMS
-
     /** True when something is still arriving, which is what the screen reports as syncing. */
     val transferring: Boolean get() = rows.any { row -> row.transferring }
 

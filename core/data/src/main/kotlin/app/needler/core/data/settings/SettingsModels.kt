@@ -150,8 +150,6 @@ public data class CrossfadeSettings(
         /** The choices drawn on screen 20. */
         public val OPTIONS_SECONDS: List<Int> = listOf(0, 4, 6, 12)
 
-        public const val MAX_SECONDS: Int = 12
-
         /** Snaps any stored value to a supported one, so a bad value cannot reach the audio chain. */
         public fun sanitiseSeconds(seconds: Int): Int =
             if (OPTIONS_SECONDS.contains(seconds)) seconds else 0

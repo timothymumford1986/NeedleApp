@@ -460,43 +460,6 @@ fun NeedlerPullButton(
 }
 
 /**
- * The format badge: FLAC, MP3 320.
- *
- * A 6dp-cornered outline in the positive green with Space Grotesk 11sp/700 at `0.08em`, as the pack
- * draws it on Now Playing (07) and the tablet sidebar (09). Screen 13 draws the same information as a
- * green label with the on-device glyph instead; that variant is a [NeedlerStateBadge] plus a text run,
- * not this.
- *
- * **The player no longer uses it.** One badge could only state one format, and the player has two
- * facts to state that are frequently different - what is on the device, and what the server would send
- * over this connection - so both surfaces draw [NeedlerQualityTag] twice instead. This is kept for any
- * surface that genuinely has one format to report, which is the shape the pack drew.
- */
-@Composable
-fun NeedlerFormatBadge(
-    format: String,
-    modifier: Modifier = Modifier,
-    tint: Color = NeedlerTheme.colors.positive,
-) {
-    val shape = NeedlerTheme.shapes.formatBadge
-    Box(
-        modifier = modifier
-            .clip(shape)
-            .border(NeedlerTheme.sizes.hairlineThickness, tint, shape)
-            .defaultMinSize(minHeight = 24.dp)
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = format,
-            style = NeedlerTheme.typography.badge,
-            color = tint,
-            maxLines = 1,
-        )
-    }
-}
-
-/**
  * Which of a pair of quality tags is the one actually in force.
  *
  * Not styling for its own sake: a local copy always wins over any streaming setting, so a screen that

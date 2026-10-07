@@ -48,22 +48,6 @@ public class CacheIndex(
     public fun observeUsage(): Flow<CacheUsage> =
         audioCacheDao.observeUsage().map { it.toUsage() }
 
-    /**
-     * Usage together with the device's free space, which is the only thing that bounds the cache.
-     *
-     * Free space is re-read on every emission rather than sampled once: it moves as other apps write,
-     * and a Storage screen showing a stale figure would invite the user to clear things that are not
-     * the problem.
-     */
-    public fun observeStatus(): Flow<CacheStatus> =
-        audioCacheDao.observeUsage().map { row ->
-            CacheStatus(
-                usage = row.toUsage(),
-                deviceFreeBytes = deviceFreeSpace.freeBytes(),
-                floorBytes = floorBytes(),
-            )
-        }
-
     public suspend fun usage(): CacheUsage = audioCacheDao.getUsage().toUsage()
 
     public suspend fun status(): CacheStatus = CacheStatus(

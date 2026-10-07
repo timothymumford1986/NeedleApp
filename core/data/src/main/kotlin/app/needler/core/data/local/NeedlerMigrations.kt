@@ -186,17 +186,4 @@ public object NeedlerMigrations {
      * compose them to skip versions.
      */
     public val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
-
-    /**
-     * Convenience for a migration that has rewritten `album` or `track`: drops the search triggers,
-     * recreates them and rebuilds both indexes from their content tables.
-     *
-     * Kept here rather than inline in each migration so that a future migration cannot recreate
-     * seven of the eight triggers and leave search subtly wrong for updates only.
-     */
-    public fun refreshSearchIndex(db: SupportSQLiteDatabase) {
-        FtsTriggers.dropAll(db)
-        FtsTriggers.createAll(db)
-        FtsTriggers.rebuildAll(db)
-    }
 }

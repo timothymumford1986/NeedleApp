@@ -91,8 +91,6 @@ data class NeedlerSpacing(
     val step14: Dp = 28.dp,
     /** 32dp - between the header block and the form on Connect. */
     val step16: Dp = 32.dp,
-    /** 36dp. */
-    val step18: Dp = 36.dp,
     /** 40dp. */
     val step20: Dp = 40.dp,
 
@@ -106,8 +104,6 @@ data class NeedlerSpacing(
     val tabletSidebarGutter: Dp = 32.dp,
     /** Gap between sections on a scrolling screen. 18dp. */
     val sectionGap: Dp = 18.dp,
-    /** Gap between a section header and its first row. 6dp. */
-    val sectionHeaderGap: Dp = 6.dp,
     /** Phone album grid: 20dp between rows, 16dp between columns. */
     val gridRowGapPhone: Dp = 20.dp,
     val gridColumnGapPhone: Dp = 16.dp,
@@ -169,14 +165,6 @@ data class NeedlerSizes(
      */
     val minTouchTarget: Dp = 48.dp,
 
-    /** Secondary transport button (shuffle, queue). 44-48dp. */
-    val transportSmall: Dp = 48.dp,
-    /** Previous / next. 56dp on Now Playing, 48dp in the tablet sidebar. */
-    val transportMedium: Dp = 56.dp,
-    /** Play / pause on Now Playing. 80dp. */
-    val playButtonLarge: Dp = 80.dp,
-    /** Play / pause in the tablet sidebar. 68dp. */
-    val playButtonMedium: Dp = 68.dp,
     /** Play / pause in the mini-player and on the lock screen. 44dp visual. */
     val playButtonSmall: Dp = 44.dp,
 
@@ -211,8 +199,7 @@ data class NeedlerSizes(
     val switchThumb: Dp = 24.dp,
     /** Hairline border and divider thickness. 1dp. */
     val hairlineThickness: Dp = 1.dp,
-    /** Bottom nav: 84dp tall with 56dp items and a 24dp bottom inset. */
-    val navBarHeight: Dp = 84.dp,
+    /** Bottom nav item. 56dp, in the pack's 84dp bar with a 24dp bottom inset. */
     val navItemMinHeight: Dp = 56.dp,
     /** Tablet nav rail: 96dp wide with 64dp items. */
     val navRailWidth: Dp = 96.dp,

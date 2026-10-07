@@ -33,12 +33,6 @@ public value class ReleaseGroupMbid(public val value: String) {
 
     public companion object {
         public const val SUBSONIC_PREFIX: String = "al-"
-
-        /** Parses a Subsonic album ID (`al-<mbid>`) or a bare MBID. Returns null for anything empty. */
-        public fun fromSubsonicAlbumId(id: String): ReleaseGroupMbid? {
-            val bare: String = id.removePrefix(SUBSONIC_PREFIX).trim()
-            return if (bare.isEmpty()) null else ReleaseGroupMbid(bare)
-        }
     }
 }
 
@@ -62,9 +56,6 @@ public value class ArtistMbid(public val value: String) {
     init {
         require(value.isNotBlank()) { "ArtistMbid must not be blank" }
     }
-
-    /** The Subsonic artist ID for this artist, i.e. `ar-<mbid>`. */
-    public val subsonicArtistId: String get() = SUBSONIC_PREFIX + value
 
     /**
      * True when DroppedNeedle derived this id from the artist's *name* rather than matching them to
@@ -170,18 +161,10 @@ public value class PlaylistId(public val value: String) {
         require(value.isNotBlank()) { "PlaylistId must not be blank" }
     }
 
-    /** The Subsonic playlist ID, i.e. `pl-<id>`. */
-    public val subsonicPlaylistId: String get() = SUBSONIC_PREFIX + value
-
     override fun toString(): String = value
 
     public companion object {
         public const val SUBSONIC_PREFIX: String = "pl-"
-
-        public fun fromSubsonicPlaylistId(id: String): PlaylistId? {
-            val bare: String = id.removePrefix(SUBSONIC_PREFIX).trim()
-            return if (bare.isEmpty()) null else PlaylistId(bare)
-        }
     }
 }
 
@@ -228,11 +211,6 @@ public value class FileId(public val value: String) {
 
     public companion object {
         public const val SUBSONIC_PREFIX: String = "tr-"
-
-        public fun fromSubsonicTrackId(id: String): FileId? {
-            val bare: String = id.removePrefix(SUBSONIC_PREFIX).trim()
-            return if (bare.isEmpty()) null else FileId(bare)
-        }
     }
 }
 

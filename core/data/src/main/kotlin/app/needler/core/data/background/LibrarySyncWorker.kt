@@ -13,7 +13,6 @@ import app.needler.core.domain.repository.SyncRepository
 import app.needler.core.network.CredentialProvider
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Syncs the mirror when something other than a screen says it should.
@@ -88,9 +87,5 @@ public class LibrarySyncWorker @AssistedInject constructor(
 
         /** Unique: two syncs at once would interleave their writes and race the revision update. */
         public const val WORK_NAME: String = "needler-sync"
-
-        /** The staleness window the foreground trigger uses, exposed so the app can share it. */
-        public val STALE_AFTER: kotlin.time.Duration =
-            SyncRepository.DefaultStaleAfter.inWholeMilliseconds.milliseconds
     }
 }

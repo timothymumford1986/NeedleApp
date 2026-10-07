@@ -53,6 +53,7 @@ import app.needler.core.design.component.NeedlerAlbumSource
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerButtonTone
 import app.needler.core.design.component.NeedlerCrateControl
+import app.needler.core.design.component.NeedlerFavouriteButton
 import app.needler.core.design.component.PathChevronLeft
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerLinearProgress
@@ -77,12 +78,12 @@ import app.needler.core.domain.model.AlbumAction
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.StreamRung
 import app.needler.feature.library.common.AlbumArtwork
-import app.needler.feature.library.common.FavouriteButton
 import app.needler.feature.library.common.LibraryFormat
 import app.needler.feature.library.common.RequestSheet
 import app.needler.feature.library.common.RequestSheetState
 import app.needler.feature.library.common.albumBadge
 import app.needler.feature.library.common.failureExplanation
+import app.needler.feature.library.common.favouriteContentDescription
 import app.needler.feature.library.library.LibraryTrackRow
 
 /**
@@ -487,9 +488,12 @@ private fun LazyListScope.trackRows(
                     onPlayNext = { onAddTrackToCrate(row, true) },
                     visualSize = 36.dp,
                 )
-                FavouriteButton(
+                NeedlerFavouriteButton(
                     isFavourite = row.track.isFavourite,
-                    name = LibraryFormat.trackLabel(row.track.title),
+                    contentDescription = favouriteContentDescription(
+                        isFavourite = row.track.isFavourite,
+                        name = LibraryFormat.trackLabel(row.track.title),
+                    ),
                     onToggle = { onToggleTrackFavourite(row) },
                     visualSize = 36.dp,
                     glyphSize = 18.dp,
@@ -566,9 +570,12 @@ private fun AlbumTopBar(
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (album != null) {
-                FavouriteButton(
+                NeedlerFavouriteButton(
                     isFavourite = album.isFavourite,
-                    name = LibraryFormat.albumLabel(album.title),
+                    contentDescription = favouriteContentDescription(
+                        isFavourite = album.isFavourite,
+                        name = LibraryFormat.albumLabel(album.title),
+                    ),
                     onToggle = onToggleFavourite,
                     enabled = !busy,
                     visualSize = 44.dp,

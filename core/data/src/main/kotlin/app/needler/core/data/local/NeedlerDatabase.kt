@@ -294,15 +294,6 @@ public abstract class NeedlerDatabase : RoomDatabase() {
                 .build()
 
         /**
-         * In-memory instance for instrumented tests. Migrations are not applied to an in-memory
-         * database, so this is no substitute for a Room migration test over the exported schemas.
-         */
-        public fun createInMemory(context: Context): NeedlerDatabase =
-            Room.inMemoryDatabaseBuilder(context, NeedlerDatabase::class.java)
-                .addCallback(Callback)
-                .build()
-
-        /**
          * Creates the hand-written parts of the schema that Room does not generate: the
          * external-content FTS triggers, and the singleton `sync_state` row.
          *

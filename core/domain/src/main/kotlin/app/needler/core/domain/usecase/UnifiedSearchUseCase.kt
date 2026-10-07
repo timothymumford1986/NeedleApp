@@ -1,5 +1,6 @@
 package app.needler.core.domain.usecase
 
+import app.needler.core.domain.NameKeys
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
@@ -529,14 +530,10 @@ public class UnifiedSearchUseCase(
         }
 
         /**
-         * The key two names are compared on: case-folded, with runs of whitespace collapsed.
-         *
-         * Punctuation is deliberately kept. "!!!" is a real artist and stripping its name leaves
-         * nothing at all to compare, which is the same reason the mirror's sort keys keep theirs.
+         * The key two names are compared on: [NameKeys.fold], which is also what the mirror's sort
+         * columns and genre identity are built from, so a name that matches here is the same name
+         * that sorted there.
          */
-        private fun nameKey(value: String): String =
-            value.trim().replace(WHITESPACE, " ").lowercase()
-
-        private val WHITESPACE: Regex = Regex("\\s+")
+        private fun nameKey(value: String): String = NameKeys.fold(value)
     }
 }

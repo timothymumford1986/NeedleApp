@@ -1,5 +1,6 @@
 package app.needler.feature.library.library
 
+import app.needler.core.domain.NameKeys
 import app.needler.core.domain.model.Artist
 import java.text.Normalizer
 
@@ -10,25 +11,30 @@ import java.text.Normalizer
  * index jump". The alphabetical half shipped; the jump did not, so reaching "D" in a 289-album
  * library meant scrolling the whole way. The data layer was already built for it -
  * `ArtistDao.observeArtists` is documented as "Alphabetical, with the index-jump letter derivable
- * from `sort_name_normalised`" and `SortKeys.indexLetter` exists for exactly this - and nothing read
- * either.
+ * from `sort_name_normalised`" - and nothing read it.
  *
- * ## Why the letter is derived here and not read from `SortKeys`
+ * ## Why the fold is shared and the bucketing is not
  *
- * `SortKeys.indexLetter` in `:core:data` is the canonical copy and it sits next to the schema,
- * where the contents of an indexed column belong. `:feature:library` cannot
- * reach it: the module's own build file states the layering rule - a feature "depends on
- * :core:domain", ":core:design", and "does NOT depend on :core:data or :core:network" - and an
- * index strip is not a reason to breach it. So the fold is repeated here, and the handover note is
- * that the shared home for it is `:core:domain` beside [Artist.sortName], which is the field the
- * whole mechanism keys off.
+ * The name fold is [NameKeys.sortKey] in `:core:domain`, the same call the mirror's
+ * `sort_name_normalised` columns are written with, so the strip and the list it scrolls agree about
+ * what a name is by construction rather than by two copies of two lines staying in step.
+ * `:feature:library` cannot reach `:core:data`, where those columns are declared - the module's own
+ * build file states the layering rule, that a feature "depends on :core:domain", ":core:design", and
+ * "does NOT depend on :core:data or :core:network" - and `:core:domain` is the module both sides
+ * already have, beside [Artist.sortName], which is the field the whole mechanism keys off.
  *
- * The normalisation is repeated too, deliberately, even though [Artist.sortName] arrives from the
- * mirror already normalised. It has to be: `sortName` **defaults to `name`**, so an `Artist`
- * constructed anywhere other than `EntityMappers` carries a raw display name - "The Marias" rather
- * than "marias" - and bucketing that under T would file a third of a library under one letter. The
- * fold is idempotent over an already-normalised value, so doing it twice costs nothing and doing it
- * once in the wrong place costs the whole feature.
+ * The bucketing stays here, because which labels exist is a property of a 27-chip control and not of
+ * the schema. **The rejected alternative** is a shared letter helper taking the first character
+ * whenever `Char.isLetter()` agrees: that hands the strip "Ø" and "東" as chips of their own, which
+ * is a control whose width depends on the library. The accent fold below and [OTHER] are the answer
+ * instead, and they belong with the thing that has 27 slots to fill.
+ *
+ * The fold is applied here even though [Artist.sortName] arrives from the mirror already folded. It
+ * has to be: `sortName` **defaults to `name`**, so an `Artist` constructed anywhere other than
+ * `EntityMappers` carries a raw display name - "The Marias" rather than "marias" - and bucketing
+ * that under T would file a third of a library under one letter. The fold is idempotent over an
+ * already-folded value, so doing it twice costs nothing and doing it once in the wrong place costs
+ * the whole feature.
  *
  * ## Accented and non-Latin names
  *
@@ -96,7 +102,7 @@ internal object ArtistIndex {
      * that disagreed with the list would scroll to the wrong place by a third of the alphabet.
      */
     fun bucketOf(artist: Artist): String {
-        val normalised: String = normalise(artist.sortName)
+        val normalised: String = NameKeys.sortKey(artist.sortName)
         val first: Char = normalised.firstOrNull() ?: return OTHER
         val folded: Char = fold(first).uppercaseChar()
         return if (folded in 'A'..'Z') folded.toString() else OTHER
@@ -112,25 +118,6 @@ internal object ArtistIndex {
     }
 
     /**
-     * Lower-cases, collapses whitespace and strips one leading article.
-     *
-     * A deliberate copy of `SortKeys.normalise`, kept behaviourally identical including its refusal
-     * to strip punctuation - "!!!" is a real artist and stripping its name leaves nothing to file it
-     * under. See this object's own notes for why it is a copy.
-     */
-    private fun normalise(value: String): String {
-        val collapsed: String = value.trim().replace(WHITESPACE, " ").lowercase()
-        if (collapsed.isEmpty()) return ""
-        for (article in LEADING_ARTICLES) {
-            if (collapsed.startsWith(article)) {
-                val stripped: String = collapsed.removePrefix(article).trim()
-                return stripped.ifEmpty { collapsed }
-            }
-        }
-        return collapsed
-    }
-
-    /**
      * One character with its accents removed, or the character itself when it has none to remove.
      *
      * NFD splits a precomposed letter into its base plus combining marks; dropping the marks leaves
@@ -143,10 +130,6 @@ internal object ArtistIndex {
             character.category != CharCategory.NON_SPACING_MARK
         } ?: value
     }
-
-    private val LEADING_ARTICLES: List<String> = listOf("the ", "a ", "an ")
-
-    private val WHITESPACE: Regex = Regex("\\s+")
 }
 
 /**

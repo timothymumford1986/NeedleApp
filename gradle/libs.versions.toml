@@ -209,7 +209,6 @@ androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version
 androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "androidxTestEspresso" }
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 mockk-unit = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
-mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
 
 # ---- jvm screenshot rendering ----
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }

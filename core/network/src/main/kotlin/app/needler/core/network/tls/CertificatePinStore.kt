@@ -131,9 +131,6 @@ public data class CertificateDetails(
     public val notAfter: Date,
     public val isSelfSigned: Boolean,
 ) {
-    public val isExpired: Boolean get() = Date().after(notAfter)
-    public val isNotYetValid: Boolean get() = Date().before(notBefore)
-
     public companion object {
         /** Reads [certificate] into the five things the user is entitled to see before deciding. */
         public fun of(host: String, certificate: X509Certificate): CertificateDetails =

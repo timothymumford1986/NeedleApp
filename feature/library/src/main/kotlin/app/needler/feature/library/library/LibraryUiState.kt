@@ -6,7 +6,6 @@ import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumListKind
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.LibraryStats
-import app.needler.core.domain.model.StatsSource
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.model.TrackListKind
@@ -108,17 +107,6 @@ data class LibraryUiState(
             lastScanAt = stats?.lastScanAt,
             now = renderedAt,
         )
-
-    /**
-     * Whether the figures on the header came from the server or from counting
-     * the mirror.
-     *
-     * REQUIREMENTS.md: "`GET /api/v1/library/stats` gives authoritative totals;
-     * the local sum is the offline fallback." The two can disagree, and the
-     * screen would rather say which it is showing than quietly present a local
-     * estimate as the server's number.
-     */
-    val statsAreLocal: Boolean get() = stats?.source == StatsSource.LOCAL_MIRROR
 
     /** The grid/list toggle only applies to albums; artists and songs are always lists. */
     val showsGrid: Boolean get() = tab == LibraryTab.ALBUMS && viewMode == LibraryViewMode.GRID

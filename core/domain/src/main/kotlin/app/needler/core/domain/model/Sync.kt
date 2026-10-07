@@ -21,9 +21,6 @@ public data class SyncState(
     val lastError: NeedlerError? = null,
 ) {
     public val isSyncing: Boolean get() = phase != SyncPhase.IDLE
-
-    /** True when no sync has ever completed, so the mirror cannot be trusted to be complete. */
-    public val hasNeverSynced: Boolean get() = lastFullSyncAt == null
 }
 
 public enum class SyncPhase {

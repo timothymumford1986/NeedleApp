@@ -1,5 +1,7 @@
 package app.needler.core.data.mapper
 
+import app.needler.core.domain.NameKeys
+
 /**
  * How the denormalised `album.genres` column is encoded.
  *
@@ -43,8 +45,9 @@ package app.needler.core.data.mapper
  * [fold] is the key two genre names are compared on. It exists because "Indie Rock" and
  * "indie rock" are one genre and arrive as two strings, and the server has both: the legacy `genre`
  * field is whatever the tagger wrote, while the `genres` list comes from the server's own index.
- * The same folding is `UnifiedSearchUseCase.nameKey`, for the same reason and with the same refusal
- * to strip punctuation - "!!!" is a real name and an R&B bucket must not become "rb".
+ * The fold is `NameKeys.fold` in `:core:domain`, shared with the mirror's sort columns and with the
+ * relevance score in `UnifiedSearchUseCase` - the same question asked of a name, with the same
+ * refusal to strip punctuation, since "!!!" is a real name and an R&B bucket must not become "rb".
  *
  * Folding decides **identity**, never what is drawn: the first spelling encountered wins the display
  * form. Rejected: title-casing the fold to get a canonical label, which would render "IDM" as "Idm"
@@ -84,8 +87,7 @@ public object GenreCodec {
      *
      * Punctuation is kept, for the reason this file's header gives.
      */
-    public fun fold(genre: String): String =
-        genre.trim().replace(WHITESPACE, " ").lowercase()
+    public fun fold(genre: String): String = NameKeys.fold(genre)
 
     /**
      * Encodes for storage. Returns null for an empty list so the column stays NULL rather than `||`.
@@ -123,6 +125,4 @@ public object GenreCodec {
 
     /** The `LIKE` pattern that matches exactly one genre inside an encoded column. */
     public fun likePattern(genre: String): String = "%" + DELIMITER + genre.trim() + DELIMITER + "%"
-
-    private val WHITESPACE: Regex = Regex("\\s+")
 }

@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerChevronDownIcon
+import app.needler.core.design.component.NeedlerFavouriteButton
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.ArtistMbid
@@ -34,7 +35,6 @@ import app.needler.core.domain.playback.PlaybackProgress
 import app.needler.feature.player.PlayerUiState
 import app.needler.feature.player.ui.ArtworkOnRecord
 import app.needler.feature.player.ui.ArtworkOnRecordMetrics
-import app.needler.feature.player.ui.FavouriteButton
 import app.needler.feature.player.ui.PlayerQueueIcon
 import app.needler.feature.player.ui.QualityTags
 import app.needler.feature.player.ui.Scrubber
@@ -192,8 +192,13 @@ fun NowPlayingScreen(
                 // Beside the title, where every player puts it and where the thing being favourited is
                 // named. Absent with nothing playing: there is no track to star.
                 if (state.hasTrack) {
-                    FavouriteButton(
+                    NeedlerFavouriteButton(
                         isFavourite = state.isFavourite,
+                        contentDescription = if (state.isFavourite) {
+                            "Remove from favourites"
+                        } else {
+                            "Add to favourites"
+                        },
                         onToggle = onToggleFavourite,
                     )
                 }

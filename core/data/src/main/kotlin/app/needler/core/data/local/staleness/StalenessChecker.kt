@@ -192,17 +192,6 @@ public object StalenessChecker {
         return StalenessReport(stale = stale, unchangedCount = unchanged)
     }
 
-    /** Convenience for the DAO projection, so sync does not map rows by hand. */
-    public fun detectFromRows(
-        cached: List<CachedAudioSignatureRow>,
-        fresh: List<ServerTrackMetadata>,
-        treatMissingAsRemoved: Boolean = true,
-    ): StalenessReport = detect(
-        cached = cached.map(CachedAudioSignature::from),
-        fresh = fresh,
-        treatMissingAsRemoved = treatMissingAsRemoved,
-    )
-
     /**
      * The four-signal comparison for one track. An empty result means the cached bytes are still
      * the file the server is serving.

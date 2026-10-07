@@ -60,9 +60,19 @@ const val PathHeart: String =
  *
  * It is here in `:core:design` because two feature modules draw it and a feature module cannot see
  * another feature module - which is how the app came to have two of them drawing two different shapes
- * with two different sets of metrics. `:feature:library` and `:feature:player` each keep a thin
- * `FavouriteButton` of their own that calls this, because their call sites pass different things: the
- * library names the subject ("Star Revolver"), the player has only "the track that is playing".
+ * with two different sets of metrics.
+ *
+ * Each module briefly kept a thin `FavouriteButton` of its own that forwarded to this, on the grounds
+ * that their call sites say different things: the library names the subject ("Star Revolver"), the
+ * player has only the track that is playing. Those two files existed to choose between two strings, so
+ * they are gone and the five call sites pass [contentDescription] here directly. The library's three
+ * take theirs from `favouriteContentDescription`, which is named and tested because interpolating a
+ * subject into "Starred" or "Star" is the wording that can go wrong; the player's two pass a fixed
+ * pair inline.
+ *
+ * There is no heart on the mini player, and the merge did not add one. That bar is 64dp holding a
+ * title, an artist, a 44dp play button and next; a fourth target in it would be under the thumb that
+ * was reaching for play. Now Playing is one tap away and carries the control at full size.
  *
  * ## Two channels, never one
  *

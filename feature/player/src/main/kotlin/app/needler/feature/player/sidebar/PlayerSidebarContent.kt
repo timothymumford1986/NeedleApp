@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.needler.core.design.component.NeedlerFavouriteButton
 import app.needler.core.design.component.NeedlerVerticalHairline
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.ArtistMbid
@@ -39,7 +40,6 @@ import app.needler.feature.player.crate.ROW_KEY_PREFIX
 import app.needler.feature.player.crate.rememberQueueReorderState
 import app.needler.feature.player.ui.ArtworkOnRecord
 import app.needler.feature.player.ui.ArtworkOnRecordMetrics
-import app.needler.feature.player.ui.FavouriteButton
 import app.needler.feature.player.ui.QualityTags
 import app.needler.feature.player.ui.Scrubber
 import app.needler.feature.player.ui.SessionControls
@@ -200,11 +200,16 @@ fun PlayerSidebarContent(
                         }
                     }
                     if (state.hasTrack) {
-                        FavouriteButton(
+                        NeedlerFavouriteButton(
                             isFavourite = state.isFavourite,
+                            contentDescription = if (state.isFavourite) {
+                                "Remove from favourites"
+                            } else {
+                                "Add to favourites"
+                            },
                             onToggle = onToggleFavourite,
                             visualSize = 40.dp,
-                            iconSize = 20.dp,
+                            glyphSize = 20.dp,
                         )
                     }
                 }

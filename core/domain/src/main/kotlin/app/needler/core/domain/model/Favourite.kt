@@ -22,8 +22,6 @@ public sealed interface FavouriteTarget {
 public data class Favourite(
     val target: FavouriteTarget,
     val starredAt: Instant?,
-    /** True while the star/unstar has not yet been replayed to the server from the write queue. */
-    val isPendingSync: Boolean = false,
 )
 
 /** The three favourite collections the Favourites screen shows, sourced from `getStarred2`. */

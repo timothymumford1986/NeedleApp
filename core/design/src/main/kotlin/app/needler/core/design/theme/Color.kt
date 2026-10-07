@@ -58,8 +58,6 @@ data class NeedlerColors(
 
     /** Hovered or focused accent, from `a:hover { color: #d3e8f8 }`. */
     val accentHover: Color = Color(0xFFD3E8F8),
-    /** Pressed accent. The pack draws no separate pressed value, so it reuses the hover tint. */
-    val accentPressed: Color = Color(0xFFD3E8F8),
 
     // ---- Inverse surface (selected segment / selected preset chip) --------------------------
 
@@ -93,12 +91,8 @@ data class NeedlerColors(
 
     // ---- Sheets, widgets, grabbers -----------------------------------------------------------
 
-    /** Translucent widget and lock-screen card. `rgba(22,29,18,0.92)`. */
-    val surfaceTranslucent: Color = Color(0xFF161D12).copy(alpha = 0.92f),
     /** The tablet Connect card, which lets the record show through. `rgba(22,29,18,0.8)`. */
     val surfaceTranslucentSoft: Color = Color(0xFF161D12).copy(alpha = 0.8f),
-    /** Grabber on a card floating over content. `rgba(242,245,238,0.35)`. */
-    val grabberOnArtwork: Color = Color(0xFFF2F5EE).copy(alpha = 0.35f),
     /** Grabber on an opaque sheet, e.g. the output picker. `#1f271b`. */
     val grabberOnSheet: Color = Color(0xFF1F271B),
 

@@ -565,13 +565,6 @@ public enum class RequestOutcome(public val serverToken: String?) {
      */
     public val isRetryable: Boolean get() = this == FAILED || this == CANCELLED
 
-    /** True while the server still has work to do for this request. */
-    public val isSettled: Boolean
-        get() = when (this) {
-            COMPLETED, REJECTED, FAILED, CANCELLED -> true
-            PENDING, AWAITING_APPROVAL, IN_PROGRESS, OTHER -> false
-        }
-
     public companion object {
         /** Maps the server's `status`. Unknown and blank both become [OTHER]; see the class KDoc. */
         public fun fromServerToken(token: String?): RequestOutcome {
