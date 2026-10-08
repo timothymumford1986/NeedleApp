@@ -1,3 +1,4 @@
+import app.needler.buildlogic.configureRobolectricTests
 // :player:service — the Media3 MediaLibraryService, the audio processor chain, the
 // write-through audio cache datasource and the Android Auto browse tree.
 // REQUIREMENTS.md "Architecture > Modules", "Playback", "Offline and caching".
@@ -69,4 +70,17 @@ dependencies {
     // this product removed), it cannot exempt a downloaded album from eviction,
     // it would retain transcodes, and it has nowhere to hold the per-track
     // fingerprint the staleness check compares against.
+
+    // Robolectric, for the three classes in this module that hold Android types rather than
+    // arithmetic: `BrowseItems` builds `Bundle` extras and parses `Uri`s, and `AudioOutputs` reads
+    // `AudioManager`. The module's nineteen other test files need none of it - they test
+    // `BrowseTree`, `OutputTargetMapper`, `EqualiserKernel` and the rest, which is exactly the
+    // split that let a framework contract go unasserted. See `EqualiserAudioProcessorTest`.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
 }
+
+// Robolectric needs a larger heap and a set of `--add-opens` to reach into the JDK, without
+// which every test in it fails as "Failed to interact with raw FileDescriptor internals".
+// Shared with `needler.screenshots`, which is where the list used to live alone.
+configureRobolectricTests()

@@ -1,3 +1,4 @@
+import app.needler.buildlogic.configureRobolectricTests
 // :core:data — Room mirror, sync, offline write queue, repository implementations.
 // REQUIREMENTS.md "Architecture > Modules", "Local persistence", "Offline and caching".
 //
@@ -62,4 +63,22 @@ dependencies {
 
     testImplementation(libs.room.testing)
     testImplementation(libs.androidx.work.testing)
+    // Robolectric, for the two `CoroutineWorker`s. `TestListenableWorkerBuilder` needs a real
+    // `Context` to build `WorkerParameters`, and a worker is where `doWork`'s mapping from a
+    // poll result to `Result.retry()` or `Result.success()` actually lives.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
+
+    // Instrumented tests. `SecureCredentialStoreKeystoreTest` has been in the tree since the
+    // security work and had never run: the source set existed, the convention plugin set
+    // `testInstrumentationRunner`, and nothing put JUnit or `androidx.test` on the androidTest
+    // classpath, so the task had nothing to compile. The Android Keystore does not exist on the JVM
+    // and Robolectric's shadow of it has no key material behind it, so that file is the only thing
+    // that can prove a secret is actually encrypted.
+    androidTestImplementation(libs.junit4)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.core)
 }
+
+// See `app.needler.buildlogic.Robolectric`: the heap and `--add-opens` Robolectric needs.
+configureRobolectricTests()
