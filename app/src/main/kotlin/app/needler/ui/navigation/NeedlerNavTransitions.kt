@@ -6,7 +6,9 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.ui.unit.IntOffset
 import app.needler.core.design.motion.NeedlerMotion
@@ -223,4 +225,89 @@ object NeedlerNavTransitions {
     /** Any move within the inner graph, leaving. */
     fun contentExit(reducedMotion: Boolean): ExitTransition =
         if (reducedMotion) ExitTransition.None else ContentFadeOut
+
+    // -------------------------------------------------- a Back the finger is still holding
+
+    /**
+     * How far the outgoing screen shrinks at the end of a full drag. 0.9.
+     *
+     * The platform's own figure. navigation-compose defaults to `scaleOut(0.7f)`, which is a far
+     * bigger collapse than anything Android draws, and it scales **about the centre** so the screen
+     * implodes in place rather than being pushed aside.
+     */
+    const val PredictiveScale: Float = 0.9f
+
+    /**
+     * How far it slides, as a fraction of the window's width. 0.08.
+     *
+     * Small on purpose: the gesture is a peel, not a page turn. Together with [PredictiveScale] this
+     * is the shape Android draws for a system Back - the surface eases away from under the finger
+     * and the destination is revealed behind it, rather than through it.
+     */
+    const val PredictiveSlideFraction: Float = 0.08f
+
+    /**
+     * The screen being dragged off, while the finger is still down.
+     *
+     * ## What this replaced, and why the old answer was wrong
+     *
+     * The inner graph left this pair at navigation-compose's defaults, on the recorded belief that
+     * "a gestural Back in here gets the platform's own seeked `scaleOut(0.7f)` preview of the screen
+     * behind". The library's default is not the platform's animation. It is
+     * `scaleOut(targetScale = 0.7f)` plus a fade, against a fade-in underneath, and seeking that
+     * pair draws both screens at partial alpha for the whole of the drag: a double exposure that
+     * follows the thumb, with the outgoing screen collapsing to seven-tenths in the middle of the
+     * window.
+     *
+     * Android's predictive Back does none of that. The outgoing surface stays **opaque**, shrinks
+     * only slightly, and travels in the direction the finger is travelling. The destination sits
+     * still and opaque behind it. That is what this builds.
+     *
+     * ## Why the swipe edge matters here and not on the player layer
+     *
+     * The outer graph ignores it deliberately - Now Playing moves on the vertical axis, so which
+     * side the finger came from says nothing about where the sheet should go. A content pane is the
+     * opposite case: the whole illusion is that the screen is being pushed aside, and a screen that
+     * slid left while the finger pulled right would read as a fight with the gesture.
+     *
+     * A drag from the left edge travels rightwards, so the surface goes with it, and the reverse
+     * from the right edge.
+     *
+     * @param swipeEdge `BackEventCompat.EDGE_LEFT` (0) or `EDGE_RIGHT` (1).
+     */
+    fun predictivePopExit(swipeEdge: Int, reducedMotion: Boolean): ExitTransition {
+        if (reducedMotion) return ExitTransition.None
+        val direction: Int = predictiveSlideDirection(swipeEdge)
+        return scaleOut(targetScale = PredictiveScale) +
+            slideOutHorizontally { width ->
+                (width * PredictiveSlideFraction * direction).toInt()
+            }
+    }
+
+    /**
+     * Which way the screen travels: `+1` rightwards, `-1` leftwards.
+     *
+     * Hoisted for the same reason [SheetSpec] is, and the reason is worth repeating because it is a
+     * trap. `Slide` holds its offset function by reference and a transition compares by it, so two
+     * separately built slides are **never** equal however identical their numbers - which means an
+     * `assertNotEquals` between the two edges passes whether or not the edge is used at all. That
+     * is a test asserting nothing. This function is the part of the decision a test can actually
+     * read, so the direction is pinned here and the transition above is built from it.
+     *
+     * A drag from the left edge travels rightwards and the surface goes with it.
+     */
+    fun predictiveSlideDirection(swipeEdge: Int): Int = if (swipeEdge == EdgeLeft) 1 else -1
+
+    /**
+     * The screen being returned to, while the finger is still down: nothing at all.
+     *
+     * It is the transition's target, so navigation-compose never disposes it and gives it a z-index
+     * below the outgoing screen. It therefore sits still and fully opaque, which is exactly what has
+     * to be behind a surface being peeled away. Fading it up - the library's default - is what makes
+     * the two screens visible through one another for the length of the drag.
+     */
+    fun predictivePopEnter(reducedMotion: Boolean): EnterTransition = EnterTransition.None
+
+    /** `BackEventCompat.EDGE_LEFT`, inlined so this file needs no activity dependency. */
+    const val EdgeLeft: Int = 0
 }

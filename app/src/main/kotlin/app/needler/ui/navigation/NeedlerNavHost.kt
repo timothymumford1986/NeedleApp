@@ -704,16 +704,24 @@ private fun NeedlerHome(
             navController = navController,
             startDestination = NeedlerDestination.Start.route,
             // A change of content inside chrome that does not move, so all four
-            // are the same short cross-fade. The predictive pair is deliberately
-            // left at the library's defaults: a gestural Back in here gets the
-            // platform's own seeked `scaleOut(0.7f)` preview of the screen
-            // behind, which is the one place a finger-dragged Back should look
-            // different from a committed one, and the bar stays still under it
-            // either way.
+            // are the same short cross-fade.
             enterTransition = { NeedlerNavTransitions.contentEnter(reducedMotion) },
             exitTransition = { NeedlerNavTransitions.contentExit(reducedMotion) },
             popEnterTransition = { NeedlerNavTransitions.contentEnter(reducedMotion) },
             popExitTransition = { NeedlerNavTransitions.contentExit(reducedMotion) },
+            // A cross-fade is right for a Back that has already happened and wrong for one the
+            // finger is still holding. This pair used to be left at the library's defaults on the
+            // recorded belief that they were "the platform's own seeked preview"; they are
+            // `scaleOut(0.7f)` plus a fade over a fade-in, which draws both screens at partial
+            // alpha for the length of the drag while the outgoing one collapses to seven-tenths in
+            // the centre of the window. Reported from the device as looking exactly as bad as that
+            // describes. See `NeedlerNavTransitions.predictivePopExit`.
+            predictivePopEnterTransition = { _ ->
+                NeedlerNavTransitions.predictivePopEnter(reducedMotion)
+            },
+            predictivePopExitTransition = { swipeEdge ->
+                NeedlerNavTransitions.predictivePopExit(swipeEdge, reducedMotion)
+            },
         ) {
             composable(NeedlerDestination.Library.route) {
                 LibraryRoute(
