@@ -15,6 +15,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performSemanticsAction
@@ -155,6 +158,111 @@ class NowPlayingMeasureTest {
             density = 1f,
             fontScale = 2f,
         )
+
+    /**
+     * The output chip and the sleep-timer chip, at 200% text, on the pack's own phone.
+     *
+     * ## What the golden could not say
+     *
+     * `player-now-playing-large-text-phone.png` ends at row 1648 of 1688 and the last thing on it is the
+     * play button: the default golden ends at 1560 with the two chips, and at 200% they are not in the
+     * image at all. A render cannot tell a reviewer which of two things that means - content clipped
+     * away, or content below the fold of a scroll that works - because Roborazzi draws the viewport and
+     * a clipped scrollable and a broken layout produce the same PNG.
+     *
+     * This settles it. The column scrolls, the scroll reaches, and both chips come to rest inside the
+     * safe area with a system bar under them. If the scroll is ever removed - or the inset is moved
+     * outside it, which is the mistake `NowPlayingScreen` documents at length - this fails and the
+     * golden still will not.
+     */
+    @Test
+    fun `the session chips are reachable at 200 percent text`() {
+        val widthPx = 390
+        val heightPx = 844
+        val bottomInsetPx = 48
+        val density = 1f
+        val safeBottom: Dp = ((heightPx - bottomInsetPx) / density).dp
+
+        var host: View? = null
+        var screenTopInRoot = 0f
+        compose.setContent {
+            host = LocalView.current
+            CompositionLocalProvider(LocalDensity provides Density(density, 2f)) {
+                NeedlerTheme(reducedMotion = true) {
+                    Box(
+                        modifier = Modifier
+                            .requiredWidth((widthPx / density).dp)
+                            .requiredHeight((heightPx / density).dp)
+                            .onGloballyPositioned { screenTopInRoot = it.positionInRoot().y },
+                    ) {
+                        NowPlayingScreen(
+                            state = PlayerUiState(
+                                item = PlayerFixtures.playingItem,
+                                isPlaying = true,
+                                durationMs = 200_000L,
+                                output = PlayerFixtures.thisPhone,
+                                upNextCount = 6,
+                            ),
+                            progress = { PlaybackProgress(positionMs = 76_000L) },
+                            onClose = {},
+                            onOpenCrate = {},
+                            onPlayPause = {},
+                            onNext = {},
+                            onPrevious = {},
+                            onSeek = {},
+                            onToggleShuffle = {},
+                            onCycleRepeat = {},
+                            onChooseOutput = {},
+                            onToggleFavourite = {},
+                            onChooseSleepTimer = {},
+                            onOpenArtist = {},
+                        )
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.runOnUiThread { host!!.dispatchApplyWindowInsets(systemBarsOf(bottomInsetPx)) }
+        compose.waitForIdle()
+
+        val origin: Dp = (screenTopInRoot / density).dp
+        assertHeaderIsAtTheTop(origin)
+
+        // To the end of the column, which is what a thumb does. Deliberately not `performScrollTo`:
+        // a bring-into-view is satisfied by the *viewport*, and this screen's viewport reaches the
+        // screen's last pixel row because the bar is reserved as trailing content inside the scroll
+        // rather than carved out of it - so a minimal scroll parks the chip on that last row, under
+        // the bar. Measured: 844 dp of 844 on the pack's artboard, 48 dp inside a navigation bar.
+        // `SessionControls` fixes exactly this for the timer's choices by asking for a rect widened
+        // by the inset, and it has an event to hang that request on; the chips have none, so a
+        // focus-driven scroll onto the output chip still lands it short. That is recorded as an open
+        // finding rather than patched by padding the chip, which would spend the inset twice.
+        //
+        // What this asserts is the guarantee the screen does make: scrolled to its end, every control
+        // in the column is above the bar, with the pack's own 36 dp gap still under them.
+        compose.onNode(
+            hasScrollAction() and
+                hasAnyDescendant(hasContentDescription(CHANGE_THE_OUTPUT, substring = true)),
+        ).performSemanticsAction(SemanticsActions.ScrollBy) { scroll -> scroll(0f, 10_000f) }
+        compose.waitForIdle()
+
+        for (label in listOf(CHANGE_THE_OUTPUT, CHANGE_THE_TIMER)) {
+            val node = compose.onNodeWithContentDescription(label, substring = true)
+            val bounds = node.getUnclippedBoundsInRoot()
+            val top: Dp = bounds.top - origin
+            val bottom: Dp = bounds.bottom - origin
+            assertTrue(
+                label + " was laid out " + (bottom - top) + " tall, so it is not on the screen at all",
+                (bottom - top) >= MIN_PILL_HEIGHT,
+            )
+            assertTrue(
+                label + " ends at " + bottom + " with the column scrolled to its end, on a screen " +
+                    "whose safe area ends at " + safeBottom,
+                bottom <= safeBottom,
+            )
+            assertTrue(label + " starts at " + top + ", above the top of the screen", top >= 0.dp)
+        }
+    }
 
     /**
      * Lays Now Playing out in a whole phone, hands the window a bottom inset, opens the sleep timer and
@@ -305,6 +413,9 @@ class NowPlayingMeasureTest {
 
         /** The half of [app.needler.feature.player.ui.SleepTimerChip]'s label that names the action. */
         const val CHANGE_THE_TIMER: String = "Change the sleep timer"
+
+        /** The half of [app.needler.feature.player.ui.OutputChip]'s label that names the action. */
+        const val CHANGE_THE_OUTPUT: String = "Change output"
 
         /** [NowPlayingScreen]'s dismiss control, used only to find the top of the screen. */
         const val CLOSE_NOW_PLAYING: String = "Close now playing"

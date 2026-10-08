@@ -122,7 +122,7 @@ fun TransportRow(
             visualSize = size.skipButton,
         ) {
             PlayerPreviousIcon(
-                tint = if (enabled) colors.textPrimary else colors.textMuted,
+                tint = if (enabled) colors.textPrimary else colors.disabled,
                 size = size.skipIcon,
             )
         }
@@ -134,7 +134,7 @@ fun TransportRow(
             visualSize = size.playButton,
             background = if (enabled) colors.accent else colors.surfaceRaised,
         ) {
-            val tint = if (enabled) colors.onAccent else colors.textMuted
+            val tint = if (enabled) colors.onAccent else colors.disabled
             if (isPlaying) {
                 PlayerPauseIcon(tint = tint, size = size.playIcon)
             } else {
@@ -149,7 +149,7 @@ fun TransportRow(
             visualSize = size.skipButton,
         ) {
             PlayerNextIcon(
-                tint = if (enabled) colors.textPrimary else colors.textMuted,
+                tint = if (enabled) colors.textPrimary else colors.disabled,
                 size = size.skipIcon,
             )
         }
@@ -180,9 +180,11 @@ fun TransportRow(
  * distinct colours. The device audit found shuffle and repeat "markedly dimmer than the adjacent skip
  * icons" and hard to read at all, because off and unavailable were drawn in the same
  * [app.needler.core.design.theme.NeedlerColors.textMuted]: a live control that looked inoperable.
- * REQUIREMENTS.md keeps `#6f7a68` as drawn *for what the pack uses it for* - "placeholders, timecodes,
- * disabled text, inactive nav items" - and an off-but-usable shuffle is none of those, so off is
- * `textSecondary` and muted is kept for [enabled] false. No new token.
+ * `#6f7a68` is what the pack draws an inactive control in, and an off-but-usable shuffle is not one,
+ * so off is `textSecondary` and the dim value is kept for [enabled] false. That value now lives on
+ * [app.needler.core.design.theme.NeedlerColors.disabled] rather than `textMuted`: `textMuted` was
+ * raised to `#828f7a` to clear AA as the third tier of prose, which would have narrowed the
+ * off-against-unavailable separation this function exists to hold from 2.06:1 to 1.56:1.
  *
  * @param active shuffle on, or any repeat mode other than off.
  */
@@ -191,7 +193,7 @@ internal fun transportModeTint(
     enabled: Boolean,
     active: Boolean,
 ): Color = when {
-    !enabled -> colors.textMuted
+    !enabled -> colors.disabled
     active -> colors.accent
     else -> colors.textSecondary
 }

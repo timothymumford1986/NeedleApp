@@ -61,32 +61,52 @@ enum class PlaylistSyncState {
     /** True for the two states that owe the user a line of explanation. */
     val isPending: Boolean get() = this != ON_SERVER
 
-    /** The badge label, in the pack's two-or-three-word register. */
+    /**
+     * The badge label, in the pack's two-or-three-word register.
+     *
+     * ## One concept, one set of words
+     *
+     * The playlists screens had four phrasings for this: "waiting to be sent" in the header,
+     * "Edit waiting" and "Not sent yet" on the badges, "The server is told on your next
+     * connection" in the notices, and "as soon as you are back online" in the offline note. Every
+     * one of them names the same event - the write queue replaying - and a user reading three of
+     * them on one screen has to work out that they are one thing.
+     *
+     * The vocabulary is now the verb **sent** and the time **on your next connection**, and
+     * everything that names this event uses both. Nothing else in the module may invent a fifth.
+     */
     val label: String?
         get() = when (this) {
             ON_SERVER -> null
-            EDITS_QUEUED -> "Edit waiting"
+            EDITS_QUEUED -> "Edit not sent yet"
             NEVER_SENT -> "Not sent yet"
         }
 
-    /** The sentence under the header, which says what happens next rather than what went wrong. */
+    /**
+     * The sentence under the header, which says what happens next rather than what went wrong.
+     *
+     * Future tense. It read "It **is** created on the server on your next connection", which is
+     * the present tense describing something that has not happened, and reads as a claim that the
+     * server already has it - the exact opposite of what the badge above it says.
+     */
     val explanation: String?
         get() = when (this) {
             ON_SERVER -> null
             EDITS_QUEUED ->
-                "Changed on this device. The change is sent to the server on your next " +
+                "Changed on this device. The change will be sent to the server on your next " +
                     "connection; until then the server's copy has not moved."
             NEVER_SENT ->
-                "Created on this device with no connection. It plays now, and it is created on " +
-                    "the server on your next connection."
+                "Created on this device with no connection. It plays now, and it will be sent " +
+                    "to the server on your next connection."
         }
 
     /** What TalkBack announces for the badge, which has to stand on its own. */
     val spokenLabel: String?
         get() = when (this) {
             ON_SERVER -> null
-            EDITS_QUEUED -> "An edit to this playlist is waiting to be sent to the server"
-            NEVER_SENT -> "This playlist is on this device only and has not reached the server yet"
+            EDITS_QUEUED -> "An edit to this playlist has not been sent to the server yet"
+            NEVER_SENT -> "This playlist is on this device only and has not been sent to the " +
+                "server yet"
         }
 }
 

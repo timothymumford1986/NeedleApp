@@ -211,6 +211,25 @@ class AlbumViewModel @Inject constructor(
         // The mirror is the read path, so the screen is already drawn by the
         // time this returns. Refreshing is how a track list that was only ever
         // a search result gets its real contents.
+        reload()
+    }
+
+    /**
+     * Ask the server for this album again.
+     *
+     * The same call the screen makes on open, offered as an action because the state it is needed
+     * in had none. [AlbumUiState.notFound] is "the mirror has no row for this release group", and
+     * `album-not-found-phone.png` drew that as a heading, two grey lines and about 1,500px of black
+     * - no retry anywhere on it, although the likeliest cause is a sync that has not landed yet,
+     * which is exactly what this fixes.
+     *
+     * Deliberately not routed through [runExclusively]. That sets `busy`, which disables every
+     * control on the screen, and the not-found screen's two buttons are the only controls there -
+     * so a tap would grey out the Back button beside it until the fetch returned. The mirror is the
+     * read path, so the result arrives as an emission on `observeAlbum` and the screen redraws
+     * itself; there is no notice to post and nothing to serialise against.
+     */
+    fun reload() {
         viewModelScope.launch { library.refreshAlbum(releaseGroupMbid) }
     }
 

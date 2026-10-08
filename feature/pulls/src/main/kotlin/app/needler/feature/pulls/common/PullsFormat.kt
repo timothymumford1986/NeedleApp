@@ -14,7 +14,6 @@ import app.needler.core.domain.model.PullState
 import app.needler.core.domain.model.RequestHistoryEntry
 import app.needler.core.domain.model.RequestOutcome
 import app.needler.core.domain.model.RequestTarget
-import app.needler.core.domain.model.WantedGap
 import app.needler.core.domain.model.WantedRetry
 import app.needler.core.domain.model.WantedWatch
 import app.needler.core.domain.model.WantedWatchState
@@ -65,16 +64,27 @@ internal object PullsFormat {
      * whichever lane supplied it — but it must not draw a hole while the data is
      * absent, because a row with no name is a row the user cannot act on.
      *
-     * "Untitled album" rather than a dash or a blank: it occupies the title slot
-     * as a name, which is what the layout, the ellipsis and TalkBack all expect
-     * to find there. The same guard already exists one layer down for
-     * notifications — `NotificationComposer.text` uses
-     * `ifBlank { "Your pull has arrived" }` — and this is the Pulls screen's
-     * version of it. The alternative, promoting the artist's name into the title
-     * slot, was rejected: the subtitle already starts with the artist, so the row
-     * would say one name twice and still not name the album.
+     * ## The artist takes the slot before the placeholder does
+     *
+     * This used to answer "Untitled album" for every unnamed row, and the argument against
+     * promoting the artist was that "the subtitle already starts with the artist, so the row would
+     * say one name twice". The device render settled it the other way:
+     * `screenshots/pulls-missing-titles-phone.png` draws **three rows all titled "Untitled album"**,
+     * which cannot be told apart at all — and the one fact the mirror does have about each of them
+     * is whose record it is. A name that is the wrong field beats three identical placeholders.
+     *
+     * The duplication the old argument feared is removed rather than accepted: when this returns
+     * the artist, `PullsScreen.rowSubtitle` drops the artist from the line, so the row still says
+     * each name once. REQUIREMENTS.md "Accessibility" is the reason the placeholder survives at all
+     * — a pull with neither a title nor an artist still has to fill the slot with something a
+     * layout, an ellipsis and TalkBack can all work with.
+     *
+     * The originating search text would be better still and there is nowhere to read it from:
+     * [Pull] carries no record of the query a request was placed from, and adding one is a
+     * `:core:data` and `:core:domain` change. It is in the handover notes.
      */
-    fun albumTitle(pull: Pull): String = albumTitle(pull.albumTitle)
+    fun albumTitle(pull: Pull): String =
+        pull.albumTitle.ifBlank { pull.artistName }.ifBlank { UNTITLED_ALBUM }
 
     /**
      * The same guard, for the lanes that are not a [Pull].
@@ -87,6 +97,28 @@ internal object PullsFormat {
      * one type and quietly does not for the next two.
      */
     fun albumTitle(title: String): String = title.ifBlank { UNTITLED_ALBUM }
+
+    /**
+     * The same guard with the artist fallback, for the two lanes that are not a [Pull].
+     *
+     * Separate from the one-argument overload because the history lane's track requests already
+     * have a better answer than the artist — the track's own title — and reach this only once that
+     * has failed too. See [albumTitle] of a [Pull] for why the artist beats the placeholder.
+     */
+    fun albumTitle(title: String, artistName: String): String =
+        title.ifBlank { artistName }.ifBlank { UNTITLED_ALBUM }
+
+    /**
+     * The artist, unless the title slot is already drawing it.
+     *
+     * The other half of the artist fallback. [albumTitle] promotes the artist into the title of a
+     * row the mirror could not name, and without this the line under it would repeat the same name
+     * — which is precisely the objection that kept the fallback out until the device render showed
+     * three rows called "Untitled album". Each name is drawn once, in the highest slot that has
+     * nothing better to put there.
+     */
+    fun artistBeside(drawnTitle: String, artistName: String): String? =
+        artistName.takeIf { it.isNotBlank() && it != drawnTitle }
 
     /**
      * How an action label **names** the album inside a sentence: `Cancel the pull
@@ -118,11 +150,30 @@ internal object PullsFormat {
      * rather than disappearing, because a screen whose subtitle vanishes reads
      * as though it failed to load. An empty screen has its own empty state and
      * needs no subtitle at all.
+     *
+     * ## Why "in progress" counts fewer rows than the Active bucket
+     *
+     * It used to count every row REQUIREMENTS.md "Queue screen requirements" item 1 buckets as
+     * Active, and two of those states are not progressing: an approval nobody has granted and a
+     * source nobody has picked both wait on a person in DroppedNeedle's web interface. The result
+     * is in `screenshots/pulls-all-awaiting-review-phone.png` — a header reading `12 in progress`
+     * over twelve rows every one of which reads `Needs attention`, with the server doing nothing at
+     * all. The two populations are now counted apart and named apart, which is the rule
+     * `PullsLane`'s own KDoc sets out: whatever names the population owns the noun, and the figure
+     * beneath it only counts. See `PullState.waitsForAPerson` for the split.
+     *
+     * Rejected: one figure with the wording softened to "12 waiting or in progress". It is true and
+     * it is the answer to neither question — a user looking at this header wants to know whether to
+     * wait or to go and do something, and a merged figure answers that only by accident.
      */
-    fun headerLine(activeCount: Int, totalCount: Int): String = when {
+    fun headerLine(movingCount: Int, waitingCount: Int, totalCount: Int): String = when {
         // The pack's own wording, bare number and all: "2 in progress". It sits
         // directly under a title that already says what is being counted.
-        activeCount > 0 -> activeCount.toString() + " in progress"
+        movingCount > 0 && waitingCount > 0 ->
+            movingCount.toString() + " in progress · " + waitingCount + " waiting on the server"
+
+        movingCount > 0 -> movingCount.toString() + " in progress"
+        waitingCount > 0 -> waitingCount.toString() + " waiting on the server"
         totalCount > 0 -> "Nothing in progress"
         else -> ""
     }
@@ -229,11 +280,24 @@ internal object PullsFormat {
      * stops the row saying the same thing twice, and it is why a failed pull's
      * reason lives in this line rather than in the trailing column.
      *
-     * Two states therefore say nothing here, because their name is their whole
-     * account: a completed pull and a cancelled one. The badge has it.
+     * One state therefore says nothing here, because the chip is its whole account: a completed
+     * pull, whose chip is the word `Server`. A cancelled one used to say nothing either, on the
+     * same argument, and now says "stopped" — its chip says `Not retrieved`, which is where the
+     * record is and not how it got there, so without this the row could not be told from a failure.
+     * See `PullsChip` for the split the chips now follow.
      */
     fun stateDetail(pull: Pull): String? = when (pull.state) {
-        PullState.PENDING_APPROVAL -> "waiting for an administrator"
+        // Not "waiting for an administrator", which is the server's own word for its own role and
+        // meant nothing to a user who has not read DroppedNeedle's documentation.
+        //
+        // It does not say *where* either, and that is measured rather than careless: the trailing
+        // column is a fixed 112dp, which leaves this line about 26 characters of 13sp `meta` beside
+        // an artist's name, and "needs approval on the server" is 28. The screen's banner states
+        // the where for this exact population - `PullsScreen.parkedNote` counts these rows and says
+        // both of them are done in DroppedNeedle's web interface - so the row is read in a context
+        // that already answers it. That is the same trade `:core:design` recorded when it shortened
+        // "Needs attention on the server" to fifteen characters.
+        PullState.PENDING_APPROVAL -> "needs approval"
 
         // The pack's own wording, and the source is worth naming: "asking
         // slskd" tells a self-hoster which of their configured sources is being
@@ -245,7 +309,9 @@ internal object PullsFormat {
         // exist here.
         PullState.AWAITING_SOURCE_REVIEW -> "a source needs picking on the server"
 
-        PullState.QUEUED -> "waiting for a download slot"
+        // "waiting for a download slot" was 27 characters in the same 26-character slot, and the
+        // word it loses is the one the `Pulling` chip beside it already says.
+        PullState.QUEUED -> "waiting for a slot"
 
         PullState.DOWNLOADING -> progressDetail(pull) ?: pull.source
 
@@ -254,21 +320,23 @@ internal object PullsFormat {
         PullState.PROCESSING -> "importing"
 
         // Nothing: a finished pull's line is its quality and when it landed,
-        // both of which [detailParts] adds. "Completed" as well would be a
-        // third way of saying what the `Ready` badge beside it already says.
+        // both of which [detailParts] adds. A word here as well would be a
+        // second way of saying what the `Server` chip beside it already says.
         PullState.COMPLETED -> null
 
-        // How far it got, which is the useful half: the `Partly delivered` badge
+        // How far it got, which is the useful half: the `Partly delivered` chip
         // beside it already says that some tracks are missing, so repeating the
         // prose here would spend the line saying nothing new. The prose is kept
         // as the fallback for a pull the server gave no counters for.
-        PullState.PARTIAL -> progressDetail(pull) ?: "some tracks did not arrive"
+        PullState.PARTIAL -> progressDetail(pull) ?: "some tracks missing"
 
         PullState.FAILED -> failureReason(pull)
 
-        // Nothing: the `Cancelled` badge is the word, and the line would only
-        // repeat it. Same reasoning as [PullState.COMPLETED] above.
-        PullState.CANCELLED -> null
+        // The vocabulary's own verb. REQUIREMENTS.md, "The verb survives, and there is only one of
+        // it", labels the cancel action **Stop**, so what it leaves behind is a pull that was
+        // stopped; "cancelled" was a second word for one act. It is drawn now rather than left to
+        // the chip because the chip says `Not retrieved`, which a failure says too.
+        PullState.CANCELLED -> "stopped"
     }
 
     /**
@@ -281,10 +349,14 @@ internal object PullsFormat {
     fun failureReason(pull: Pull): String = when (pull.failureReason) {
         PullFailureReason.NO_SOURCE_FOUND -> "no source found"
         PullFailureReason.DOWNLOAD_FAILED -> "the download failed"
-        PullFailureReason.IMPORT_FAILED -> "downloaded, but the import failed"
-        PullFailureReason.REJECTED -> "an administrator rejected this"
-        PullFailureReason.HELD_FOR_REVIEW -> "held for review on the server"
-        PullFailureReason.CANCELLED -> "cancelled"
+        PullFailureReason.IMPORT_FAILED -> "the import failed"
+
+        // Where, not who. "an administrator rejected this" named a server role at a user who has no
+        // way to know what one is, and every other refusal on this screen now reads "on the server".
+        PullFailureReason.REJECTED -> "declined on the server"
+        // The banner above the list says where, and counts them. See `PullsScreen.heldNote`.
+        PullFailureReason.HELD_FOR_REVIEW -> "held for review"
+        PullFailureReason.CANCELLED -> "stopped"
         PullFailureReason.UNKNOWN, null -> pull.error?.takeIf { it.isNotBlank() } ?: "this pull failed"
     }
 
@@ -328,7 +400,7 @@ internal object PullsFormat {
      */
     fun subtitle(pull: Pull, now: Instant): String {
         val parts: List<String> = buildList {
-            if (pull.artistName.isNotBlank()) add(pull.artistName)
+            artistBeside(albumTitle(pull), pull.artistName)?.let { add(it) }
             addAll(detailParts(pull, now))
         }
         return parts.joinToString(separator = " · ")
@@ -348,9 +420,10 @@ internal object PullsFormat {
             // [albumTitle], not `pull.albumTitle`: a blank first element left the phrase starting
             // ", Yussef Dayes", and TalkBack reads a leading separator as a pause before nothing.
             add(albumTitle(pull))
-            if (pull.artistName.isNotBlank()) add(pull.artistName)
+            artistBeside(albumTitle(pull), pull.artistName)?.let { add(it) }
+            // The figure is inside `state` now: the `Pulling` chip speaks as "Pulling, 62
+            // percent", so adding it again here said it twice in one phrase.
             add(state)
-            percent(pull.progress.fraction)?.let { add(it.toString() + " percent") }
             // Belt and braces against a state whose explanation is its own name,
             // which is what "cancelled, cancelled" used to be here. No state
             // produces that today - [stateDetail] returns nothing for the two
@@ -361,19 +434,17 @@ internal object PullsFormat {
         return parts.joinToString(separator = ", ")
     }
 
-    /** The state's name, said aloud. */
-    fun spokenState(pull: Pull): String = when (pull.state) {
-        PullState.PENDING_APPROVAL -> "waiting for approval"
-        PullState.SEARCHING -> "searching"
-        PullState.AWAITING_SOURCE_REVIEW -> "needs attention on the server"
-        PullState.QUEUED -> "queued"
-        PullState.DOWNLOADING -> "pulling"
-        PullState.PROCESSING -> "importing"
-        PullState.COMPLETED -> "ready"
-        PullState.PARTIAL -> "partly delivered"
-        PullState.FAILED -> "failed"
-        PullState.CANCELLED -> "cancelled"
-    }
+    /**
+     * The state's name, said aloud: exactly the chip's own word.
+     *
+     * This was a tenth-and-eleventh vocabulary of its own — "waiting for approval", "queued",
+     * "importing", "ready" — none of which any chip said, so a screen-reader user and a sighted
+     * user heard and saw different words for the same ten states. It is now read straight off
+     * [chipFor], which makes drift impossible rather than merely unlikely: there is one table and
+     * `:core:design`'s `accessibleLabel` is the one place a spoken form may differ from a drawn one,
+     * which it does for exactly two states and says why.
+     */
+    fun spokenState(pull: Pull): String = chipFor(pull).spoken
 
     // ---- what you have asked for -------------------------------------------
     //
@@ -426,9 +497,9 @@ internal object PullsFormat {
      */
     fun historyTitle(entry: RequestHistoryEntry): String = when (entry.target) {
         RequestTarget.TRACK -> entry.trackTitle?.takeIf { it.isNotBlank() }
-            ?: albumTitle(entry.albumTitle)
+            ?: albumTitle(entry.albumTitle, entry.artistName)
 
-        RequestTarget.ALBUM -> albumTitle(entry.albumTitle)
+        RequestTarget.ALBUM -> albumTitle(entry.albumTitle, entry.artistName)
     }
 
     /** How an action label names this entry inside a sentence. See [albumPhrase]. */
@@ -440,7 +511,21 @@ internal object PullsFormat {
     }
 
     /**
-     * What became of the request, in words.
+     * Why the request ended up where it did, or null when the chip is the whole account.
+     *
+     * ## This used to be a second name for the chip, on every row
+     *
+     * It returned a status for all eight outcomes — "waiting to start", "waiting for an
+     * administrator", "being acquired", "arrived", "declined by Ada", "failed", "cancelled" — and
+     * every one of them was drawn beside a chip already naming the same state in different words.
+     * `screenshots/pulls-history-phone.png` is ten rows of it: "being acquired" beside `Pulling`,
+     * "arrived" beside `Ready`, "waiting to start" beside `Waiting`. The duplicate clause is also
+     * what pushed the lines to two and three wrapped rows and truncated the one on the track
+     * request.
+     *
+     * So the chip keeps the state and this keeps only what the chip cannot hold. Three outcomes
+     * answer null, because `Waiting`, `Pulling` and `Server` say the whole of it; the rest answer
+     * the one thing that separates them from each other under a shared `Not retrieved` chip.
      *
      * The [RequestOutcome.OTHER] branch prints the server's own token, tidied of its underscores.
      * REQUIREMENTS.md, "Placing a request", requires the status the server returned to be rendered
@@ -448,34 +533,41 @@ internal object PullsFormat {
      * exists for: "requires review" read back to the user is worth more than a guess, and infinitely
      * more than the silence of an unmatched `when` branch.
      */
-    fun historyOutcome(entry: RequestHistoryEntry): String = when (entry.status) {
-        RequestOutcome.PENDING -> "waiting to start"
-        RequestOutcome.AWAITING_APPROVAL -> "waiting for an administrator"
-        RequestOutcome.IN_PROGRESS -> "being acquired"
-        RequestOutcome.COMPLETED -> "arrived"
+    fun historyReason(entry: RequestHistoryEntry): String? = when (entry.status) {
+        // Both chip as `Waiting`, and the two waits are different in the one way that matters: one
+        // of them is nobody's move and the other is somebody's.
+        RequestOutcome.PENDING -> "not started yet"
+        RequestOutcome.AWAITING_APPROVAL -> "needs approval"
+
+        // The `Pulling` and `Server` chips are the whole account.
+        RequestOutcome.IN_PROGRESS, RequestOutcome.COMPLETED -> null
 
         // Naming the reviewer is the difference between a policy and a mystery: a user whose request
-        // was declined can go and ask that person.
+        // was declined can go and ask that person. "declined by Ada" alone named a stranger, so the
+        // clause now says where Ada is, which is what makes her findable.
         RequestOutcome.REJECTED -> entry.reviewedByName
             ?.takeIf { it.isNotBlank() }
-            ?.let { "declined by " + it }
-            ?: "declined"
+            ?.let { "declined by " + it + " on the server" }
+            ?: "declined on the server"
 
-        RequestOutcome.FAILED -> "failed"
-        RequestOutcome.CANCELLED -> "cancelled"
-        RequestOutcome.OTHER -> tidyToken(entry.statusToken).ifBlank { "state unknown" }
+        // This lane carries no failure reason of its own - there is no field for one - so the line
+        // says the only thing that is certainly true and is not already the chip.
+        RequestOutcome.FAILED -> "the request failed"
+
+        RequestOutcome.CANCELLED -> "stopped"
+        RequestOutcome.OTHER -> tidyToken(entry.statusToken).ifBlank { null }
     }
 
     /**
-     * The row's second line: `Slint · arrived · yesterday`, `Kate Bush · declined by Ada · 3d ago`.
+     * The row's second line: `Slint · yesterday`, `Kate Bush · declined by Ada on the server · today`.
      *
-     * Deliberately the same grammar as [subtitle] — artist, then what happened, then when — because
-     * the two lists sit behind two tabs of one screen and a user moving between them should not have
-     * to re-learn where to look.
+     * Deliberately the same grammar as [subtitle] — artist, then what is worth adding, then when —
+     * because the two lists sit behind two tabs of one screen and a user moving between them should
+     * not have to re-learn where to look.
      */
     fun historySubtitle(entry: RequestHistoryEntry, now: Instant): String {
         val parts: List<String> = buildList {
-            if (entry.artistName.isNotBlank()) add(entry.artistName)
+            artistBeside(historyTitle(entry), entry.artistName)?.let { add(it) }
             addAll(historyDetailParts(entry, now))
         }
         return parts.joinToString(separator = " · ")
@@ -489,12 +581,12 @@ internal object PullsFormat {
             add("from " + entry.albumTitle)
         }
 
-        add(historyOutcome(entry))
+        historyReason(entry)?.let { add(it) }
 
-        // Interesting only when the two disagree. On an arrived request "in your library" says what
-        // "arrived" already said; on a failed or declined one it is news - the album got there by
-        // some other route, and the user does not need to ask again.
-        if (entry.inLibrary && entry.status != RequestOutcome.COMPLETED) add("in your library")
+        // `inLibrary` is not drawn here any more. It is one fact about where the record is, and
+        // the chip is now the slot that reports where records are - see `chipFor`. It was drawn as
+        // the words "in your library" beside a chip saying something else about the same album,
+        // which is the duplication this whole pass removes rather than a second example of it.
 
         relativeDay(entry.happenedAt, now)?.let { add(it) }
     }
@@ -503,13 +595,15 @@ internal object PullsFormat {
      * The whole history row as one spoken phrase.
      *
      * Built from the same parts as the visible row for the reason [spokenRow] gives: a screen reader
-     * cannot hear a layout, so the badge, the title and the line are rejoined into a sentence, and
-     * assembling them twice is how the two would eventually disagree.
+     * cannot hear a layout, so the chip, the title and the line are rejoined into a sentence, and
+     * assembling them twice is how the two would eventually disagree. The chip's word comes from
+     * [chipFor], so what is heard here is what is drawn there.
      */
     fun spokenHistoryRow(entry: RequestHistoryEntry, now: Instant): String {
         val parts: List<String> = buildList {
             add(historyTitle(entry))
-            if (entry.artistName.isNotBlank()) add(entry.artistName)
+            artistBeside(historyTitle(entry), entry.artistName)?.let { add(it) }
+            add(chipFor(entry).spoken)
             addAll(historyDetailParts(entry, now))
         }
         return parts.joinToString(separator = ", ")
@@ -532,30 +626,39 @@ internal object PullsFormat {
     // ---- the wanted list ---------------------------------------------------
 
     /**
-     * Why the server is still looking, and how hard.
+     * How hard the server is still looking, or null when the chip is the whole account.
      *
-     * The gap and the watch state are two fields and one sentence: `missing` plus `watching` is "not
-     * found yet", and `missing` plus `stopped` is "no longer being looked for". Printing both
-     * separately would give a row like "not found yet · no longer being looked for", which
-     * contradicts itself. So the state decides the wording and the gap only refines the live case.
+     * ## Seven phrasings of one fact, cut to three of another
+     *
+     * This answered "not found yet", "only part of it found", "still being looked for", "checked
+     * only occasionally now", "no longer being looked for" and "found" — six sentences, of which
+     * five say the record is not on the server and one says it is. Those are two of the three words
+     * REQUIREMENTS.md "Where a record is" fixes, so they are now the chip, and what is left for the
+     * line is the question the chip cannot answer: is anyone still looking, and how often.
+     *
+     * The gap is in the chip for the same reason: `partial` is `Partly delivered`, which is the
+     * state REQUIREMENTS.md "Partial content is a normal state" already has a word for.
+     *
+     * Rejected: dropping this line entirely and leaving the chip alone. A watch the server has given
+     * up on and a watch it checks hourly are the same `Not retrieved`, and the difference is the
+     * only thing on the row a user can act on — one of them is worth re-requesting.
      */
-    fun wantedState(watch: WantedWatch): String = when (watch.state) {
-        WantedWatchState.WATCHING -> when (watch.gap) {
-            WantedGap.MISSING -> "not found yet"
-            WantedGap.PARTIAL -> "only part of it found"
-            WantedGap.OTHER -> "still being looked for"
-        }
+    fun wantedEffort(watch: WantedWatch): String? = when (watch.state) {
+        WantedWatchState.WATCHING -> "still looking"
+        WantedWatchState.DORMANT -> "looking less often now"
+        WantedWatchState.STOPPED -> "no longer looking"
 
-        WantedWatchState.DORMANT -> "checked only occasionally now"
-        WantedWatchState.STOPPED -> "no longer being looked for"
-        WantedWatchState.FULFILLED -> "found"
-        WantedWatchState.OTHER -> tidyToken(watch.stateToken).ifBlank { "watched" }
+        // The `Server` chip is the whole account, and the countdown below is suppressed too.
+        WantedWatchState.FULFILLED -> null
+
+        WantedWatchState.OTHER -> tidyToken(watch.stateToken).ifBlank { null }
     }
 
-    /** `Kate Bush · not found yet · 2 new sources · checks again in 4h`. */
+    /** `Kate Bush · still looking · 2 new sources · checks again in 4 hours`. */
     fun wantedSubtitle(watch: WantedWatch, now: Instant): String {
         val parts: List<String> = buildList {
-            if (watch.artistName.isNotBlank()) add(watch.artistName)
+            artistBeside(albumTitle(watch.albumTitle, watch.artistName), watch.artistName)
+                ?.let { add(it) }
             addAll(wantedDetailParts(watch, now))
         }
         return parts.joinToString(separator = " · ")
@@ -563,7 +666,7 @@ internal object PullsFormat {
 
     /** Everything after the artist on a wanted row. */
     fun wantedDetailParts(watch: WantedWatch, now: Instant): List<String> = buildList {
-        add(wantedState(watch))
+        wantedEffort(watch)?.let { add(it) }
 
         // The one number on this row a user can act on: sources have appeared that the server has
         // not tried yet, so the next check is worth waiting for rather than giving up on.
@@ -581,11 +684,13 @@ internal object PullsFormat {
         }
     }
 
-    /** The wanted row, said aloud. */
+    /** The wanted row, said aloud, chip included for the reason [spokenRow] gives. */
     fun spokenWantedRow(watch: WantedWatch, now: Instant): String {
         val parts: List<String> = buildList {
-            add(albumTitle(watch.albumTitle))
-            if (watch.artistName.isNotBlank()) add(watch.artistName)
+            add(albumTitle(watch.albumTitle, watch.artistName))
+            artistBeside(albumTitle(watch.albumTitle, watch.artistName), watch.artistName)
+                ?.let { add(it) }
+            add(chipFor(watch).spoken)
             addAll(wantedDetailParts(watch, now))
         }
         return parts.joinToString(separator = ", ")
@@ -601,7 +706,8 @@ internal object PullsFormat {
      */
     fun wantedRetrySubtitle(retry: WantedRetry, now: Instant): String {
         val parts: List<String> = buildList {
-            if (retry.artistName.isNotBlank()) add(retry.artistName)
+            artistBeside(albumTitle(retry.albumTitle, retry.artistName), retry.artistName)
+                ?.let { add(it) }
             addAll(wantedRetryDetailParts(retry, now))
         }
         return parts.joinToString(separator = " · ")
@@ -618,11 +724,13 @@ internal object PullsFormat {
         countdown(retry.nextRetryAt, now)?.let { add("retries " + it) }
     }
 
-    /** The retrying row, said aloud. */
+    /** The retrying row, said aloud, chip included for the reason [spokenRow] gives. */
     fun spokenWantedRetryRow(retry: WantedRetry, now: Instant): String {
         val parts: List<String> = buildList {
-            add(albumTitle(retry.albumTitle))
-            if (retry.artistName.isNotBlank()) add(retry.artistName)
+            add(albumTitle(retry.albumTitle, retry.artistName))
+            artistBeside(albumTitle(retry.albumTitle, retry.artistName), retry.artistName)
+                ?.let { add(it) }
+            add(RETRYING_CHIP.spoken)
             addAll(wantedRetryDetailParts(retry, now))
         }
         return parts.joinToString(separator = ", ")

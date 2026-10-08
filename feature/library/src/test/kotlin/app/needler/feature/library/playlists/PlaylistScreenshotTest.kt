@@ -190,6 +190,7 @@ class PlaylistScreenshotTest {
             onRemoveTrack = {},
             onMoveUp = {},
             onMoveDown = {},
+            onRetryTrack = {},
             onAddTracksClick = {},
             onPickerQueryChange = {},
             onToggleCandidate = {},

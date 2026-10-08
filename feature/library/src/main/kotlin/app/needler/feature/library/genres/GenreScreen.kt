@@ -3,7 +3,6 @@
 package app.needler.feature.library.genres
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,6 +67,8 @@ fun GenreScreen(
     onPlayAll: () -> Unit,
     onShuffleAll: () -> Unit,
     onPlayTrack: (Track) -> Unit,
+    onShowMore: () -> Unit,
+    onSyncNow: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = NeedlerTheme.colors
@@ -126,7 +127,6 @@ fun GenreScreen(
                 )
             }
             if (state.offline) GenresOfflineNote()
-            if (state.atLimit) GenreCapNote(limit = state.trackLimit)
         }
 
         Spacer(modifier = Modifier.height(spacing.step9))
@@ -134,11 +134,17 @@ fun GenreScreen(
         Box(modifier = Modifier.weight(1f)) {
             when {
                 state.loading -> GenreSkeleton(gutter = gutter)
-                state.showEmptyState -> GenreEmptyState(genre = state.genre, gutter = gutter)
+                state.showEmptyState -> GenreEmptyState(
+                    genre = state.genre,
+                    offline = state.offline,
+                    onSyncNow = onSyncNow,
+                    gutter = gutter,
+                )
                 else -> GenreSongList(
                     state = state,
                     gutter = gutter,
                     onPlayTrack = onPlayTrack,
+                    onShowMore = onShowMore,
                 )
             }
         }
@@ -191,6 +197,7 @@ private fun GenreSongList(
     state: GenreUiState,
     gutter: Dp,
     onPlayTrack: (Track) -> Unit,
+    onShowMore: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -232,35 +239,40 @@ private fun GenreSongList(
                 },
             )
         }
+        if (state.atLimit) {
+            item(key = "show-more") { GenreShowMore(onShowMore = onShowMore) }
+        }
     }
 }
 
 /**
- * The cap line.
+ * The way to the rest of a capped genre.
  *
- * Said plainly because the alternative is a list that looks complete and is not.
- * The number comes from the state, which took it from the query, so the sentence
- * cannot drift from the bound it describes.
+ * ## What this replaces
+ *
+ * A banner reading "Showing the first 8 tracks of this genre", sitting directly under a header
+ * reading `8 tracks · 28 min` — two adjacent lines disagreeing about whether the number was a
+ * total. The header says `First 8 tracks` now, which removes the contradiction, and this is the
+ * part the banner never had: something to do about it.
+ *
+ * It is a button at the end of the list rather than a line at the top, because that is where the
+ * user discovers the cap. `observeTracksByGenre` is a cap and not a cursor, so each tap re-reads
+ * the genre with a larger bound; see [GenreUiState.headerLine] for why a true total cannot be
+ * shown instead, and `GenreViewModel.onShowMore` for what the bound does.
  */
 @Composable
-private fun GenreCapNote(limit: Int) {
-    val colors = NeedlerTheme.colors
-    val shape = NeedlerTheme.shapes.medium
-    val message = "Showing the first " + limit + " tracks of this genre."
+private fun GenreShowMore(onShowMore: () -> Unit) {
+    val spacing = NeedlerTheme.spacing
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(colors.surface)
-            .border(NeedlerTheme.sizes.hairlineThickness, colors.hairline, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .semantics(mergeDescendants = true) { contentDescription = message },
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+            .padding(top = spacing.step6, bottom = spacing.step4),
     ) {
-        Text(
-            text = message,
-            style = NeedlerTheme.typography.caption,
-            color = colors.textSecondary,
+        NeedlerSecondaryButton(
+            text = "Show more",
+            onClick = onShowMore,
+            size = NeedlerButtonSize.Medium,
+            contentDescription = "Show more tracks in this genre",
         )
     }
 }
@@ -271,9 +283,22 @@ private fun GenreCapNote(limit: Int) {
  * Reachable in one real case: the genre is tagged on an album the library owns
  * whose files never arrived, so the mirror has the genre and no tracks under it.
  * The copy says that rather than implying the user did something wrong.
+ *
+ * ## The promise now has a button behind it
+ *
+ * It read "The next sync should fill it in" and offered no way to have a next sync, which names a
+ * cause and withholds the remedy — the same fault `GenresEmptyState` had. `Sync now` is the
+ * remedy, disabled with no connection in the pattern
+ * `screenshots/library-empty-offline-phone.png` sets, and the sentence is in the future tense
+ * rather than the present because nothing has happened yet.
  */
 @Composable
-private fun GenreEmptyState(genre: String, gutter: Dp) {
+private fun GenreEmptyState(
+    genre: String,
+    offline: Boolean,
+    onSyncNow: () -> Unit,
+    gutter: Dp,
+) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     val spacing = NeedlerTheme.spacing
@@ -291,10 +316,17 @@ private fun GenreEmptyState(genre: String, gutter: Dp) {
             modifier = Modifier.semantics { heading() },
         )
         Text(
-            text = "This device's copy of your library has albums tagged with this genre but no " +
-                "tracks under it. The next sync should fill it in.",
+            text = "The copy of your library on this device has albums tagged with this genre " +
+                "but no tracks under it. The next sync will fill it in.",
             style = typography.body,
             color = colors.textSecondary,
+        )
+        Spacer(modifier = Modifier.height(spacing.step4))
+        NeedlerPrimaryButton(
+            text = "Sync now",
+            onClick = onSyncNow,
+            enabled = !offline,
+            contentDescription = if (offline) "Sync now. Unavailable while offline." else null,
         )
     }
 }

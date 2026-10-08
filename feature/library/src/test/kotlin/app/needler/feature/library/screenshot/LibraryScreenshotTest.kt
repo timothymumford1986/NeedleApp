@@ -53,6 +53,59 @@ class LibraryScreenshotTest {
         capture("library-artists", NeedlerDevice.Phone, LOADED.copy(tab = LibraryTab.ARTISTS))
     }
 
+    /**
+     * The Artists tab at 200% text, which is the variant the tab had none of.
+     *
+     * The index strip is a 27-chip control sized to single characters, down the right edge of a
+     * 390dp phone, beside rows that are themselves growing: it is the one control on this screen
+     * whose whole job is to stay narrow, and at twice the type size it either stays narrow or takes
+     * the list's width. `ArtistIndexStripTest` reads the chips out of the semantics tree and can say
+     * that each is reachable and labelled; it cannot say whether the strip and the rows still fit
+     * beside one another, and nothing else in the set could either - `library-large-text-phone.png`
+     * is the album grid.
+     */
+    @Test
+    fun `the artists tab at 200 percent text size`() {
+        capture(
+            "library-artists-large-text",
+            NeedlerDevice.Phone,
+            LOADED.copy(tab = LibraryTab.ARTISTS),
+            fontScale = 2f,
+        )
+    }
+
+    /**
+     * The Artists tab offline.
+     *
+     * Artists come from the mirror, so the list is intact and only the chrome changes - which is the
+     * claim worth a baseline. An offline notice that pushed the index strip down the screen, or
+     * reserved width from it, would show here and nowhere else.
+     */
+    @Test
+    fun `the artists tab offline`() {
+        capture(
+            "library-artists-offline",
+            NeedlerDevice.Phone,
+            LOADED.copy(tab = LibraryTab.ARTISTS, offline = true),
+        )
+    }
+
+    /**
+     * The Artists tab of a library that has albums but no artist rows.
+     *
+     * Reachable, and not hypothetical: `ArtistDao` fills from a scan that writes album rows first,
+     * so a part-finished first sync lands here. The strip has no letters to draw in this state, and
+     * what it does instead - draw 27 dead chips, or nothing - is a decision no image recorded.
+     */
+    @Test
+    fun `the artists tab with no artists`() {
+        capture(
+            "library-artists-empty",
+            NeedlerDevice.Phone,
+            LOADED.copy(tab = LibraryTab.ARTISTS, artists = emptyList()),
+        )
+    }
+
     @Test
     fun `the songs tab`() {
         capture(
@@ -243,6 +296,24 @@ class LibraryScreenshotTest {
         assertRendered(file, NeedlerDevice.Tablet)
     }
 
+    /**
+     * The Artists tab in the tablet's 784dp content pane.
+     *
+     * The album grid gains a column at this width; a single-column list of names does not, so what
+     * the extra 394dp is spent on is a layout decision the phone image cannot show. The index strip
+     * is the part at risk: it is pinned to the right edge of whatever it is given, and a 784dp pane
+     * can leave it a long way from the thumb that uses it.
+     */
+    @Test
+    fun `the artists tab on a tablet`() {
+        val file = captureNeedlerScreen("library-artists", NeedlerDevice.Tablet) {
+            TabletFrame {
+                Screen(LOADED.copy(tab = LibraryTab.ARTISTS), WindowWidthSizeClass.Expanded)
+            }
+        }
+        assertRendered(file, NeedlerDevice.Tablet)
+    }
+
     // ---- plumbing -----------------------------------------------------------
 
     private fun capture(
@@ -313,13 +384,24 @@ class LibraryScreenshotTest {
         )
 
         /**
-         * The pack's ten records, six times over under distinct ids: sixty albums,
-         * which is enough for both layouts to scroll properly on a 390dp phone.
+         * The pack's ten records, six times over as sixty distinct records: enough for both
+         * layouts to scroll properly on a 390dp phone.
          *
          * The device was carrying 288. Sixty is the smallest number at which "the
          * toggle kept my place" and "the toggle went back to the top" render as
          * visibly different images in both the grid and the list, which is the
          * only property these fixtures need.
+         *
+         * ## Why the titles change too
+         *
+         * The ids alone used to be suffixed, which left six records called `Submarine` carrying
+         * six different release-group MBIDs - and `artworkPlaceholderTint` derives a tile's colour
+         * from exactly that id, deliberately, so that one record is one colour everywhere. The
+         * reader comparing goldens therefore saw Submarine dark green on `library-list-phone.png`
+         * and brown-red on `library-deep-list-anchored-phone.png` and read it as an unstable
+         * placeholder. The product code was right; the fixture was claiming six records were the
+         * same record. Suffixing the title as well makes them what the ids already said they
+         * were: sixty different albums, each with its own stable colour.
          */
         val DEEP_ALBUMS: List<Album> = (0 until 6).flatMap { pass ->
             SampleLibrary.albums.map { album ->
@@ -327,6 +409,7 @@ class LibraryScreenshotTest {
                     releaseGroupMbid = ReleaseGroupMbid(
                         album.releaseGroupMbid.value + "-" + pass,
                     ),
+                    title = if (pass == 0) album.title else album.title + " " + (pass + 1),
                 )
             }
         }

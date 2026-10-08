@@ -796,6 +796,13 @@ private fun NeedlerHome(
                     // showing. Same shape as onConnected's pop in reverse.
                     onChangeServer = { returnToConnect(navController) },
                     onSignedOut = { returnToConnect(navController) },
+                    // The day-25 expiry warning names an action - "Sign in again" - and until this
+                    // was wired the only control under it was "Change server", which asks for an
+                    // address the user has not got wrong. Same destination, because Needler never
+                    // stores the account password and REQUIREMENTS.md's companion bearer has "no
+                    // silent renewal", so re-authenticating means Connect either way. Left null the
+                    // warning is a statement with no way to act on it.
+                    onSignInAgain = { returnToConnect(navController) },
                 )
             }
 
@@ -865,6 +872,10 @@ private fun NeedlerHome(
                     // makes rather than a popBackStack that would leave Search
                     // selected under a library screen.
                     onCancel = { selectTab(NeedlerDestination.Library) },
+                    // Where the expired-session banner's Sign in button goes.
+                    // The same tab switch Cancel makes, for the same reason: the
+                    // bar has to agree with where the user ended up.
+                    onOpenSettings = { selectTab(NeedlerDestination.Settings) },
                 )
             }
 
@@ -872,6 +883,10 @@ private fun NeedlerHome(
                 PullsRoute(
                     widthSizeClass = widthSizeClass,
                     onOpenAlbum = { navController.navigate(albumRoute(it.value)) },
+                    // Every empty state on Pulls ends in a button to Search; the same tab switch
+                    // LibraryRoute's own "find something" route makes, so the bar lights Search
+                    // rather than leaving Pulls lit under a search screen.
+                    onOpenSearch = { selectTab(NeedlerDestination.Search) },
                 )
             }
         }

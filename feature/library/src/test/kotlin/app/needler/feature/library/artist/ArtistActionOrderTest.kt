@@ -337,7 +337,7 @@ class ArtistActionOrderTest {
         val PHONE_WIDTH = 390.dp
         val PHONE_HEIGHT = 844.dp
 
-        val ARTIST = SampleLibrary.artists.first()
+        val ARTIST = SampleLibrary.marias
 
         val UNOWNED = SampleLibrary.album(
             slug = "superclean",
@@ -360,8 +360,15 @@ class ArtistActionOrderTest {
         const val CRATE_MENU =
             "Crate actions for everything by " + NAME + ". Add to the crate, or play next."
 
-        /** The more-row's spoken description, which is its label plus what more is of. */
-        const val SHOW_MORE = "Show more · 50 of 212 releases looked up, more of " +
+        /**
+         * The more-row's spoken description: the offer, the server's count, and what more is of.
+         *
+         * Two nodes on screen and one spoken description. The label is the control and is drawn in
+         * the accent colour; the count beside it is a report and is drawn muted, with its own
+         * semantics cleared - see `ArtistUiState.lookedUpSoFar`. A figure a screen reader has to
+         * swipe to is a figure read after the decision it informs, so it rides on the button.
+         */
+        const val SHOW_MORE = SHOW_MORE_RELEASES + ", 50 of 212 releases looked up, more of " +
             NAME + "'s releases from the catalogue"
 
         const val LOOKING_UP_MORE = LOOKING_UP_MORE_RELEASES + ", more of " +

@@ -7,6 +7,7 @@ import app.needler.core.domain.model.ConnectivityState
 import app.needler.core.domain.model.PlaylistEdit
 import app.needler.core.domain.model.Track
 import app.needler.feature.library.FakePlaybackController
+import app.needler.feature.library.FakePullRepository
 import app.needler.feature.library.FakeSessions
 import app.needler.feature.library.MainDispatcherRule
 import app.needler.feature.library.SampleLibrary
@@ -28,6 +29,7 @@ class PlaylistViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     private val playlists = FakePlaylistRepository()
+    private val pulls = FakePullRepository()
     private val search = FakeSearchRepository()
     private val sessions = FakeSessions()
     private val playback = FakePlaybackController()
@@ -37,6 +39,7 @@ class PlaylistViewModelTest {
     private fun viewModel(id: String = playlist.id.value) = PlaylistViewModel(
         savedStateHandle = SavedStateHandle(mapOf(PlaylistViewModel.PLAYLIST_ID_ARG to id)),
         playlists = playlists,
+        pulls = pulls,
         search = search,
         sessions = sessions,
         playback = Optional.of(playback),

@@ -273,10 +273,38 @@ object PlayerFormat {
      * Where sound is going, named plainly.
      *
      * REQUIREMENTS.md: "The current output is always named in the player - 'Living room speaker',
-     * 'This tablet' - so a user never wonders where sound is going." A null target is the session not
-     * having told us yet, and "This device" is the honest answer: nothing else can be playing.
+     * 'This tablet' - so a user never wonders where sound is going."
+     *
+     * ## Why the local output is named here and not by its own `displayName`
+     *
+     * The player called this one thing four names. `player-output-phone.png` read "This phone",
+     * `player-now-playing-idle-phone.png` and `player-sidebar-idle-sidebar.png` read "This device",
+     * and `player-sidebar-sidebar.png` read "This tablet" - three strings for one speaker, from three
+     * sources: this function's own fallback, `:player:service`'s form-factor branch, and the
+     * fixtures.
+     *
+     * Two of those break a rule REQUIREMENTS.md states in as many words. "Vocabulary" fixes **three**
+     * words for where a record is - `Not retrieved`, `Server`, `Device` - and says "nothing is allowed
+     * to write one of these words as a literal". **Device** is a storage tier. A speaker called "This
+     * device" spends that word on a second meaning, in the one screen where `Device:` is also drawn
+     * as a quality tag six rows above it.
+     *
+     * So the local output has one name, [LOCAL_OUTPUT], and it is applied to every
+     * [OutputTarget.ThisDevice] whatever name reached it. A Bluetooth sink or a Cast receiver keeps
+     * its own `displayName`, because that one is the speaker's name and not ours to choose.
+     *
+     * **The rejected alternative** was to keep passing `displayName` through and fix the two strings
+     * at their sources. It is the smaller diff and it does not hold: the sources are
+     * `:player:service` and `:core:data`, two modules this one does not own, and the next one to add
+     * a name would be the fifth. A screen that prints a word has to be able to guarantee the word.
+     *
+     * `:player:service`'s phone/tablet branch is now dead as far as this module is concerned and
+     * should be removed there; see the report accompanying this change.
      */
-    fun outputName(target: OutputTarget?): String = target?.displayName ?: "This device"
+    fun outputName(target: OutputTarget?): String = when (target) {
+        null, is OutputTarget.ThisDevice -> LOCAL_OUTPUT
+        else -> target.displayName
+    }
 
     /** The picker's second line: `Bluetooth - connected`, `Speaker`, `Cast`. */
     fun outputDetail(target: OutputTarget): String = when (target) {
@@ -426,4 +454,27 @@ object PlayerFormat {
 
     /** What a timecode shows when the length is not known. */
     const val UNKNOWN_TIME: String = "--:--"
+
+    /**
+     * The one name this module gives the speaker in the listener's hand.
+     *
+     * Not "This device": see [outputName]. REQUIREMENTS.md "Vocabulary" spends **Device** on a
+     * storage tier, and the player draws a `Device:` quality tag on the same screen as this chip.
+     * "This phone" is what `player-output-phone.png` already read and what the device audit accepted,
+     * so it is the string the other three collapse into rather than a fourth invention.
+     */
+    const val LOCAL_OUTPUT: String = "This phone"
+
+    /**
+     * What an empty crate says, in one sentence, everywhere.
+     *
+     * There were three of it: "Play an album and it lands here." on the crate screen, "Play an album
+     * and the rest of it lands here." in the tablet sidebar, and "Play an album and it lands in the
+     * crate" as the idle player's subtitle. Three wordings of one fact across three goldens, which is
+     * how a reader learns that the app is unsure what the crate is called.
+     */
+    const val EMPTY_CRATE: String = "Play an album and it lands in the crate."
+
+    /** The same, as short as it goes, for the mini player's one truncating line. */
+    const val EMPTY_CRATE_SHORT: String = "Play an album"
 }

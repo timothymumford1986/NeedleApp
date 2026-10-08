@@ -95,5 +95,9 @@ fun ArtistRoute(
         onConfirmRequest = viewModel::onConfirmRequest,
         onDismissRequestSheet = viewModel::onDismissRequestSheet,
         modifier = modifier,
+        // Wired for the first time. The method has existed since this ViewModel was written and
+        // nothing called it, so the notice the crate and the pull actions leave behind could not be
+        // dismissed on this screen - while the identical notice on the album screen could.
+        onDismissNotice = viewModel::onDismissNotice,
     )
 }

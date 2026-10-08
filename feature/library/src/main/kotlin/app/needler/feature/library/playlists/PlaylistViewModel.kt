@@ -14,6 +14,7 @@ import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.repository.PlaylistRepository
+import app.needler.core.domain.repository.PullRepository
 import app.needler.core.domain.repository.SearchRepository
 import app.needler.core.domain.repository.SessionRepository
 import app.needler.feature.library.common.addTracksToCrate
@@ -64,6 +65,7 @@ import kotlinx.coroutines.launch
 class PlaylistViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val playlists: PlaylistRepository,
+    private val pulls: PullRepository,
     private val search: SearchRepository,
     private val sessions: SessionRepository,
     private val playback: Optional<PlaybackController>,
@@ -326,6 +328,37 @@ class PlaylistViewModel @Inject constructor(
             val queued: Boolean = isOffline()
             when (val result: Outcome<Unit> = playlists.removeTracks(playlistId, listOf(row.position))) {
                 is Outcome.Success -> PlaylistNotice.TracksRemoved(count = 1, queued = queued)
+                is Outcome.Failure -> PlaylistNotice.Problem(problemMessage(result.error))
+            }
+        }
+    }
+
+    /**
+     * Asks the server for the album behind a track it has no file for.
+     *
+     * REQUIREMENTS.md "Partial content is a normal state" requires a retry on every greyed row of
+     * a part-delivered pull, and `screenshots/playlist-holes-phone.png` had none - the rows were
+     * dimmed and that was the whole of it. `retryRequest` is the same call the Pulls screen's
+     * Retry makes, keyed on the track's release-group MBID, which `TrackKey` carries because it is
+     * part of a track's identity.
+     *
+     * Nothing optimistic happens here. The retry asks the server to look again; whether it finds
+     * anything is a pull that will land, or not, over the following minutes, and the row goes back
+     * to playable through the same sync that would have delivered it the first time. So the notice
+     * says the request was made rather than claiming the track is on its way. A playable row never
+     * reaches this - the button is drawn only on the rows that need it - and the guard is repeated
+     * here because a ViewModel that trusts its screen to have filtered correctly is one refactor
+     * away from asking the server to re-pull a record it already has.
+     */
+    fun onRetryTrack(row: PlaylistTrack) {
+        if (row.available) return
+        val mbid = row.track.key.releaseGroupMbid
+        runExclusively {
+            when (val result: Outcome<Unit> = pulls.retryRequest(mbid)) {
+                is Outcome.Success -> PlaylistNotice.RetryRequested(
+                    title = row.track.title,
+                )
+
                 is Outcome.Failure -> PlaylistNotice.Problem(problemMessage(result.error))
             }
         }

@@ -88,7 +88,7 @@ fun NeedlerLabelledTextField(
     val shape = NeedlerTheme.shapes.medium
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
-    val borderColor = if (focused || errorText != null) colors.accent else colors.hairline
+    val borderColor = if (focused || errorText != null) colors.accent else colors.componentBorder
 
     Column(
         modifier = modifier,
@@ -259,7 +259,7 @@ fun NeedlerSecretTextField(
                 ) {
                     NeedlerStrokeIcon(
                         pathData = if (revealed) PathEyeOpen else PathEyeClosed,
-                        tint = if (enabled) colors.textSecondary else colors.textMuted,
+                        tint = if (enabled) colors.textSecondary else colors.disabled,
                         size = 20.dp,
                     )
                 }
@@ -549,7 +549,7 @@ private fun SearchFieldFrame(
             .background(colors.surface)
             .border(
                 width = sizes.hairlineThickness,
-                color = if (focused) colors.accent else colors.hairline,
+                color = if (focused) colors.accent else colors.componentBorder,
                 shape = shape,
             )
             .defaultMinSize(minHeight = sizes.searchFieldMinHeight)

@@ -8,7 +8,9 @@ import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.CatalogueSearchPage
 import app.needler.core.domain.model.Outcome
 import app.needler.core.domain.model.PlayQueue
+import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RequestReceipt
+import app.needler.core.domain.model.RequestStatus
 import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.SearchSuggestion
 import app.needler.core.domain.model.Track
@@ -97,7 +99,9 @@ import kotlinx.coroutines.launch
 class SearchViewModel @Inject constructor(
     private val search: SearchRepository,
     private val library: LibraryRepository,
-    pulls: PullRepository,
+    // Held, not only handed to the use case: a row whose pull is in flight now
+    // offers to stop it, and `cancelRequest` is where that goes. See [onStopPull].
+    private val pulls: PullRepository,
     sessions: SessionRepository,
     private val playback: Optional<PlaybackController>,
 ) : ViewModel() {
@@ -126,6 +130,27 @@ class SearchViewModel @Inject constructor(
     private val monitorArtist = MutableStateFlow(false)
 
     /**
+     * What this session's own requests came back as, keyed on release group.
+     *
+     * The receipt arrives from the server; the album's state in [results] only
+     * changes when the next sync writes it into the mirror. Between the two the
+     * row would still draw a **Pull** pill under a banner saying the pull had
+     * started, and a second tap placed a second request. See
+     * [SearchUiState.placedPulls].
+     */
+    private val placedPulls = MutableStateFlow<Map<ReleaseGroupMbid, RequestStatus>>(emptyMap())
+
+    /**
+     * Bumped to re-run a search that is already in the field.
+     *
+     * [committedQuery] is `distinctUntilChanged`, so setting the query to the
+     * text it already holds does nothing at all — which is exactly what a retry
+     * does. The tick rides alongside it into [flatMapLatest], so a retry restarts
+     * both lanes without the field or the history noticing.
+     */
+    private val retries = MutableStateFlow(0)
+
+    /**
      * The bucket pages fetched for the current query, in the order they arrived.
      *
      * Held as the pages themselves rather than as an already-merged list, so the
@@ -146,7 +171,9 @@ class SearchViewModel @Inject constructor(
         query.map { raw -> raw.trim() }.distinctUntilChanged()
 
     private val results: Flow<UnifiedSearchResults> =
-        committedQuery.flatMapLatest { text -> unifiedSearch(text) }
+        combine(committedQuery, retries) { text, attempt -> text to attempt }
+            .distinctUntilChanged()
+            .flatMapLatest { (text, _) -> unifiedSearch(text) }
 
     /**
      * The merged result with every bucket page the user has asked for folded in.
@@ -245,8 +272,9 @@ class SearchViewModel @Inject constructor(
         pullTarget,
         monitorArtist,
         busy,
-    ) { album, monitor, isBusy ->
-        PullSheet(album = album, monitorArtist = monitor, busy = isBusy)
+        placedPulls,
+    ) { album, monitor, isBusy, placed ->
+        PullSheet(album = album, monitorArtist = monitor, busy = isBusy, placed = placed)
     }
 
     val state: StateFlow<SearchUiState> = combine(
@@ -270,6 +298,7 @@ class SearchViewModel @Inject constructor(
             notice = currentNotice,
             crateTrackCount = current.crateTrackCount,
             crateDurationMs = current.crateDurationMs,
+            placedPulls = sheet.placed,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -286,6 +315,10 @@ class SearchViewModel @Inject constructor(
         if (text.trim() != query.value.trim()) {
             pages.value = emptyList()
             paging.value = SearchPaging()
+            // A receipt for one search has nothing to say about the next, and a
+            // row kept out of the Pull state by a stale receipt would be a row
+            // the user cannot pull.
+            placedPulls.value = emptyMap()
         }
         query.value = text
         // A new search invalidates whatever the last one's action said. Leaving
@@ -475,7 +508,21 @@ class SearchViewModel @Inject constructor(
                     known = album,
                 )
                 notice.value = when (result) {
-                    is Outcome.Success -> SearchNotice.forRequest(result.value.status)
+                    is Outcome.Success -> {
+                        // Recorded before the notice, so the row and the sentence
+                        // about it change in the same emission. The three statuses
+                        // below mean the server has the request; the other two -
+                        // already present, and rejected - leave the row exactly as
+                        // it was, which for a rejection is a Pull the user may
+                        // reasonably try again.
+                        val status: RequestStatus = result.value.status
+                        if (status.isPlaced) {
+                            placedPulls.value =
+                                placedPulls.value + (album.releaseGroupMbid to status)
+                        }
+                        SearchNotice.forRequest(status)
+                    }
+
                     is Outcome.Failure -> SearchNotice(
                         message = problemMessage(result.error),
                         isProblem = true,
@@ -543,6 +590,55 @@ class SearchViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Stop a pull that is already running: the one action the `⋯` on a
+     * **Pulling** row offers.
+     *
+     * Those rows were the only rows on this screen with no trailing control at
+     * all. An owned row has the crate menu, an un-owned one has **Pull**, and the
+     * record in between - the one the user is actually waiting on, and the only
+     * one they might have asked for by mistake - had neither, so a mis-tapped
+     * pull could only be undone from another tab.
+     *
+     * `cancelRequest` and not `cancelTask`: the user is cancelling the *request*
+     * they placed, and the server owns however many download tasks it split that
+     * into. The failure is reported as a notice rather than swallowed, because a
+     * cancel that silently did nothing is indistinguishable from one that worked
+     * until the row is still there a minute later.
+     */
+    fun onStopPull(album: Album) {
+        viewModelScope.launch {
+            when (val result: Outcome<Unit> = pulls.cancelRequest(album.releaseGroupMbid)) {
+                is Outcome.Success -> {
+                    placedPulls.value = placedPulls.value - album.releaseGroupMbid
+                    notice.value = SearchNotice.pullStopped(album.title)
+                }
+
+                is Outcome.Failure -> notice.value = SearchNotice(
+                    message = problemMessage(result.error),
+                    isProblem = true,
+                )
+            }
+        }
+    }
+
+    /**
+     * Run the search in the field again.
+     *
+     * Offered by the banner on a search that found nothing with a lane that never
+     * ran, which is the one empty state where trying again is a reasonable thing
+     * to do: the library half already answered and cannot answer differently, and
+     * the half that is missing is missing because of a connection that may since
+     * have come back.
+     *
+     * The query is not touched, so the field, the caret and the recent-search
+     * history all stay as they were; [retries] is what [results] restarts on.
+     */
+    fun onRetrySearch() {
+        if (query.value.trim().isEmpty()) return
+        retries.value += 1
+    }
+
     fun onDismissNotice() {
         notice.value = null
     }
@@ -573,6 +669,7 @@ class SearchViewModel @Inject constructor(
         val album: Album?,
         val monitorArtist: Boolean,
         val busy: Boolean,
+        val placed: Map<ReleaseGroupMbid, RequestStatus>,
     )
 
     private companion object {

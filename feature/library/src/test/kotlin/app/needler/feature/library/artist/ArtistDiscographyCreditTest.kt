@@ -26,10 +26,10 @@ import org.junit.Test
  *
  * ## What is asserted
  *
- * That the placeholder is gone, and that it is gone the right way round: the row takes the page's own
- * artist when the catalogue gave it none, drops the artist entirely when nothing at all is known, and
- * keeps a credit the catalogue *did* send even when it disagrees with the page - a collaboration is
- * not a gap to fill.
+ * That the placeholder is gone, and that it is gone the right way round: the row says nothing about
+ * the artist when the credit is the page's own or when nothing at all is known, leads with the year,
+ * and keeps a credit the catalogue *did* send when it disagrees with the page - a collaboration is
+ * the one case where the row's artist is news.
  */
 class ArtistDiscographyCreditTest {
 
@@ -44,29 +44,29 @@ class ArtistDiscographyCreditTest {
     )
 
     @Test
-    fun `a release with no credit takes the name of the artist whose page it is on`() {
+    fun `a release with no credit says nothing about the artist whose page it is on`() {
         val state = ArtistUiState(loading = false, knownName = "Dido")
 
-        assertEquals("Dido · 1999", discographyRowSubtitle(dido, state.creditedName))
+        // The heading above these rows is the word "Dido". Repeating it forty times down the
+        // narrowest column on the screen is what pushed the year off the row at 200% text.
+        assertEquals("1999", discographyRowSubtitle(dido, state.creditedName))
     }
 
     /**
      * The same when the name comes from the mirror rather than from the tap.
      *
      * The two paths differ - `artist` is the mirror's row, `knownName` the hint the route carried -
-     * and the row must not care which of them named the artist.
+     * and the row must not care which of them named the artist. Either way it is the page's own
+     * artist and the row stays quiet about it.
      */
     @Test
-    fun `the mirror's own artist row names the rows just as well`() {
+    fun `the mirror's own artist row is dropped from the rows just as well`() {
         val state = ArtistUiState(
             loading = false,
-            artist = SampleLibrary.artists.first(),
+            artist = SampleLibrary.marias,
         )
 
-        assertEquals(
-            SampleLibrary.artists.first().name + " · 1999",
-            discographyRowSubtitle(dido, state.creditedName),
-        )
+        assertEquals("1999", discographyRowSubtitle(dido, state.creditedName))
     }
 
     /** The defect itself: the string that must never appear on one of these rows again. */
@@ -92,7 +92,7 @@ class ArtistDiscographyCreditTest {
      */
     @Test
     fun `an artist nobody has named leaves the row reading as the year`() {
-        val state = ArtistUiState(loading = false, mbid = SampleLibrary.artists.first().mbid)
+        val state = ArtistUiState(loading = false, mbid = SampleLibrary.marias.mbid)
 
         assertNull(state.creditedName)
         assertEquals("1999", discographyRowSubtitle(dido, state.creditedName))
@@ -116,7 +116,7 @@ class ArtistDiscographyCreditTest {
         val state = ArtistUiState(loading = false, knownName = "Dido")
 
         assertEquals(
-            "Faithless · 1999",
+            "1999 · Faithless",
             discographyRowSubtitle(dido.copy(artistName = "Faithless"), state.creditedName),
         )
     }

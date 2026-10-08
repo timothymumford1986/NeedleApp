@@ -46,7 +46,7 @@ class ArtistViewModelTest {
     private val sessions = FakeSessions()
     private val catalogue = FakeArtistCatalogueSearch()
 
-    private val artist = SampleLibrary.artists.first()
+    private val artist = SampleLibrary.marias
     private val owned = listOf(SampleLibrary.submarine)
     private val unowned = listOf(
         SampleLibrary.album(
@@ -487,12 +487,11 @@ class ArtistViewModelTest {
             assertTrue(loaded.discographyHasMore)
             assertEquals(50, loaded.discographyFetched)
             assertEquals(212, loaded.discographyTotal)
-            // The label carries the server's own figures, which is the only thing a reader cannot
-            // work out from the list itself.
-            assertEquals(
-                "Show more · 50 of 212 releases looked up",
-                loaded.discographyMoreRow?.label,
-            )
+            // The label is the offer; the server's own figures - the one thing a reader cannot
+            // work out from the list itself - ride beside it as the detail, so the counter is not
+            // drawn in the colour this app reserves for controls.
+            assertEquals(SHOW_MORE_RELEASES, loaded.discographyMoreRow?.label)
+            assertEquals("50 of 212 releases looked up", loaded.discographyMoreRow?.detail)
             // And no claim that this is the whole discography while there is more of it.
             assertFalse(loaded.discographyEmpty)
 

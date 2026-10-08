@@ -68,10 +68,10 @@ fun SleepTimerChip(
 ) {
     val colors = NeedlerTheme.colors
     val armed: Boolean = timer.isArmed
-    // Armed reads in the transport's own "on" colour. Unarmed is textSecondary rather than textMuted:
-    // REQUIREMENTS.md keeps #6f7a68 as drawn for placeholders, timecodes and disabled text, and an
-    // unarmed timer is none of those - it is a live control that has to be findable at 3.82:1 on the
-    // surface it sits on.
+    // Armed reads in the transport's own "on" colour. Unarmed is textSecondary rather than the dim
+    // grey: `#6f7a68` is what the pack draws placeholders and inactive controls in - the `disabled`
+    // token - and an unarmed timer is neither. It is a live control, and at 3.82:1 on the surface it
+    // sits on the dim value was the least findable thing on the sheet.
     val tint: Color = when {
         armed && emphasised -> colors.accent
         armed -> colors.textPrimary

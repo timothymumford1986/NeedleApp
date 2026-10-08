@@ -3,12 +3,13 @@ package app.needler.feature.library.genres
 import app.cash.turbine.test
 import app.needler.core.domain.model.ConnectivityState
 import app.needler.feature.library.FakeSessions
+import app.needler.feature.library.FakeSyncRepository
 import app.needler.feature.library.MainDispatcherRule
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -20,10 +21,12 @@ class GenresViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     private val sessions = FakeSessions()
+    private val sync = FakeSyncRepository()
 
     private fun viewModel(library: FakeGenreLibrary) = GenresViewModel(
         library = library,
         sessions = sessions,
+        sync = sync,
     )
 
     @Test
@@ -74,11 +77,30 @@ class GenresViewModelTest {
         }
     }
 
+    /**
+     * Every genre row draws a figure, and a counted zero is one of them.
+     *
+     * `screenshots/genres-phone.png` had a bare gap where Shoegaze's count belongs, against a
+     * `genre-empty-phone.png` reading `0 tracks` for the same genre - one emptiness drawn twice,
+     * and the blank one reads as a rendering fault. "Unknown is not zero" is about not inventing a
+     * figure; `observeGenres` counts, so zero is not invented. The genuinely unknown case, which
+     * that query cannot produce, says so in words rather than drawing nothing.
+     */
     @Test
-    fun `a count is drawn when the mirror has one and nothing at all when it does not`() {
+    fun `every genre row draws a figure, including a counted zero`() {
         assertEquals("12 albums", genreRowValue(SampleGenres.soul))
         assertEquals("1 album", genreRowValue(SampleGenres.jazz))
-        // Unknown is not zero: "0 albums" would be a claim the mirror never made.
-        assertNull(genreRowValue(SampleGenres.uncounted))
+        assertEquals("0 albums", genreRowValue(SampleGenres.empty))
+        assertEquals(COUNT_UNKNOWN, genreRowValue(SampleGenres.uncounted))
+    }
+
+    /** The empty state's one action reaches the repository, forced. */
+    @Test
+    fun `sync now forces a delta sync`() = runTest {
+        viewModel(FakeGenreLibrary(emptyList())).onSyncNow()
+        advanceUntilIdle()
+
+        assertEquals(1, sync.deltaSyncCalls)
+        assertEquals(true, sync.lastForced)
     }
 }

@@ -43,9 +43,17 @@ import app.needler.core.domain.model.ReleaseGroupMbid
  * @param onOpenAlbum an album row, owned or not. There is one album screen, not
  *   two: an un-owned result opens the same destination and differs only in the
  *   state it finds there.
- * @param onCancel the **Cancel** link on the phone (03) and the back arrow on
- *   the tablet (10). Search is reachable both as a navigation destination and
- *   from the library's search box, so what "back" means is the host's to decide.
+ * @param onCancel the way out of the screen: one back control at both widths
+ *   now, for the reason given on `SearchScreen`'s `LEAVE_SEARCH_LABEL`. Search
+ *   is reachable both as a navigation destination and from the library's search
+ *   box, so what "back" means is the host's to decide.
+ * @param onOpenSettings where a user whose sign-in has expired goes to renew it.
+ *   REQUIREMENTS.md "Search behaviour", rule 4 leaves the library searchable and
+ *   the catalogue not until they do, and the banner that says so used to name
+ *   Settings in prose with nothing beside it to press. The host owns the
+ *   destination for the same reason it owns [onCancel]: Search is a tab, and
+ *   whether Settings is a sibling tab or a pushed screen is the scaffold's
+ *   business.
  */
 @Composable
 fun SearchRoute(
@@ -53,6 +61,7 @@ fun SearchRoute(
     onOpenAlbum: (ReleaseGroupMbid) -> Unit,
     onOpenArtist: (ArtistMbid) -> Unit,
     onCancel: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
@@ -68,6 +77,8 @@ fun SearchRoute(
         onRecentQuerySelect = viewModel::onRecentQuerySelect,
         onClearRecentQueries = viewModel::onClearRecentQueries,
         onSuggestionSelect = viewModel::onSuggestionSelect,
+        onRetrySearch = viewModel::onRetrySearch,
+        onOpenSettings = onOpenSettings,
         onArtistClick = { artist: Artist ->
             viewModel.onResultOpened()
             onOpenArtist(artist.mbid)
@@ -77,6 +88,7 @@ fun SearchRoute(
             onOpenAlbum(album.releaseGroupMbid)
         },
         onPull = viewModel::onPull,
+        onStopPull = viewModel::onStopPull,
         onPlayTrack = viewModel::onPlayTrack,
         onAddTrackToCrate = viewModel::onAddTrackToCrate,
         onAddAlbumToCrate = viewModel::onAddAlbumToCrate,

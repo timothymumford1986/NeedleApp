@@ -124,11 +124,18 @@ sealed interface PlaylistNotice {
     /** True for the ones that are bad news, which the screen tints differently. */
     val isProblem: Boolean get() = false
 
-    /** A playlist was created. */
+    /**
+     * A playlist was created.
+     *
+     * The queued clause is [QUEUED], which every notice here appends verbatim. It read "It **is**
+     * created on the server on your next connection" - the present tense for something that has
+     * not happened - and the other five said "The server is told", which is a third phrasing of
+     * the same event. `PlaylistSyncState.label` has the argument for why there is now one.
+     */
     data class Created(val name: String, val queued: Boolean) : PlaylistNotice {
         override val message: String
             get() = if (queued) {
-                name + " is on this device. It is created on the server on your next connection."
+                name + " is on this device." + QUEUED
             } else {
                 name + " created."
             }
@@ -138,7 +145,7 @@ sealed interface PlaylistNotice {
     data class Renamed(val name: String, val queued: Boolean) : PlaylistNotice {
         override val message: String
             get() = if (queued) {
-                "Renamed to " + name + " on this device. The server is told on your next connection."
+                "Renamed to " + name + " on this device." + QUEUED
             } else {
                 "Renamed to " + name + "."
             }
@@ -148,7 +155,7 @@ sealed interface PlaylistNotice {
     data class Deleted(val name: String, val queued: Boolean) : PlaylistNotice {
         override val message: String
             get() = if (queued) {
-                "Deleted " + name + " on this device. The server is told on your next connection."
+                "Deleted " + name + " on this device." + QUEUED
             } else {
                 "Deleted " + name + "."
             }
@@ -158,21 +165,20 @@ sealed interface PlaylistNotice {
     data class TracksAdded(val count: Int, val queued: Boolean) : PlaylistNotice {
         override val message: String
             get() = LibraryFormat.plural(count.toLong(), "track") + " added." +
-                if (queued) " The server is told on your next connection." else ""
+                if (queued) QUEUED else ""
     }
 
     /** Tracks were taken out of a playlist. */
     data class TracksRemoved(val count: Int, val queued: Boolean) : PlaylistNotice {
         override val message: String
             get() = LibraryFormat.plural(count.toLong(), "track") + " removed." +
-                if (queued) " The server is told on your next connection." else ""
+                if (queued) QUEUED else ""
     }
 
     /** The order changed. */
     data class Reordered(val queued: Boolean) : PlaylistNotice {
         override val message: String
-            get() = "New order saved." +
-                if (queued) " The server is told on your next connection." else ""
+            get() = "New order saved." + if (queued) QUEUED else ""
     }
 
     /**
@@ -194,8 +200,33 @@ sealed interface PlaylistNotice {
             }
     }
 
+    /**
+     * The server was asked for a missing track's album again.
+     *
+     * Deliberately not phrased as a promise. `retryRequest` queues an acquisition; whether a
+     * source exists is the server's problem and the answer arrives, if it arrives, as a sync some
+     * minutes later. REQUIREMENTS.md "Partial content is a normal state" is why the row offered
+     * the action at all, and the Pulls screen is where its progress can actually be watched.
+     */
+    data class RetryRequested(val title: String) : PlaylistNotice {
+        override val message: String
+            get() = "Asked the server for " + LibraryFormat.trackLabel(title) +
+                " again. Watch Pulls for what happens next."
+    }
+
     /** Something went wrong, in whatever words the domain error justified. */
     data class Problem(override val message: String) : PlaylistNotice {
         override val isProblem: Boolean get() = true
     }
+
 }
+
+/**
+ * The one clause that says the write is in the queue.
+ *
+ * Shared rather than written six times, which is how six notices came to say it three ways. The
+ * verb and the timing are [PlaylistSyncState]'s, so a badge, a header count, an offline note and a
+ * notice all name the same event in the same words.
+ */
+private const val QUEUED: String = " It will be sent to the server on your next connection."
+

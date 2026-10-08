@@ -66,24 +66,42 @@ class DownloadsUiStateTest {
 
     @Test
     fun `the summary counts the albums and totals what they occupy`() {
+        // No "on this device" on the end: the green Device badge beside it is the vocabulary's own
+        // word for that tier, and a screen with two names for one state is the thing the badge
+        // exists to stop.
         val state = DownloadsUiState(
             loading = false,
             downloaded = listOf(album("One", 1_073_741_824L), album("Two", 1_073_741_824L)),
         )
-        assertEquals("2 albums · 2.0 GB on this device", state.summary)
+        assertEquals("2 albums · 2.0 GB", state.summary)
     }
 
     @Test
     fun `one album is not pluralised`() {
         val state = DownloadsUiState(loading = false, downloaded = listOf(album("One", 1_048_576L)))
-        assertEquals("1 album · 1.0 MB on this device", state.summary)
+        assertEquals("1 album · 1.0 MB", state.summary)
     }
 
     @Test
-    fun `a device with nothing downloaded says so`() {
+    fun `the summary recomputes from the list, so a removal cannot leave it stale`() {
+        // REQUIREMENTS.md "Storage, and why there is no budget": "a 'remove' that leaves the usage
+        // figure unchanged is the one thing that would make this whole screen untrustworthy".
+        val before = DownloadsUiState(
+            loading = false,
+            downloaded = listOf(album("One", 1_073_741_824L), album("Two", 1_073_741_824L)),
+        )
+        val after = before.copy(downloaded = before.downloaded.drop(1))
+        assertEquals("2 albums · 2.0 GB", before.summary)
+        assertEquals("1 album · 1.0 GB", after.summary)
+    }
+
+    @Test
+    fun `a device with nothing downloaded has no header figure at all`() {
+        // The empty state carries the whole message. A header counting to zero over an empty state
+        // that also says it is empty is the list being called empty twice in two registers.
         val state = DownloadsUiState(loading = false)
         assertTrue(state.isEmpty)
-        assertEquals("Nothing is downloaded to this device.", state.summary)
+        assertEquals("", state.summary)
     }
 
     @Test
@@ -110,8 +128,56 @@ class DownloadsUiStateTest {
 
     @Test
     fun `a removal in flight stops every remove control responding`() {
-        assertFalse(DownloadsUiState(loading = false, working = true).canRemove)
+        val removing = album("Going", 1L)
+        assertFalse(
+            DownloadsUiState(
+                loading = false,
+                downloaded = listOf(removing),
+                removing = removing.releaseGroupMbid,
+            ).canRemove,
+        )
         assertTrue(DownloadsUiState(loading = false).canRemove)
+    }
+
+    @Test
+    fun `an undo in flight stops them too`() {
+        // Both talk to the same repository about the same files, so a removal started under a
+        // restore would race it.
+        assertFalse(DownloadsUiState(loading = false, undoing = true).canRemove)
+    }
+
+    @Test
+    fun `only the album being deleted is marked, not the whole list`() {
+        // The defect this replaces: a Boolean greyed out all fourteen controls at once, so the one
+        // piece of information an irreversible action owes the user - which album - was the one
+        // thing the screen did not show.
+        val going = album("Going", 2L)
+        val staying = album("Staying", 1L)
+        val state = DownloadsUiState(
+            loading = false,
+            downloaded = listOf(going, staying),
+            removing = going.releaseGroupMbid,
+        )
+        assertEquals(DownloadedRowState.Removing, state.rowState(going))
+        assertEquals(DownloadedRowState.Idle, state.rowState(staying))
+    }
+
+    @Test
+    fun `at rest no row is marked`() {
+        val one = album("One", 1L)
+        val state = DownloadsUiState(loading = false, downloaded = listOf(one))
+        assertEquals(DownloadedRowState.Idle, state.rowState(one))
+    }
+
+    // ---- the notice ---------------------------------------------------------
+
+    @Test
+    fun `a notice reads as one sentence to a screen reader`() {
+        val notice = DownloadsNotice(
+            headline = "Removed In Rainbows",
+            detail = "10 tracks deleted, 584 MB freed.",
+        )
+        assertEquals("Removed In Rainbows. 10 tracks deleted, 584 MB freed.", notice.spoken)
     }
 
     private fun album(title: String, sizeBytes: Long): DownloadedAlbum = DownloadedAlbum(

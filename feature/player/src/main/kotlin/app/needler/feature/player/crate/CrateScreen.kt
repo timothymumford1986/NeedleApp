@@ -30,6 +30,7 @@ import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.PathChevronLeft
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.QueueItem
+import app.needler.feature.player.ui.PlayerFormat
 
 /**
  * The crate, screen 08 - "in the crate", which is what this product calls the play queue.
@@ -148,6 +149,22 @@ fun CrateScreen(
                 .padding(horizontal = 20.dp),
             contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
         ) {
+            // The record, where the rows gave it up. `CrateUiState.isOneRecord` takes the artist and
+            // the album off every row because eleven copies of one line carry nothing - and then the
+            // two words appeared nowhere on the screen, under the generic heading "IN THE CRATE".
+            // Hoisted, not dropped.
+            val record: String? = state.recordLabel
+            if (record != null) {
+                item(key = "record") {
+                    Text(
+                        text = record,
+                        style = NeedlerTheme.typography.bodyStrong,
+                        color = NeedlerTheme.colors.textPrimary,
+                        modifier = Modifier.padding(bottom = 10.dp).semantics { heading() },
+                    )
+                }
+            }
+
             val playing: QueueItem? = state.playing
             if (playing != null) {
                 item(key = "heading-playing") {
@@ -165,6 +182,7 @@ fun CrateScreen(
                         onRemove = { onRemove(playing.id) },
                         subtitle = state.rowSubtitle(playing),
                         showArtwork = state.showsRowArtwork,
+                        retrieval = state.retrievalOf(playing),
                     )
                 }
             }
@@ -176,6 +194,20 @@ fun CrateScreen(
                     trailingSpoken = state.spokenUpNextSummary,
                     modifier = Modifier.padding(top = 20.dp, bottom = 6.dp),
                 )
+            }
+
+            // "UP NEXT / 0 tracks" over 1,200 px of nothing is a heading for a list that does not
+            // exist. The crate has not failed - this is the last track of the record, which is a
+            // thing worth being told plainly rather than inferred from an empty screen.
+            if (upNext.isEmpty()) {
+                item(key = "nothing-up-next") {
+                    Text(
+                        text = "This is the last track. " + PlayerFormat.EMPTY_CRATE,
+                        style = NeedlerTheme.typography.meta,
+                        color = NeedlerTheme.colors.textSecondary,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
 
             itemsIndexed(items = upNext, key = { _, item -> ROW_KEY_PREFIX + item.id }) { position, item ->
@@ -202,6 +234,7 @@ fun CrateScreen(
                     onRemove = { onRemove(item.id) },
                     subtitle = state.rowSubtitle(item),
                     showArtwork = state.showsRowArtwork,
+                    retrieval = state.retrievalOf(item),
                 )
             }
         }
@@ -303,7 +336,8 @@ private fun EmptyCrate(modifier: Modifier = Modifier) {
             textAlign = TextAlign.Center,
         )
         Text(
-            text = "Play an album and it lands here.",
+            // One wording of this sentence, from PlayerFormat. There were three.
+            text = PlayerFormat.EMPTY_CRATE,
             style = NeedlerTheme.typography.meta,
             color = colors.textSecondary,
             textAlign = TextAlign.Center,

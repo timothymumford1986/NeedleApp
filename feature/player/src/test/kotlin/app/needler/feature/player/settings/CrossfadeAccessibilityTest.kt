@@ -15,6 +15,7 @@ import app.needler.core.domain.model.CrossfadeDuration
 import app.needler.core.domain.model.CrossfadeSettings
 import app.needler.feature.player.screenshot.PlayerScreenshots
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -128,5 +129,69 @@ class CrossfadeAccessibilityTest {
                 )
             }
         }
+    }
+}
+
+/**
+ * The preview card, which did not move.
+ *
+ * ## Why this is arithmetic and not a screenshot diff
+ *
+ * It *was* a screenshot diff, and it is how the defect shipped: `player-crossfade-phone.png` at 4 s
+ * and `player-crossfade-twelve-phone.png` at 12 s were committed side by side and were pixel-identical
+ * across the whole curve region - 0 differing pixels of 72,600 sampled at x 60 to 720, y 590 to 700 -
+ * because `CrossfadePreview` took a boolean and three of the four stops drew one picture. Two goldens
+ * that agree are two goldens nobody compared.
+ *
+ * `handoverUnits` is the one value that makes the card respond, so it is asserted directly, at every
+ * stop, with no render to read. A render can still be looked at; this is what fails if the panel goes
+ * back to being a constant.
+ */
+class CrossfadePreviewTest {
+
+    @Test
+    fun `every stop draws a different handover`() {
+        val widths: List<Float> = CrossfadeDuration.entries.map(::handoverUnits)
+        assertEquals(
+            "the three fading stops must draw three different pictures, not one",
+            3,
+            widths.drop(1).distinct().size,
+        )
+    }
+
+    /** The pack's own drawing: x=180 to x=250 on a 320-unit viewBox. */
+    @Test
+    fun `four seconds is still the pack's 70 units`() {
+        assertEquals(70f, handoverUnits(CrossfadeDuration.FOUR_SECONDS), 0.001f)
+    }
+
+    @Test
+    fun `the handover grows with the duration`() {
+        assertEquals(105f, handoverUnits(CrossfadeDuration.SIX_SECONDS), 0.001f)
+        assertEquals(210f, handoverUnits(CrossfadeDuration.TWELVE_SECONDS), 0.001f)
+    }
+
+    /**
+     * The fade ends at the pack's x=250 and begins a handover earlier, so the widest one has to start
+     * at or after x=0 or the curve is drawn off the left edge of the card.
+     */
+    @Test
+    fun `the longest fade still starts inside the card`() {
+        for (duration in CrossfadeDuration.entries) {
+            val start: Float = 250f - handoverUnits(duration)
+            assertTrue(
+                duration.toString() + " begins at x=" + start + ", outside the 320-unit viewBox",
+                start >= 0f,
+            )
+        }
+    }
+
+    /**
+     * Off never fades, and the square cut it draws is at x=215 - so its width must not put the fade's
+     * start beyond that, which would invert the path.
+     */
+    @Test
+    fun `off keeps a width that leaves its square cut intact`() {
+        assertTrue(250f - handoverUnits(CrossfadeDuration.OFF) <= 215f)
     }
 }

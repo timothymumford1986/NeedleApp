@@ -24,6 +24,7 @@ import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.feature.player.PlayerUiState
 import app.needler.feature.player.ui.PlayerArtwork
+import app.needler.feature.player.ui.PlayerFormat
 import app.needler.feature.player.ui.PlayerNextIcon
 import app.needler.feature.player.ui.PlayerPauseIcon
 import app.needler.feature.player.ui.PlayerPlayIcon
@@ -99,7 +100,11 @@ fun MiniPlayer(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = state.item?.track?.artistName ?: state.subtitle,
+                // Not `state.subtitle`: the idle form of it is a whole sentence, and the bar gives
+                // this line about 200 dp, so `player-mini-idle-phone.png` read
+                // "Play an album and it lands i..." - a sentence cut off before the word that
+                // carries it. The short form says the same thing and fits.
+                text = state.item?.track?.artistName ?: PlayerFormat.EMPTY_CRATE_SHORT,
                 style = typography.meta,
                 color = colors.textSecondary,
                 maxLines = 1,

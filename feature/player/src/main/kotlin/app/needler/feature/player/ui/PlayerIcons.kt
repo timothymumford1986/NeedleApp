@@ -87,6 +87,21 @@ const val PathSpeaker: String =
         "M13 7.5a1 1 0 1 1-2 0 1 1 0 1 1 2 0"
 
 /**
+ * The bar drawn across [PathSpeaker] for an output that cannot be used.
+ *
+ * The third glyph with no counterpart in the pack, and the reason is the same as the other two: the
+ * design draws the state but gives it no mark. Screen 21 lists a Cast receiver that cannot reach the
+ * server, and the only thing telling it from a working one was a sentence in the pack's dim grey
+ * `#6f7a68` - 3.82:1 on surface, the value the `disabled` token now carries. So the row a listener
+ * must not tap carried the screen's least readable text and no other signal at all.
+ *
+ * A diagonal bar on the same 24x24 viewport, drawn in `destructive`, which REQUIREMENTS.md added
+ * precisely so that a state with consequences is not styled like the primary action. The reason stays
+ * underneath; this is the part that can be seen without reading.
+ */
+const val PathBarred: String = "M4 20L20 4"
+
+/**
  * Repeat.
  *
  * The one glyph here with no counterpart in the pack: the design draws no repeat control at all,
@@ -124,6 +139,15 @@ fun PlayerBluetoothIcon(tint: Color, modifier: Modifier = Modifier, size: Dp = 1
 @Composable
 fun PlayerSpeakerIcon(tint: Color, modifier: Modifier = Modifier, size: Dp = 16.dp) =
     NeedlerStrokeIcon(PathSpeaker, tint, modifier, size)
+
+/** A speaker with [PathBarred] through it: an output the picker lists but cannot offer. */
+@Composable
+fun PlayerUnavailableSpeakerIcon(tint: Color, modifier: Modifier = Modifier, size: Dp = 22.dp) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        NeedlerStrokeIcon(PathSpeaker, tint, size = size)
+        NeedlerStrokeIcon(PathBarred, tint, size = size)
+    }
+}
 
 @Composable
 fun PlayerPlayIcon(tint: Color, modifier: Modifier = Modifier, size: Dp = 36.dp) =

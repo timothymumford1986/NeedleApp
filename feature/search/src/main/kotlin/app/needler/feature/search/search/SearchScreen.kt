@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,11 +23,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
@@ -38,47 +40,65 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.needler.core.design.component.CRATE_LONG_PRESS_LABEL
 import app.needler.core.design.component.NeedlerAlbumBadge
 import app.needler.core.design.component.NeedlerAlbumRow
+import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerChevronRightIcon
+import app.needler.core.design.component.NeedlerClockIcon
 import app.needler.core.design.component.NeedlerCrateControl
+import app.needler.core.design.component.NeedlerDropdownMenu
 import app.needler.core.design.component.NeedlerHairline
 import app.needler.core.design.component.NeedlerIconButton
+import app.needler.core.design.component.NeedlerMoreIcon
+import app.needler.core.design.component.NeedlerOnDeviceIcon
 import app.needler.core.design.component.NeedlerPullButton
 import app.needler.core.design.component.NeedlerRequestSheetOverlay
 import app.needler.core.design.component.NeedlerSearchField
 import app.needler.core.design.component.NeedlerSearchIcon
+import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerSectionHeader
 import app.needler.core.design.component.NeedlerStateBadge
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.PathChevronLeft
-import app.needler.core.design.component.CRATE_LONG_PRESS_LABEL
 import app.needler.core.design.component.accessibleLabel
 import app.needler.core.design.component.needlerRowActions
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
+import app.needler.core.domain.model.RequestStatus
 import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.SearchSuggestion
 import app.needler.core.domain.model.SuggestionKind
@@ -97,10 +117,10 @@ import kotlin.math.roundToInt
  * The Search screen: `design/html/03-Search.html` on a phone and
  * `design/html/10-TabletSearch.html` on a tablet.
  *
- * One composable serves both. The differences are the affordance beside the
- * field — a **Cancel** link on the phone, a back arrow on the tablet, as the two
- * files draw them — and whether the Albums block is a list of rows or a
- * two-column grid of cards. REQUIREMENTS.md "Tablet layout": "This is one
+ * One composable serves both. The only difference left is whether the Albums
+ * block is a list of rows or a grid of cards; the way out of the screen is the
+ * same control at both widths, for the reason given on [LEAVE_SEARCH_LABEL].
+ * REQUIREMENTS.md "Tablet layout": "This is one
  * navigation model at two widths, driven by `WindowSizeClass`. Nothing is
  * tablet-only, so no feature needs building twice."
  *
@@ -151,9 +171,12 @@ fun SearchScreen(
     onRecentQuerySelect: (String) -> Unit,
     onClearRecentQueries: () -> Unit,
     onSuggestionSelect: (SearchSuggestion) -> Unit,
+    onRetrySearch: () -> Unit,
+    onOpenSettings: () -> Unit,
     onArtistClick: (Artist) -> Unit,
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onStopPull: (Album) -> Unit,
     onPlayTrack: (Track) -> Unit,
     onAddTrackToCrate: (Track, Boolean) -> Unit,
     onAddAlbumToCrate: (Album, Boolean) -> Unit,
@@ -224,89 +247,99 @@ fun SearchScreen(
                 resultsState.scrollToItem(0)
             }
 
-            LazyColumn(
-                state = resultsState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .onGloballyPositioned { coordinates ->
-                        val root: LayoutCoordinates = coordinates.findRootCoordinates()
-                        val listBottom: Float =
-                            coordinates.positionInRoot().y + coordinates.size.height
-                        chromeBelowList.value =
-                            (root.size.height - listBottom).roundToInt().coerceAtLeast(0)
-                    },
-                contentPadding = PaddingValues(
-                    start = gutter,
-                    end = gutter,
-                    top = if (wide) spacing.step12 else spacing.step10,
-                    // The list's own trailing space, plus however much of the window's
-                    // bottom safe area - the keyboard, above all - is underneath it.
-                    bottom = spacing.step12 + bottomInset,
-                ),
-            ) {
-                // Read out of the state once, into locals: `catalogueNote` is a
-                // computed property, so re-reading it inside an item lambda would
-                // both recompute it and defeat the null check above it.
-                val notice: SearchNotice? = state.notice
-                val catalogueNote: String? = state.catalogueNote
+            // The pane's own width, which is not the window's: on a tablet this
+            // screen sits between a nav rail and the player sidebar. The album
+            // grid's column count is measured from it rather than fixed, so the
+            // cards are a readable width at whatever width the host gives.
+            // BoxWithConstraints and not the `onGloballyPositioned` below it,
+            // because a column count written into state after layout renders one
+            // frame at the wrong count - and the screenshot tests capture frames.
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                val albumColumns: Int = albumColumnsFor(wide, maxWidth - gutter * 2)
+                LazyColumn(
+                    state = resultsState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .nestedScroll(rememberKeyboardDismissOnScroll())
+                        .onGloballyPositioned { coordinates ->
+                            val root: LayoutCoordinates = coordinates.findRootCoordinates()
+                            val listBottom: Float =
+                                coordinates.positionInRoot().y + coordinates.size.height
+                            chromeBelowList.value =
+                                (root.size.height - listBottom).roundToInt().coerceAtLeast(0)
+                        },
+                    contentPadding = PaddingValues(
+                        start = gutter,
+                        end = gutter,
+                        top = if (wide) spacing.step12 else spacing.step10,
+                        // The list's own trailing space, plus however much of the window's
+                        // bottom safe area - the keyboard, above all - is underneath it.
+                        bottom = spacing.step12 + bottomInset,
+                    ),
+                ) {
+                    // Read out of the state once, into locals: `catalogueBanner` is a
+                    // computed property, so re-reading it inside an item lambda would
+                    // both recompute it and defeat the null check above it.
+                    val notice: SearchNotice? = state.notice
+                    val banner: SearchBanner? = state.catalogueBanner
 
-                if (notice != null) {
-                    item(key = "notice") {
-                        NoticeLine(
-                            message = notice.message,
-                            isProblem = notice.isProblem,
-                            onDismiss = onDismissNotice,
-                            // The crate's own count and total duration, under the sentence
-                            // saying something went into it.
-                            detail = if (notice.showsCrate) state.crateLine else null,
-                        )
-                        Spacer(modifier = Modifier.height(headerGap))
+                    if (notice != null) {
+                        item(key = "notice") {
+                            NoticeLine(
+                                message = notice.message,
+                                isProblem = notice.isProblem,
+                                onDismiss = onDismissNotice,
+                                // The crate's own count and total duration, under the sentence
+                                // saying something went into it.
+                                detail = if (notice.showsCrate) state.crateLine else null,
+                            )
+                            Spacer(modifier = Modifier.height(headerGap))
+                        }
                     }
-                }
 
-                if (catalogueNote != null) {
-                    item(key = "catalogue-note") {
-                        NoticeLine(
-                            message = catalogueNote,
-                            isProblem = state.catalogueNoteIsProblem,
-                            onDismiss = null,
-                        )
-                        Spacer(modifier = Modifier.height(headerGap))
+                    if (banner != null) {
+                        item(key = "catalogue-banner") {
+                            CatalogueBannerLine(banner = banner, onOpenSettings = onOpenSettings)
+                            Spacer(modifier = Modifier.height(headerGap))
+                        }
                     }
-                }
 
-                when {
-                    state.isIdle -> idleBlock(
-                        state = state,
-                        headerGap = headerGap,
-                        onRecentQuerySelect = onRecentQuerySelect,
-                        onClearRecentQueries = onClearRecentQueries,
-                    )
+                    when {
+                        state.isIdle -> idleBlock(
+                            state = state,
+                            headerGap = headerGap,
+                            onRecentQuerySelect = onRecentQuerySelect,
+                            onClearRecentQueries = onClearRecentQueries,
+                        )
 
-                    state.searching -> item(key = "skeleton") { SearchSkeleton() }
+                        state.searching -> item(key = "skeleton") { SearchSkeleton() }
 
-                    state.showEmptyResult -> emptyResultBlock(
-                        state = state,
-                        sectionGap = sectionGap,
-                        headerGap = headerGap,
-                        onSuggestionSelect = onSuggestionSelect,
-                    )
+                        state.showEmptyResult -> emptyResultBlock(
+                            state = state,
+                            sectionGap = sectionGap,
+                            headerGap = headerGap,
+                            onSuggestionSelect = onSuggestionSelect,
+                            onRecentQuerySelect = onRecentQuerySelect,
+                            onRetrySearch = onRetrySearch,
+                        )
 
-                    else -> resultBlocks(
-                        state = state,
-                        wide = wide,
-                        sectionGap = sectionGap,
-                        headerGap = headerGap,
-                        onArtistClick = onArtistClick,
-                        onAlbumClick = onAlbumClick,
-                        onPull = onPull,
-                        onPlayTrack = onPlayTrack,
-                        onAddTrackToCrate = onAddTrackToCrate,
-                        onAddAlbumToCrate = onAddAlbumToCrate,
-                        onShowAll = onShowAll,
-                        onLoadMore = onLoadMore,
-                    )
+                        else -> resultBlocks(
+                            state = state,
+                            wide = wide,
+                            albumColumns = albumColumns,
+                            sectionGap = sectionGap,
+                            headerGap = headerGap,
+                            onArtistClick = onArtistClick,
+                            onAlbumClick = onAlbumClick,
+                            onPull = onPull,
+                            onStopPull = onStopPull,
+                            onPlayTrack = onPlayTrack,
+                            onAddTrackToCrate = onAddTrackToCrate,
+                            onAddAlbumToCrate = onAddAlbumToCrate,
+                            onShowAll = onShowAll,
+                            onLoadMore = onLoadMore,
+                        )
+                    }
                 }
             }
         }
@@ -391,6 +424,49 @@ fun SearchScreen(
  * Returns zero while the list has never been positioned, and in the screenshot
  * tests, which render with no insets at all.
  */
+/**
+ * A scroll of the results puts the keyboard away.
+ *
+ * ## The trap this opens
+ *
+ * [SearchScreen]'s `autoFocus` raises the keyboard on arrival, which is right for
+ * a screen whose only purpose is typing and is why it is there. What it also does
+ * is cover the bottom of the window with about 200px of keyboard before the user
+ * has done anything, and the two things underneath are the host's bottom
+ * navigation bar and — on the idle screen — the **Clear recent searches** row.
+ * Observed on a device: arriving at Search and deciding not to search left no
+ * visible way off the tab, because the controls for leaving it were behind the
+ * keyboard that had opened itself.
+ *
+ * The scroll is the gesture a user already makes there, and every list in the
+ * platform treats it as "I am reading, not typing". Taking focus off the field on
+ * the first scroll of the results dismisses the keyboard the same way, and
+ * restores the row and the nav bar together.
+ *
+ * ## Why not simply stop auto-focusing
+ *
+ * Because the keyboard is correct on arrival. Search opened with `mInputShown=false`
+ * before `autoFocus` existed and cost a tap before any search could start, on the
+ * one screen that exists to be typed into. The defect is not that the keyboard
+ * appears, it is that nothing dismissed it; this dismisses it.
+ *
+ * `onPreScroll` rather than `onPostScroll`, so the keyboard goes as the gesture
+ * starts rather than after the list has already moved under it. Nothing is
+ * consumed — [Offset.Zero] — so the scroll itself is untouched.
+ */
+@Composable
+private fun rememberKeyboardDismissOnScroll(): NestedScrollConnection {
+    val focusManager: FocusManager = LocalFocusManager.current
+    return remember(focusManager) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y != 0f) focusManager.clearFocus()
+                return Offset.Zero
+            }
+        }
+    }
+}
+
 @Composable
 private fun listBottomInset(chromeBelowListPx: Int): Dp {
     val density: Density = LocalDensity.current
@@ -406,10 +482,11 @@ private fun listBottomInset(chromeBelowListPx: Int): Dp {
 /**
  * The field and the way out.
  *
- * Screen 03 puts a plain **Cancel** link to the right of the field; screen 10
- * puts a back arrow to its left and caps the field at 560px so it does not
- * stretch across the whole content pane. Both are the same escape hatch drawn
- * for the width they are on, which is why one callback serves both.
+ * Screen 03 puts a plain **Cancel** link to the right of the phone's field and
+ * screen 10 a back arrow to the left of the tablet's. One callback always served
+ * both, because they are one escape hatch; they are now one control as well, and
+ * [LEAVE_SEARCH_LABEL] carries the two reasons. The tablet keeps its 560px cap
+ * on the field so it does not stretch across the whole content pane.
  *
  * The keyboard's action key is `Search` and it does not submit anything: results
  * are already live by the time a finger reaches it. All it does is tell the
@@ -519,45 +596,59 @@ private fun SearchHeader(
         modifier = Modifier
             .fillMaxWidth()
             .padding(
-                start = if (wide) gutter - 10.dp else gutter,
+                // The back control is a 48dp target around a 24dp glyph, so it
+                // carries 10dp of its own air on the leading side; the gutter is
+                // pulled in by that much so the glyph lines up with the content
+                // under it rather than sitting 10dp inside it. Both widths now,
+                // because both widths now have the control.
+                start = gutter - 10.dp,
                 end = gutter,
                 top = if (wide) spacing.step12 else spacing.step14,
             ),
         horizontalArrangement = Arrangement.spacedBy(if (wide) spacing.step8 else spacing.step5),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (wide) {
-            NeedlerIconButton(contentDescription = "Back", onClick = onCancel) {
-                NeedlerStrokeIcon(
-                    pathData = PathChevronLeft,
-                    tint = colors.textPrimary,
-                    size = 24.dp,
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .widthIn(max = 560.dp),
-            ) { field() }
-        } else {
-            Box(modifier = Modifier.weight(1f)) { field() }
-            Box(
-                modifier = Modifier
-                    .defaultMinSize(minHeight = NeedlerTheme.sizes.minTouchTarget)
-                    .clickable(role = Role.Button, onClick = onCancel)
-                    .padding(horizontal = spacing.step4),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "Cancel",
-                    style = NeedlerTheme.typography.rowTitle,
-                    color = colors.textSecondary,
-                    maxLines = 1,
-                )
-            }
+        NeedlerIconButton(contentDescription = LEAVE_SEARCH_LABEL, onClick = onCancel) {
+            NeedlerStrokeIcon(
+                pathData = PathChevronLeft,
+                tint = colors.textPrimary,
+                size = 24.dp,
+            )
         }
+        Box(
+            modifier = if (wide) {
+                Modifier.weight(1f).widthIn(max = 560.dp)
+            } else {
+                Modifier.weight(1f)
+            },
+        ) { field() }
     }
 }
+
+/**
+ * The one way out, on both widths.
+ *
+ * Screen 03 draws a text **Cancel** to the right of the phone's field and screen
+ * 10 a back arrow to the left of the tablet's, and reproducing both gave Search
+ * two dismissal models and two escape gestures for one escape — with an `X`
+ * inside the field on each, which clears the query and is a different act
+ * entirely. A reader who learned the phone could not use the tablet.
+ *
+ * ## And the text label was taking the query's width
+ *
+ * The field is the one thing on this screen that must stay legible, and it was
+ * the thing that shrank. `Cancel` is `rowTitle`, so at the 200% text scale
+ * REQUIREMENTS.md "Accessibility" requires it drew about 150dp of a 390dp phone
+ * — and `BasicTextField` is a single-line editor with no ellipsis, so the field
+ * does not report that it has run out of room, it simply stops: the query
+ * "khruangbin" rendered as "khruangb" with nothing to say it had been cut.
+ *
+ * A [NeedlerIconButton] is 44dp visual on a 48dp target at every text size,
+ * because an icon does not scale with the font. That is 100dp of the phone's
+ * width handed back to the query at 200%, and about 30dp at 100%, and it is the
+ * same control the tablet already had.
+ */
+private const val LEAVE_SEARCH_LABEL: String = "Leave search"
 
 // ---------------------------------------------------------------------------
 // Results
@@ -581,11 +672,13 @@ private fun SearchHeader(
 private fun LazyListScope.resultBlocks(
     state: SearchUiState,
     wide: Boolean,
+    albumColumns: Int,
     sectionGap: Dp,
     headerGap: Dp,
     onArtistClick: (Artist) -> Unit,
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onStopPull: (Album) -> Unit,
     onPlayTrack: (Track) -> Unit,
     onAddTrackToCrate: (Track, Boolean) -> Unit,
     onAddAlbumToCrate: (Album, Boolean) -> Unit,
@@ -638,10 +731,12 @@ private fun LazyListScope.resultBlocks(
         albumRows(
             keyPrefix = "owned",
             albums = libraryAlbums,
+            state = state,
             wide = wide,
-            busy = state.busy,
+            columns = albumColumns,
             onAlbumClick = onAlbumClick,
             onPull = onPull,
+            onStopPull = onStopPull,
             onAddToCrate = onAddAlbumToCrate,
         )
     }
@@ -674,6 +769,21 @@ private fun LazyListScope.resultBlocks(
         blockHeader(
             key = "albums-catalogue",
             title = CATALOGUE_ALBUMS_HEADER,
+            // The one block on this screen holding records the user does not
+            // have. Everything above it - the artists, the library's albums, the
+            // songs - is theirs and plays; everything below it is a shopping
+            // list. The two blocks were drawn in identical typography, at
+            // identical geometry, with identical thumbnails, and the only
+            // pre-attentive cue that the boundary had been crossed was the Pull
+            // pill on the right of a row. That is a cue you have to read a row to
+            // get, which is not a cue at all when the question is "which of
+            // these do I own".
+            //
+            // A full-width rule above the header is the cheapest answer that
+            // invents nothing: NeedlerHairline is what the pack already uses to
+            // divide a list, and a horizontal line is the one mark the eye reads
+            // as a boundary without being told.
+            rule = true,
             // "from MusicBrainz" once the catalogue has answered, "from your
             // last sync" while it has not or cannot — these rows are then the
             // un-owned catalogue records the mirror happens to hold, and saying
@@ -686,10 +796,12 @@ private fun LazyListScope.resultBlocks(
         albumRows(
             keyPrefix = "pull",
             albums = catalogueAlbums,
+            state = state,
             wide = wide,
-            busy = state.busy,
+            columns = albumColumns,
             onAlbumClick = onAlbumClick,
             onPull = onPull,
+            onStopPull = onStopPull,
             onAddToCrate = onAddAlbumToCrate,
         )
         moreRowItem(
@@ -713,31 +825,34 @@ private fun LazyListScope.resultBlocks(
 private fun LazyListScope.albumRows(
     keyPrefix: String,
     albums: List<Album>,
+    state: SearchUiState,
     wide: Boolean,
-    busy: Boolean,
+    columns: Int,
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onStopPull: (Album) -> Unit,
     onAddToCrate: (Album, Boolean) -> Unit,
 ) {
     if (wide) {
-        // Screen 10 lays the albums out as a two-column grid of cards. A
-        // LazyVerticalGrid cannot be nested inside this LazyColumn, and
-        // splitting the screen into two scrollers to get one would scroll
-        // the Artist block independently of the albums under it, which the
-        // pack does not do. Chunking into rows of two keeps one scroller and
-        // one scroll position.
-        val pairs: List<List<Album>> = albums.chunked(TABLET_ALBUM_COLUMNS)
+        // Screen 10 lays the albums out as a grid of cards. A LazyVerticalGrid
+        // cannot be nested inside this LazyColumn, and splitting the screen into
+        // two scrollers to get one would scroll the Artist block independently of
+        // the albums under it, which the pack does not do. Chunking into rows
+        // keeps one scroller and one scroll position.
+        val rows: List<List<Album>> = albums.chunked(columns)
         items(
-            count = pairs.size,
+            count = rows.size,
             key = { index ->
-                keyPrefix + "-album-row-" + pairs[index].first().releaseGroupMbid.value
+                keyPrefix + "-album-row-" + rows[index].first().releaseGroupMbid.value
             },
         ) { index ->
             AlbumCardRow(
-                albums = pairs[index],
-                busy = busy,
+                albums = rows[index],
+                columns = columns,
+                state = state,
                 onAlbumClick = onAlbumClick,
                 onPull = onPull,
+                onStopPull = onStopPull,
                 onAddToCrate = onAddToCrate,
             )
         }
@@ -748,9 +863,10 @@ private fun LazyListScope.albumRows(
         ) { index ->
             AlbumRow(
                 album = albums[index],
-                busy = busy,
+                state = state,
                 onClick = onAlbumClick,
                 onPull = onPull,
+                onStopPull = onStopPull,
                 onAddToCrate = onAddToCrate,
             )
         }
@@ -811,16 +927,33 @@ private fun MoreRow(row: SearchMoreRow, onClick: () -> Unit) {
     )
 }
 
+/**
+ * @param rule draws a hairline across the list above the header, for the one
+ *   boundary on this screen that is not simply "a new heading": the step from
+ *   what the user has to what they do not.
+ */
 private fun LazyListScope.blockHeader(
     key: String,
     title: String,
     trailing: String?,
     topGap: Dp,
     headerGap: Dp,
+    rule: Boolean = false,
 ) {
     item(key = "header-$key") {
         Column {
-            if (topGap > 0.dp) Spacer(modifier = Modifier.height(topGap))
+            // `topGap` is zero when this block is the first on the screen, and a
+            // boundary at the top of a list divides it from nothing.
+            if (rule && topGap > 0.dp) {
+                // Half the gap above the rule and half below, so the line sits in
+                // the middle of the space between the blocks rather than crowding
+                // the heading it introduces.
+                Spacer(modifier = Modifier.height(topGap / 2))
+                NeedlerHairline()
+                Spacer(modifier = Modifier.height(topGap / 2))
+            } else if (topGap > 0.dp) {
+                Spacer(modifier = Modifier.height(topGap))
+            }
             NeedlerSectionHeader(title = title, trailing = trailing)
             Spacer(modifier = Modifier.height(headerGap))
         }
@@ -868,9 +1001,10 @@ private fun ArtistRow(
 @Composable
 private fun AlbumRow(
     album: Album,
-    busy: Boolean,
+    state: SearchUiState,
     onClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onStopPull: (Album) -> Unit,
     onAddToCrate: (Album, Boolean) -> Unit,
 ) {
     NeedlerAlbumRow(
@@ -878,7 +1012,7 @@ private fun AlbumRow(
         subtitle = SearchFormat.albumRowSubtitle(album),
         minHeight = NeedlerTheme.sizes.albumRowMinHeight,
         onClick = { onClick(album) },
-        contentDescription = albumRowDescription(album),
+        contentDescription = albumRowDescription(album, state),
         artwork = {
             AlbumArtwork(
                 album = album,
@@ -888,8 +1022,9 @@ private fun AlbumRow(
         trailing = {
             AlbumTrailing(
                 album = album,
-                busy = busy,
+                state = state,
                 onPull = onPull,
+                onStopPull = onStopPull,
                 onAddToCrate = onAddToCrate,
             )
         },
@@ -900,9 +1035,11 @@ private fun AlbumRow(
 @Composable
 private fun AlbumCardRow(
     albums: List<Album>,
-    busy: Boolean,
+    columns: Int,
+    state: SearchUiState,
     onAlbumClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onStopPull: (Album) -> Unit,
     onAddToCrate: (Album, Boolean) -> Unit,
 ) {
     Row(
@@ -914,16 +1051,17 @@ private fun AlbumCardRow(
         albums.forEach { album ->
             AlbumCard(
                 album = album,
-                busy = busy,
+                state = state,
                 onClick = onAlbumClick,
                 onPull = onPull,
+                onStopPull = onStopPull,
                 onAddToCrate = onAddToCrate,
                 modifier = Modifier.weight(1f),
             )
         }
         // A trailing odd album leaves a gap the width of a card rather than a
         // card stretched to twice the width of its neighbours.
-        repeat(TABLET_ALBUM_COLUMNS - albums.size) {
+        repeat(columns - albums.size) {
             Spacer(modifier = Modifier.weight(1f))
         }
     }
@@ -940,9 +1078,10 @@ private fun AlbumCardRow(
 @Composable
 private fun AlbumCard(
     album: Album,
-    busy: Boolean,
+    state: SearchUiState,
     onClick: (Album) -> Unit,
     onPull: (Album) -> Unit,
+    onStopPull: (Album) -> Unit,
     onAddToCrate: (Album, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -957,7 +1096,7 @@ private fun AlbumCard(
             .defaultMinSize(minHeight = NeedlerTheme.sizes.albumListRowMinHeight)
             .clickable(role = Role.Button) { onClick(album) }
             .semantics(mergeDescendants = true) {
-                contentDescription = albumRowDescription(album)
+                contentDescription = albumRowDescription(album, state)
             }
             .padding(horizontal = NeedlerTheme.spacing.step8, vertical = NeedlerTheme.spacing.step4),
         horizontalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step7),
@@ -976,15 +1115,31 @@ private fun AlbumCard(
                 style = typography.rowTitle,
                 color = colors.textPrimary,
                 maxLines = 2,
+                // Compose's default is TextOverflow.Clip, which on a card this
+                // narrow cut "Two Star & The Dream Police" to "Two Star & The
+                // Dream" and stopped - no ellipsis, on a 2560px screen, beside a
+                // library that draws the same record in full. A hard clip is
+                // indistinguishable from a title that really ends there, which is
+                // the one thing a truncation must never be. NeedlerAlbumRow, which
+                // draws the phone's rows, has ellipsised since it was written; this
+                // card is the copy that did not.
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = SearchFormat.albumRowSubtitle(album),
                 style = typography.meta,
                 color = colors.textSecondary,
                 maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
         }
-        AlbumTrailing(album = album, busy = busy, onPull = onPull, onAddToCrate = onAddToCrate)
+        AlbumTrailing(
+            album = album,
+            state = state,
+            onPull = onPull,
+            onStopPull = onStopPull,
+            onAddToCrate = onAddToCrate,
+        )
     }
 }
 
@@ -1000,27 +1155,34 @@ private fun AlbumCard(
 @Composable
 private fun AlbumTrailing(
     album: Album,
-    busy: Boolean,
+    state: SearchUiState,
     onPull: (Album) -> Unit,
+    onStopPull: (Album) -> Unit,
     onAddToCrate: (Album, Boolean) -> Unit,
 ) {
     var crateMenuOpen: Boolean by remember(album.releaseGroupMbid.value) {
         mutableStateOf(false)
     }
-    if (album.state == AlbumState.NotOwned) {
+    var pullMenuOpen: Boolean by remember(album.releaseGroupMbid.value) {
+        mutableStateOf(false)
+    }
+    val busy: Boolean = state.busy
+    val badge: NeedlerAlbumBadge? = rowBadge(album, state)
+
+    if (state.offersPull(album)) {
         NeedlerPullButton(
             onClick = { onPull(album) },
             albumTitle = album.title,
             enabled = !busy,
         )
     } else {
-        albumBadge(album.state)?.let { badge -> NeedlerStateBadge(badge = badge) }
-        // The crate control only for a record the server actually has. A catalogue result is
-        // metadata - its tracks exist in MusicBrainz and nowhere else - so queueing one would
-        // add nothing and claim it had; an album still being pulled has no files yet either.
-        // The badge beside this is what says which of those a row is.
-        if (album.isOwned) {
-            NeedlerCrateControl(
+        badge?.let { NeedlerStateBadge(badge = it) }
+        when {
+            // The crate control only for a record the server actually has. A catalogue result is
+            // metadata - its tracks exist in MusicBrainz and nowhere else - so queueing one would
+            // add nothing and claim it had; an album still being pulled has no files yet either.
+            // The badge beside this is what says which of those a row is.
+            album.isOwned -> NeedlerCrateControl(
                 subject = SearchFormat.albumTitle(album.title),
                 expanded = crateMenuOpen,
                 onExpandedChange = { crateMenuOpen = it },
@@ -1028,9 +1190,114 @@ private fun AlbumTrailing(
                 onPlayNext = { onAddToCrate(album, true) },
                 enabled = !busy,
             )
+
+            // A pull in flight. Every other row on this screen carries something
+            // in this column and these carried nothing at all, so the one record
+            // the user is actually waiting on - and the only one they may have
+            // asked for by mistake - was the one row with no way to act on it.
+            isInFlight(album, state) -> StopPullControl(
+                album = album,
+                expanded = pullMenuOpen,
+                onExpandedChange = { pullMenuOpen = it },
+                onStopPull = { onStopPull(album) },
+                enabled = !busy,
+            )
         }
     }
 }
+
+/**
+ * The badge this row wears, which is not always the one its [AlbumState] implies.
+ *
+ * A request this session placed has been answered by the server and has not yet
+ * reached the mirror, so the album is still `NotOwned` while the server is
+ * already acting on it. [SearchUiState.placedPulls] is the only record of that
+ * window, and drawing it is what stops the row offering a **Pull** it has already
+ * placed.
+ */
+private fun rowBadge(album: Album, state: SearchUiState): NeedlerAlbumBadge? {
+    val placed: RequestStatus? = state.placedPull(album)
+    return when {
+        placed == null -> albumBadge(album.state)
+        // The server is acquiring it. No percentage: nothing has reported one
+        // yet, and a 0% would read as a stall rather than as a start.
+        placed == RequestStatus.ACCEPTED -> NeedlerAlbumBadge.Pulling()
+        // Pending approval, and a pull queued on the device, are both waits on
+        // somebody else - an administrator, or a connection.
+        else -> NeedlerAlbumBadge.Waiting
+    }
+}
+
+/** Whether something is happening to this record that the user could stop. */
+private fun isInFlight(album: Album, state: SearchUiState): Boolean =
+    state.placedPull(album) != null ||
+        album.state is AlbumState.Acquiring ||
+        album.state is AlbumState.PendingApproval
+
+/**
+ * The `⋯` on a row whose pull has not finished.
+ *
+ * One item, and a menu rather than a bare button for the reason the crate control
+ * is one: every trailing control on this list is the same three-dot glyph opening
+ * the actions for that row, and a row that answered the same gesture with an
+ * immediate, irreversible stop would be the one control on the screen that fires
+ * on the first tap. The menu is also where "open this in Pulls" goes when this
+ * module is given a way to navigate there, which is in the handover notes.
+ *
+ * Stopping is deliberately not styled as destructive. REQUIREMENTS.md reserves
+ * `#e8908a` for data the user is about to lose, and a pull that never landed has
+ * cost them nothing but time — the same reasoning `NeedlerStateBadge` gives for
+ * not drawing a failed pull in that colour.
+ */
+@Composable
+private fun StopPullControl(
+    album: Album,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onStopPull: () -> Unit,
+    enabled: Boolean,
+) {
+    val colors = NeedlerTheme.colors
+    val title: String = SearchFormat.albumTitle(album.title)
+    Box {
+        NeedlerIconButton(
+            contentDescription = "Pull actions for " + title + ". Stop this pull.",
+            onClick = { onExpandedChange(true) },
+            enabled = enabled,
+            visualSize = 32.dp,
+            shape = NeedlerTheme.shapes.pill,
+        ) {
+            NeedlerMoreIcon(tint = colors.textMuted, size = 18.dp)
+        }
+        NeedlerDropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            DropdownMenuItem(
+                enabled = enabled,
+                modifier = Modifier.clearAndSetSemantics {
+                    contentDescription = "Stop pulling " + title
+                    role = Role.Button
+                    onClick(label = STOP_PULL_LABEL) {
+                        onExpandedChange(false)
+                        onStopPull()
+                        true
+                    }
+                },
+                text = {
+                    Text(
+                        text = STOP_PULL_LABEL,
+                        style = NeedlerTheme.typography.body,
+                        color = if (enabled) colors.textPrimary else colors.disabled,
+                    )
+                },
+                onClick = {
+                    onExpandedChange(false)
+                    onStopPull()
+                },
+            )
+        }
+    }
+}
+
+private const val STOP_PULL_LABEL: String = "Stop this pull"
 
 /**
  * A song result: the same 72dp row and 56dp cover as the album rows above it,
@@ -1145,8 +1412,8 @@ private fun SongRow(
 }
 
 /** `Mordechai, Khruangbin, 2024, Device` — the whole row in one phrase. */
-private fun albumRowDescription(album: Album): String {
-    val badge: NeedlerAlbumBadge? = albumBadge(album.state)
+private fun albumRowDescription(album: Album, state: SearchUiState): String {
+    val badge: NeedlerAlbumBadge? = rowBadge(album, state)
     return buildString {
         append(album.title)
         append(", ")
@@ -1204,6 +1471,7 @@ private fun LazyListScope.idleBlock(
         QueryRow(
             text = text,
             detail = null,
+            icon = QueryRowIcon.HISTORY,
             spoken = "Search again for $text",
             onClick = { onRecentQuerySelect(text) },
         )
@@ -1232,6 +1500,8 @@ private fun LazyListScope.emptyResultBlock(
     sectionGap: Dp,
     headerGap: Dp,
     onSuggestionSelect: (SearchSuggestion) -> Unit,
+    onRecentQuerySelect: (String) -> Unit,
+    onRetrySearch: () -> Unit,
 ) {
     item(key = "empty") {
         val colors = NeedlerTheme.colors
@@ -1248,42 +1518,75 @@ private fun LazyListScope.emptyResultBlock(
                 style = typography.body,
                 color = colors.textSecondary,
             )
+            // Offered on exactly the branch [SearchUiState.showRetry] allows: the
+            // half of the search that never ran is the half that may run now, and
+            // this is otherwise a screen of prose with nothing on it to press. A
+            // search the catalogue did answer gets no retry, because asking the
+            // same question of the same answer is not a next step.
+            if (state.showRetry) {
+                NeedlerSecondaryButton(
+                    text = "Try again",
+                    onClick = onRetrySearch,
+                    size = NeedlerButtonSize.Small,
+                    contentDescription = "Search again for " + state.query.trim(),
+                )
+            }
         }
     }
 
-    if (!state.showSuggestions) return
+    val recents: List<String> = state.emptyResultRecents
+    if (!state.showSuggestions && recents.isEmpty()) return
 
     blockHeader(
         key = "suggestions",
-        title = "Suggestions",
+        title = if (state.showSuggestions) "Suggestions" else "Recent searches",
         trailing = null,
         topGap = sectionGap,
         headerGap = headerGap,
     )
+
+    if (!state.showSuggestions) {
+        items(count = recents.size, key = { index -> "empty-recent-" + recents[index] }) { index ->
+            val text: String = recents[index]
+            QueryRow(
+                text = text,
+                detail = null,
+                icon = QueryRowIcon.HISTORY,
+                spoken = "Search again for $text",
+                onClick = { onRecentQuerySelect(text) },
+            )
+        }
+        return
+    }
+
     items(
         count = state.suggestions.size,
         key = { index -> "suggestion-" + state.suggestions[index].text },
     ) { index ->
         val suggestion: SearchSuggestion = state.suggestions[index]
-        val detail: String? = when (suggestion.kind) {
-            SuggestionKind.ARTIST -> "artist"
-            SuggestionKind.ALBUM -> "album"
-            SuggestionKind.QUERY -> null
-        }
         QueryRow(
             text = suggestion.text,
-            detail = detail,
-            spoken = buildString {
-                append("Search for ")
-                append(suggestion.text)
-                if (detail != null) {
-                    append(", ")
-                    append(detail)
-                }
-            },
+            detail = suggestionKindLabel(suggestion.kind),
+            icon = QueryRowIcon.SEARCH,
+            spoken = "Search for " + suggestion.text + ", " + suggestionKindLabel(suggestion.kind),
             onClick = { onSuggestionSelect(suggestion) },
         )
     }
+}
+
+/**
+ * The quiet word on the right of a completion: what kind of thing it names.
+ *
+ * Three kinds and three labels. [SuggestionKind.QUERY] drew nothing, so a list
+ * read "artist", "album", and then a blank where the third label should have
+ * been — which reads as a label that failed to render rather than as a kind with
+ * no name. It is a search string the server thinks is worth trying, so that is
+ * what it is called.
+ */
+private fun suggestionKindLabel(kind: SuggestionKind): String = when (kind) {
+    SuggestionKind.ARTIST -> "artist"
+    SuggestionKind.ALBUM -> "album"
+    SuggestionKind.QUERY -> "search"
 }
 
 /**
@@ -1299,6 +1602,7 @@ private fun LazyListScope.emptyResultBlock(
 private fun QueryRow(
     text: String,
     detail: String?,
+    icon: QueryRowIcon,
     spoken: String,
     onClick: () -> Unit,
 ) {
@@ -1314,7 +1618,10 @@ private fun QueryRow(
             horizontalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step7),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            NeedlerSearchIcon(tint = colors.textMuted, size = 18.dp)
+            when (icon) {
+                QueryRowIcon.SEARCH -> NeedlerSearchIcon(tint = colors.textMuted, size = 18.dp)
+                QueryRowIcon.HISTORY -> NeedlerClockIcon(tint = colors.textMuted, size = 18.dp)
+            }
             Text(
                 text = text,
                 style = NeedlerTheme.typography.body,
@@ -1333,6 +1640,25 @@ private fun QueryRow(
         }
         NeedlerHairline()
     }
+}
+
+/**
+ * Which glyph a [QueryRow] leads with.
+ *
+ * Both kinds of row put text back in the field, and they are not the same thing:
+ * one is a completion of what is being typed now, the other is something typed
+ * before. Every row of both drew the magnifier, so the history looked like a list
+ * of searches the app was offering rather than a record of the user's own.
+ *
+ * A clock for history is the platform convention and the one every search field
+ * on the phone already uses, so it is read without being learned.
+ */
+private enum class QueryRowIcon {
+    /** A completion from `suggest`. */
+    SEARCH,
+
+    /** Something searched for before. */
+    HISTORY,
 }
 
 /**
@@ -1485,8 +1811,202 @@ private fun NoticeLine(
     }
 }
 
-/** Screen 10's album grid: two cards across the content pane. */
-private const val TABLET_ALBUM_COLUMNS: Int = 2
+/**
+ * The line under the field about the catalogue lane.
+ *
+ * ## What was wrong with one line for four states
+ *
+ * A search in progress, a degraded upstream, an expired sign-in and no
+ * connection were drawn as the identical rounded grey block: same fill, same
+ * hairline, same 13sp secondary text, no icon, no action. Two of those four
+ * resolve themselves and two do not, and one of the two that does not is fixed
+ * by two taps the banner was describing in prose and not offering. Put side by
+ * side the four images are indistinguishable without reading the sentence, which
+ * is the opposite of what a banner is for: a banner is read at a glance or it is
+ * not read.
+ *
+ * ## What each one draws now
+ *
+ * | Kind | Glyph | Hue | Action |
+ * | --- | --- | --- | --- |
+ * | [SearchBannerKind.PROGRESS] | the search glyph | muted | none |
+ * | [SearchBannerKind.DEGRADED] | a warning triangle | secondary | none |
+ * | [SearchBannerKind.EXPIRED] | a padlock | accent, and an accent border | **Sign in** |
+ * | [SearchBannerKind.OFFLINE] | the phone-and-check | positive | none |
+ * | [SearchBannerKind.PROBLEM] | a warning triangle | secondary | none |
+ *
+ * The weight runs with the hue. Progress is the quietest thing on the screen
+ * because it is about to stop being true; the expired session is the only one
+ * that takes the accent border, because it is the only one with something for the
+ * user to do. Nothing is encoded in colour alone: each kind has its own glyph and
+ * its own sentence, and the one that can be acted on also has a button.
+ *
+ * The offline glyph is `NeedlerOnDeviceIcon` in the positive green, which is
+ * exactly what `:feature:library`'s own offline note draws. The same condition
+ * was iconised on one screen and not the other; it is the same mark on both now.
+ *
+ * REQUIREMENTS.md is unchanged by any of this: none of the four is a dialog, none
+ * blocks, and none hides the results under it.
+ */
+@Composable
+private fun CatalogueBannerLine(banner: SearchBanner, onOpenSettings: () -> Unit) {
+    val colors = NeedlerTheme.colors
+    val shape = NeedlerTheme.shapes.medium
+    val tint: Color = when (banner.kind) {
+        SearchBannerKind.PROGRESS -> colors.textMuted
+        SearchBannerKind.DEGRADED, SearchBannerKind.PROBLEM -> colors.textSecondary
+        SearchBannerKind.EXPIRED -> colors.accent
+        SearchBannerKind.OFFLINE -> colors.positive
+    }
+    val border: Color = if (banner.kind == SearchBannerKind.EXPIRED) tint else colors.hairline
+    val spoken: String = buildString {
+        append(bannerPrefix(banner.kind))
+        append(banner.message)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.surface)
+            .border(NeedlerTheme.sizes.hairlineThickness, border, shape)
+            .defaultMinSize(minHeight = NeedlerTheme.sizes.listRowMinHeight)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .semantics {
+                contentDescription = spoken
+                liveRegion = LiveRegionMode.Polite
+            },
+        verticalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step4),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step5),
+            verticalAlignment = Alignment.Top,
+        ) {
+            when (banner.kind) {
+                SearchBannerKind.PROGRESS -> NeedlerSearchIcon(tint = tint, size = 16.dp)
+                SearchBannerKind.DEGRADED, SearchBannerKind.PROBLEM ->
+                    NeedlerStrokeIcon(pathData = PATH_WARNING, tint = tint, size = 16.dp)
+
+                SearchBannerKind.EXPIRED ->
+                    NeedlerStrokeIcon(pathData = PATH_LOCKED, tint = tint, size = 16.dp)
+
+                SearchBannerKind.OFFLINE -> NeedlerOnDeviceIcon(tint = tint, size = 16.dp)
+            }
+            Text(
+                text = banner.message,
+                style = NeedlerTheme.typography.caption,
+                // The sentence stays readable text rather than taking the glyph's
+                // hue: a whole paragraph in the accent is a paragraph nobody reads
+                // as prose, and the hue has already done its work on the mark.
+                color = if (banner.kind == SearchBannerKind.PROGRESS) {
+                    colors.textMuted
+                } else {
+                    colors.textSecondary
+                },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        when (banner.action) {
+            SearchBannerAction.SIGN_IN -> NeedlerSecondaryButton(
+                text = "Sign in",
+                onClick = onOpenSettings,
+                size = NeedlerButtonSize.Small,
+                contentDescription = "Sign in again, in Settings",
+            )
+
+            null -> Unit
+        }
+    }
+}
+
+/**
+ * What a screen reader hears before the sentence, so the kind is spoken as well
+ * as drawn.
+ *
+ * The glyph is decorative - `NeedlerStrokeIcon` clears its own semantics - so
+ * without this the four banners read identically to TalkBack, which is the same
+ * defect in the other channel.
+ */
+private fun bannerPrefix(kind: SearchBannerKind): String = when (kind) {
+    SearchBannerKind.PROGRESS -> ""
+    SearchBannerKind.DEGRADED, SearchBannerKind.PROBLEM -> "Warning. "
+    SearchBannerKind.EXPIRED -> "Sign-in expired. "
+    SearchBannerKind.OFFLINE -> "Offline. "
+}
+
+/**
+ * A warning triangle with a bang in it.
+ *
+ * Drawn here rather than taken from `:core:design`, which owns no warning mark:
+ * the 21 screens of the pack draw none, so there is no `d` attribute to
+ * transcribe and nothing in the icon set to borrow. `Icons.kt` says in as many
+ * words that a screen needing a glyph the design system does not own may draw it
+ * with [NeedlerStrokeIcon] on the pack's own 24-unit viewport, which is what
+ * this and [PATH_LOCKED] do: same viewport, same 1.8-unit round-capped stroke.
+ *
+ * It belongs in `:core:design` the moment a second screen wants it, and that is
+ * in the handover notes with the rest.
+ */
+private const val PATH_WARNING: String = "M12 4L2.5 20h19zM12 10v4M12 17.2v.1"
+
+/** A closed padlock: the body, the shackle, and the keyhole. */
+private const val PATH_LOCKED: String =
+    "M5.5 10.5h13v9h-13zM8.5 10.5V7.5a3.5 3.5 0 017 0v3M12 14v2.5"
+
+/**
+ * How many album cards fit across [contentWidth], which is the pane this screen
+ * was given minus its own gutters.
+ *
+ * ## Why this is measured and not two
+ *
+ * It was `2`, and the screen therefore drew two columns at every width a tablet,
+ * a foldable or a desktop window could give it. The library's grid is four
+ * across on an Expanded width, so the two screens disagreed about a pane they
+ * share.
+ *
+ * They disagree because the cells are not the same cell. The library's are
+ * artwork tiles with the caption *underneath*, so a cell is as narrow as its
+ * cover; a search card is a **row** — 56dp of artwork, two lines of text and
+ * either a state badge or a **Pull** pill, side by side. Measured off
+ * `screenshots/search-results-tablet.png` at 2px to the dp, the pack's content
+ * pane is 783dp and its gutters leave 703dp; four of those with 12dp between
+ * them is 167dp a card, of which the artwork and the card's own padding take 88
+ * and the trailing Pull pill about 80, leaving nothing at all for the title.
+ * Four columns of this card is not a denser grid, it is four clipped ones.
+ *
+ * So the count comes from a minimum card width instead of from a number. At the
+ * pack's 783dp pane it is 2, which is what screen 10 draws and what fits; a
+ * wider pane — a 1600dp desktop window, a tablet with the sidebar collapsed —
+ * gets 3 or 4 without anything here changing. [MIN_ALBUM_CARD] is the width at
+ * which a card still holds an album title and an action on one line.
+ *
+ * The phone is always one column of rows, not cards, so the question does not
+ * arise there.
+ */
+private fun albumColumnsFor(wide: Boolean, contentWidth: Dp): Int {
+    if (!wide) return 1
+    val gap: Dp = 12.dp
+    val fits: Int = ((contentWidth + gap).value / (MIN_ALBUM_CARD + gap).value).toInt()
+    return fits.coerceIn(MIN_ALBUM_COLUMNS, MAX_ALBUM_COLUMNS)
+}
+
+/**
+ * The narrowest an album card may be.
+ *
+ * 340dp: 32dp of card padding, 56dp of artwork, 14dp to the text, 80dp for the
+ * widest trailing control (the **Pull** pill), 14dp before it, and the ~144dp
+ * left over is about twenty characters of `rowTitle` a line — a title read
+ * rather than recognised, which is the same budget `NeedlerAlbumBadge.NeedsAttention`
+ * was shortened to protect.
+ */
+private val MIN_ALBUM_CARD: Dp = 340.dp
+
+/** Screen 10 draws two, and two is also the fewest that is a grid rather than a list. */
+private const val MIN_ALBUM_COLUMNS: Int = 2
+
+/** The library's own count on an Expanded width, so the two screens cannot disagree upwards. */
+private const val MAX_ALBUM_COLUMNS: Int = 4
 
 /** Enough skeleton rows to fill a phone screen, so the wait does not look like an empty result. */
 private const val SKELETON_ROWS: Int = 6

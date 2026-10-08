@@ -173,6 +173,73 @@ class SettingsCopyTest {
         )
     }
 
+    // ---- the dead end on a fresh install -------------------------------------
+
+    /**
+     * `Change server` is the wrong verb when there is no server.
+     *
+     * On `settings-fresh-phone.png` it was also the *only* live control: the row above read
+     * "No server" with nothing attached and Sync now was greyed, so the whole screen turned on one
+     * word, and the word asked the user to change something they had not got.
+     */
+    @Test
+    fun `the server action names what it will actually do`() {
+        assertEquals("Connect a server", ServerSectionState().changeServerLabel)
+        assertEquals(
+            "Change server",
+            ServerSectionState(host = "music.yourhome.net").changeServerLabel,
+        )
+    }
+
+    /**
+     * Sync now is absent with no server and present-but-greyed while a sync runs.
+     *
+     * Absent and disabled are different claims. "There is nothing here" is true of a fresh install;
+     * "this is briefly unavailable" is true mid-sync, and the row above says `Syncing…` so the reason
+     * is on screen. A greyed control with no reason is what the fresh-install golden showed.
+     */
+    @Test
+    fun `sync now is removed with no server and greyed only while syncing`() {
+        val fresh = ServerSectionState()
+        assertFalse("nothing to sync against, so nothing to offer", fresh.showSyncNow)
+
+        val idle = ServerSectionState(host = "music.yourhome.net")
+        assertTrue(idle.showSyncNow)
+        assertTrue(idle.canSyncNow)
+
+        val busy = ServerSectionState(host = "music.yourhome.net", syncing = true)
+        assertTrue("a sync in flight still draws the control", busy.showSyncNow)
+        assertFalse(busy.canSyncNow)
+    }
+
+    // ---- the screen that collapsed two settings and said nothing --------------
+
+    /**
+     * The single `Stream quality` row says why it is single.
+     *
+     * `settings-no-transcoding-phone.png` dropped `Stream quality on Wi-Fi` and
+     * `Stream quality on mobile data` for one chevron-less row reading `Original`, with no statement
+     * that the server cannot re-encode - while the screen beside it spent four lines explaining a
+     * caveat. The two sentences differ because the two causes do.
+     */
+    @Test
+    fun `the collapsed stream-quality row explains which of its two causes applies`() {
+        val refused = PlayingSectionState(
+            transcodingAvailable = false,
+            transcodingNegotiated = true,
+        )
+        val answer: String = refused.streamQualityStatement(serverConfigured = true)
+        assertTrue(answer, answer.contains("cannot re-encode"))
+
+        val fresh: String = refused.streamQualityStatement(serverConfigured = false)
+        assertTrue(fresh, fresh.contains("Connect one"))
+        assertNotEquals(
+            "a server that refused and a server that does not exist are different facts",
+            answer,
+            fresh,
+        )
+    }
+
     private fun storage(keepPulled: Boolean): StorageSectionState =
         StorageSectionState(keepPulledAlbumsOnDevice = keepPulled)
 

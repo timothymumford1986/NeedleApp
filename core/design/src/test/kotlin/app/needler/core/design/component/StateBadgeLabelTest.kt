@@ -1,7 +1,10 @@
 package app.needler.core.design.component
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.dp
 import app.needler.core.design.theme.NeedlerDarkColors
+import app.needler.core.design.theme.NeedlerSizes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -169,8 +172,9 @@ class StateBadgeLabelTest {
 
     /**
      * REQUIREMENTS.md "Accessibility" states ratios rather than assuming them - it is the section that
-     * records `#6f7a68` at 4.21:1 on the canvas and keeps it anyway - so the two badge hues are
-     * measured here against the three backgrounds a badge is actually drawn on.
+     * records `#6f7a68` at 4.21:1 on the canvas and keeps it anyway, which `disabled` is now where
+     * that holds - so the two badge hues are measured here against the three backgrounds a badge is
+     * actually drawn on.
      */
     @Test
     fun `both state hues clear AA on canvas, surface and surface raised`() {
@@ -349,6 +353,293 @@ class StateBadgeLabelTest {
         )
     }
 
+
+    // ---------------------------------------------------------------- the four measured repairs
+
+    /**
+     * A reviewer probed the committed PNGs and found four ratios. All four are asserted here as
+     * numbers, because REQUIREMENTS.md "Accessibility" is the section that states ratios rather than
+     * assuming them, and because the alternative is finding out from a device again.
+     *
+     * | Element | Measured | Required | Now |
+     * | --- | --- | --- | --- |
+     * | Outline button border | 1.18:1 | 3:1 | 4.10:1 |
+     * | Loading skeletons | 1.10:1 | 1.5-2:1 | 1.71:1 |
+     * | Tertiary body copy | 4.2:1 | 4.5:1 | 5.56:1 |
+     * | `Failed` badge | identical to subtitles | a colour of its own | `destructive` |
+     *
+     * The reviewer read the border as `rgb(30,35,28)` and 1.18:1; the token it replaced composites
+     * to `rgb(31,36,28)` and 1.20:1, which is the same line after PNG rounding, and
+     * [the hairline it replaced is invisible on every background] asserts that figure rather than
+     * the probe's.
+     */
+    @Test
+    fun `an outlined control's boundary clears the 3 to 1 of WCAG 1_4_11`() {
+        BACKGROUNDS.forEach { (name, background) ->
+            val ratio: Double = contrastRatio(COLOURS.componentBorder, background)
+            assertTrue(
+                "the control boundary measures " + twoPlaces(ratio) + ":1 on " + name +
+                    ", below the 3:1 WCAG 1.4.11 asks of a component boundary",
+                ratio >= 3.0,
+            )
+        }
+        assertEquals(4.10, contrastRatio(COLOURS.componentBorder, COLOURS.canvas), 0.01)
+    }
+
+    /**
+     * The value it replaced, measured on all three backgrounds so that nobody reaches for it again.
+     *
+     * `rgba(242,245,238,0.08)` is an alpha, so its ratio is a property of what is behind it - which
+     * is the whole argument for the boundary token being opaque. Composited it is 1.20:1, 1.24:1 and
+     * 1.25:1, and lifting the alpha lightens the border and the background together, so there is no
+     * alpha that clears 3:1 everywhere.
+     */
+    @Test
+    fun `the hairline it replaced is invisible on every background`() {
+        assertEquals(
+            1.20,
+            contrastRatio(composite(COLOURS.hairline, COLOURS.canvas), COLOURS.canvas),
+            0.01,
+        )
+        assertEquals(
+            1.24,
+            contrastRatio(composite(COLOURS.hairline, COLOURS.surface), COLOURS.surface),
+            0.01,
+        )
+        assertEquals(
+            1.25,
+            contrastRatio(composite(COLOURS.hairline, COLOURS.surfaceRaised), COLOURS.surfaceRaised),
+            0.01,
+        )
+        // And the alpha that would clear 3:1 on the canvas still does not on the raised surface,
+        // which is why the repair is a colour and not a bigger number.
+        val lifted: Color = COLOURS.hairline.copy(alpha = 0.34f)
+        assertTrue(
+            "a lifted hairline clears 3:1 on the raised surface after all - recheck whether the " +
+                "boundary needs a token of its own",
+            contrastRatio(composite(lifted, COLOURS.surfaceRaised), COLOURS.surfaceRaised) < 3.0,
+        )
+    }
+
+    /**
+     * A skeleton has a band rather than a floor, and both ends of it are assertions.
+     *
+     * Too dim and the screen reads as blank; too bright and a loading list reads as a loaded list of
+     * empty rows. `NeedlerColors.surface`, which every skeleton in the product was drawn in,
+     * measures 1.10:1 and is the first of those two failures.
+     */
+    @Test
+    fun `a loading skeleton is visible without reading as content`() {
+        val onCanvas: Double = contrastRatio(COLOURS.skeleton, COLOURS.canvas)
+        val onSurface: Double = contrastRatio(COLOURS.skeleton, COLOURS.surface)
+
+        assertEquals(1.71, onCanvas, 0.01)
+        assertEquals(1.55, onSurface, 0.01)
+        assertTrue("a skeleton at " + twoPlaces(onCanvas) + ":1 cannot be seen", onCanvas >= 1.5)
+        assertTrue("a skeleton at " + twoPlaces(onCanvas) + ":1 reads as content", onCanvas <= 2.0)
+
+        // The value it replaced, and the one it was most likely to be replaced with.
+        assertEquals(1.10, contrastRatio(COLOURS.surface, COLOURS.canvas), 0.01)
+        assertEquals(1.23, contrastRatio(COLOURS.surfaceRaised, COLOURS.canvas), 0.01)
+    }
+
+    /**
+     * The tier of body copy REQUIREMENTS.md "Accessibility" decided to leave below AA, now above it.
+     *
+     * The raised surface is the background that chose the value: 4.51:1 is 0.01 of margin, and
+     * nothing dimmer in this hue clears it. So the assertion is the threshold on all three rather
+     * than a comfortable number on the canvas.
+     */
+    @Test
+    fun `the tertiary text colour clears AA on every background it is drawn on`() {
+        BACKGROUNDS.forEach { (name, background) ->
+            val ratio: Double = contrastRatio(COLOURS.textMuted, background)
+            assertTrue(
+                "tertiary body copy measures " + twoPlaces(ratio) + ":1 on " + name +
+                    ", below the 4.5:1 WCAG AA asks of normal text",
+                ratio >= 4.5,
+            )
+        }
+        assertEquals(5.56, contrastRatio(COLOURS.textMuted, COLOURS.canvas), 0.01)
+        assertEquals(4.51, contrastRatio(COLOURS.textMuted, COLOURS.surfaceRaised), 0.01)
+        // The value that was kept as drawn, so the reversal is a figure and not a memory. It is
+        // `disabled` that holds it now - see the test below for why the two had to part company.
+        assertEquals(4.21, contrastRatio(COLOURS.disabled, COLOURS.canvas), 0.01)
+        assertEquals(0xFF6F7A68.toInt(), COLOURS.disabled.toArgb())
+    }
+
+    /**
+     * An inactive control stays dimmer than an off-but-usable one, which is why `disabled` exists.
+     *
+     * Raising `textMuted` to clear AA for prose would have taken the disabled tint with it, and the
+     * two states of a control that `TransportRowTest` keeps apart - off in `textSecondary`,
+     * unavailable in the dim value - would have closed from 2.06:1 to 1.56:1. WCAG 2.2 exempts
+     * inactive components from 1.4.3 and 1.4.11 by name, so the dim value is correct for this role
+     * and only this role; the prose tier moved and the control's did not.
+     *
+     * The floor is 2:1 rather than the 3:1 of 1.4.11 because that clause does not apply here, and
+     * 2.06:1 is what the shipped fix measured. This asserts the separation does not narrow again.
+     */
+    @Test
+    fun `disabled stays separable from the off state it sits beside`() {
+        val separation: Double = contrastRatio(COLOURS.disabled, COLOURS.textSecondary)
+        assertEquals(2.06, separation, 0.01)
+        assertTrue(
+            "off and unavailable measure " + twoPlaces(separation) +
+                ":1 against each other, which is the defect `disabled` was split out to prevent",
+            separation >= 2.0,
+        )
+        // And the prose tier is the thing it must not be, at 1.56:1.
+        assertEquals(1.56, contrastRatio(COLOURS.textMuted, COLOURS.textSecondary), 0.01)
+    }
+
+    // ------------------------------------------------------------- the one state asking for help
+
+    /**
+     * `Failed` had no colour of its own: it drew in `textSecondary`, which is the artist line under
+     * every title in the same list. `Ready` was green and `Pulling` blue, so the one state
+     * requiring action was the only state unmarked.
+     */
+    @Test
+    fun `the failed badge has a colour no other row element wears`() {
+        val failed: Color = badgeTint(NeedlerAlbumBadge.Failed)
+
+        assertEquals(COLOURS.destructive, failed)
+        assertTrue("`Failed` is the colour of an ordinary subtitle", failed != COLOURS.textSecondary)
+        assertTrue("`Failed` claims the device hue", failed != COLOURS.positive)
+        assertTrue("`Failed` claims the server hue", failed != COLOURS.accent)
+        assertTrue("`Failed` is drawn as disabled text", failed != COLOURS.textMuted)
+    }
+
+    /**
+     * And it is the only badge that gets it. REQUIREMENTS.md "Partial content is a normal state"
+     * has a part-delivered album in the library and playing, and a cancellation is the user's own
+     * instruction carried out - neither is an error, so neither takes the error colour.
+     */
+    @Test
+    fun `nothing but Failed is drawn in the error colour`() {
+        val wearingIt: List<NeedlerAlbumBadge> =
+            ALL_BADGES.filter { badgeTint(it) == COLOURS.destructive }
+
+        assertEquals(listOf<NeedlerAlbumBadge>(NeedlerAlbumBadge.Failed), wearingIt)
+    }
+
+    /**
+     * The error colour measured, and its weakness stated in the same breath as
+     * [the two hues are nearly indistinguishable by luminance alone].
+     *
+     * Against `textSecondary` it is 1.09:1 - a third hue at the same lightness as the other two,
+     * which is what makes the palette look deliberate and what makes hue useless on its own.
+     * `NeedlerStateBadge` draws `Failed` at `Bold` for that reason, since an end state has no glyph
+     * to carry the difference.
+     */
+    @Test
+    fun `the error colour clears AA and does not rely on hue`() {
+        BACKGROUNDS.forEach { (name, background) ->
+            val ratio: Double = contrastRatio(COLOURS.destructive, background)
+            assertTrue(
+                "the error colour measures " + twoPlaces(ratio) + ":1 on " + name,
+                ratio >= 4.5,
+            )
+        }
+        assertEquals(7.93, contrastRatio(COLOURS.destructive, COLOURS.canvas), 0.01)
+        assertTrue(
+            "the error colour is now separable from a subtitle by luminance, which is not the " +
+                "pair this reasoning was written for - recheck that nothing relies on hue alone",
+            contrastRatio(COLOURS.destructive, COLOURS.textSecondary) < 1.2,
+        )
+    }
+
+    // ---------------------------------------------------------------- the large-text row rule
+
+    /**
+     * The title column's guaranteed share, in the unit that failed: characters of a word.
+     *
+     * Four reviewers reported a title broken mid-word on four surfaces, because the trailing column
+     * measured itself first and left the title 74dp. [NeedlerRowLayout.TITLE_WEIGHT] of
+     * [ROW_SHARED_DP] is 164dp, and the assertion is that the longest word in any of those titles -
+     * `Mordechai`, at nine characters - fits one line of it at **200%**, which is the scale the
+     * reviewers were at, so the per-character figure doubles.
+     */
+    @Test
+    fun `the title column holds the longest word in the titles that broke`() {
+        val column: Float = ROW_SHARED_DP * NeedlerRowLayout.TITLE_WEIGHT
+        val widestWord: String = BROKEN_TITLES.flatMap { it.split(" ") }.maxBy { it.length }
+
+        assertEquals("Mordechai", widestWord)
+        assertTrue("the guaranteed title column is " + column.toInt() + "dp", column >= 160f)
+        assertTrue(
+            "`" + widestWord + "` needs " + widthDp(widestWord, ROW_TITLE_DP * 2f).toInt() +
+                "dp at 200% and the column is " + column.toInt() + "dp, so it breaks mid-word",
+            widthDp(widestWord, ROW_TITLE_DP * 2f) <= column,
+        )
+    }
+
+    /** The trailing block may never be the wider of the two. That is the whole rule, as a number. */
+    @Test
+    fun `the trailing block yields to the title`() {
+        assertEquals(1f, NeedlerRowLayout.TITLE_WEIGHT + NeedlerRowLayout.TRAILING_WEIGHT, 0.0001f)
+        assertTrue(
+            "the trailing block is allowed " + NeedlerRowLayout.TRAILING_WEIGHT + " of the row",
+            NeedlerRowLayout.TRAILING_WEIGHT < NeedlerRowLayout.TITLE_WEIGHT,
+        )
+    }
+
+    /**
+     * Why the trailing block has to *move* past a threshold rather than only narrow.
+     *
+     * The widest thing this component draws is `Pulling to device 62%` at 148dp, which
+     * [a percentage costs the title no more than its own digits] measures and leaves alone. At 200%
+     * that one badge wants 296dp of a row that has [ROW_SHARED_DP] - 266dp - to divide between two
+     * columns. No ratio fixes that: dividing 266dp only decides which of the two is unreadable, so
+     * the status block is drawn below the title instead and takes the full width.
+     */
+    @Test
+    fun `at 200 percent a row cannot hold a title and a status block side by side`() {
+        val badgeAtDouble: Float = drawnWidthDp(NeedlerAlbumBadge.PullingToDevice(percent = 62)) * 2f
+
+        assertTrue(
+            "the widest badge is " + badgeAtDouble.toInt() + "dp at 200% against a " +
+                ROW_SHARED_DP.toInt() + "dp row, so a ratio would still fit it",
+            badgeAtDouble > ROW_SHARED_DP,
+        )
+        assertTrue(
+            "the stack starts at " + NeedlerRowLayout.STACK_ABOVE_FONT_SCALE +
+                ", which is past Android's largest ordinary text setting",
+            NeedlerRowLayout.STACK_ABOVE_FONT_SCALE <= 1.3f,
+        )
+    }
+
+    /**
+     * The `...` and the heart, which a device reviewer found "at default size while everything
+     * around them doubles, so the only small targets left are the ones a large-text user must hit".
+     *
+     * Asserted as arithmetic rather than by rendering, because what is being checked is that
+     * scaling moves a control *up* from REQUIREMENTS.md "Accessibility"'s 48dp floor and never into
+     * it, and that the cap exists at all - `fontScale` is a `Float` an OEM skin can push past 2.
+     */
+    @Test
+    fun `a row control grows with the text and never below the pack's size`() {
+        val floor = NeedlerSizes().minTouchTarget
+
+        listOf(36f, 32f, 44f, 18f, 20f, 22f).forEach { base ->
+            assertTrue(
+                "a " + base.toInt() + "dp control shrinks under scaling",
+                base * NeedlerRowLayout.MAX_CONTROL_SCALE >= base,
+            )
+        }
+        // The two the reviewer named, at the ceiling, against the floor they must still clear.
+        assertTrue(
+            "the overflow glyph's drawn size is " + (36.dp * NeedlerRowLayout.MAX_CONTROL_SCALE),
+            36.dp * NeedlerRowLayout.MAX_CONTROL_SCALE >= floor,
+        )
+        assertTrue(
+            "the heart's drawn size is " + (44.dp * NeedlerRowLayout.MAX_CONTROL_SCALE),
+            44.dp * NeedlerRowLayout.MAX_CONTROL_SCALE >= floor,
+        )
+        assertEquals(2f, NeedlerRowLayout.MAX_CONTROL_SCALE, 0.0001f)
+    }
+
     private companion object {
         val COLOURS = NeedlerDarkColors
 
@@ -407,31 +698,15 @@ class StateBadgeLabelTest {
         )
 
         /**
-         * The tint rule from `NeedlerStateBadge`, restated.
+         * The real rule, from `NeedlerAlbumBadge.tint`.
          *
-         * The composable's own `when` cannot be reached without rendering, and what matters about these
-         * assignments is the rule rather than the pixels, so the rule is written twice and the two
-         * copies are kept honest by sitting in one file each other's reasoning cites. If they diverge,
-         * the badge is the one that is right and this is the one to correct.
+         * This used to be a second copy of the `when` inside `NeedlerStateBadge`, because a
+         * composable's local `val` cannot be reached without rendering. Reverting the badge's colour
+         * to check that these assertions would catch it showed what that cost: they passed, because
+         * they were asserting the copy. The rule is now one function outside the composable and this
+         * calls it, so the assertions below are about the badge rather than about themselves.
          */
-        fun badgeTint(badge: NeedlerAlbumBadge): Color = when (badge) {
-            NeedlerAlbumBadge.OnDevice,
-            is NeedlerAlbumBadge.PullingToDevice,
-            NeedlerAlbumBadge.Ready -> COLOURS.positive
-
-            NeedlerAlbumBadge.InLibrary,
-            is NeedlerAlbumBadge.Pulling -> COLOURS.accent
-
-            NeedlerAlbumBadge.Waiting,
-            NeedlerAlbumBadge.WaitingForWifi,
-            NeedlerAlbumBadge.Searching,
-            NeedlerAlbumBadge.NeedsAttention,
-            NeedlerAlbumBadge.Failed,
-            NeedlerAlbumBadge.PartlyDelivered,
-            NeedlerAlbumBadge.Cancelled -> COLOURS.textSecondary
-
-            NeedlerAlbumBadge.NoSource -> COLOURS.textMuted
-        }
+        fun badgeTint(badge: NeedlerAlbumBadge): Color = badge.tint(COLOURS)
 
         /** How wide the badge's **word** draws, glyph and its gap included. */
         fun labelWidthDp(badge: NeedlerAlbumBadge): Float =
@@ -470,6 +745,45 @@ class StateBadgeLabelTest {
         }
 
         fun widthDp(text: String, perCharacter: Float): Float = text.length * perCharacter
+
+        /** The three backgrounds anything in this palette is ever drawn on. */
+        val BACKGROUNDS: List<Pair<String, Color>> = listOf(
+            "canvas" to COLOURS.canvas,
+            "surface" to COLOURS.surface,
+            "surface raised" to COLOURS.surfaceRaised,
+        )
+
+        /**
+         * The titles four reviewers caught breaking mid-word, verbatim.
+         *
+         * Kept as the strings rather than as a width, because the defect was reported as these
+         * words and the arithmetic beside them should be readable against them.
+         */
+        val BROKEN_TITLES: List<String> =
+            listOf("Death's Dateless Night", "Mordechai", "Submarine")
+
+        /**
+         * [foreground] drawn over [background], so an alpha token can be measured.
+         *
+         * [luminance] reads the unpremultiplied channels and ignores alpha, which is right for
+         * every opaque value in the palette and silently wrong for the one that is not: the
+         * hairline's channels are the off-white's, so measuring it directly reports 17:1 for a line
+         * nobody can see. Compose's own `compositeOver` would do this; it is written out because
+         * what the arithmetic *is* happens to be the point of
+         * [the hairline it replaced is invisible on every background].
+         */
+        fun composite(foreground: Color, background: Color): Color {
+            val alpha: Float = foreground.alpha
+            fun channel(over: Float, under: Float): Float = under + alpha * (over - under)
+            return Color(
+                red = channel(foreground.red, background.red),
+                green = channel(foreground.green, background.green),
+                blue = channel(foreground.blue, background.blue),
+            )
+        }
+
+        /** A ratio to two places, so a failure message reads like the table it came from. */
+        fun twoPlaces(ratio: Double): String = String.format("%.2f", ratio)
 
         /** WCAG 2.1 relative luminance, on the sRGB channels Compose holds as 0f..1f. */
         fun luminance(colour: Color): Double {

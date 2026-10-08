@@ -232,7 +232,7 @@ class PlayerFormatTest {
 
     @Test
     fun `the output is always named, even before the session says anything`() {
-        assertEquals("This device", PlayerFormat.outputName(null))
+        assertEquals("This phone", PlayerFormat.outputName(null))
         assertEquals("Living room speaker", PlayerFormat.outputName(PlayerFixtures.livingRoomSpeaker))
     }
 

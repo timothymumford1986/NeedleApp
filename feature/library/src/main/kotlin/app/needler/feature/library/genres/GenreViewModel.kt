@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalCoroutinesApi::class)
+
 package app.needler.feature.library.genres
 
 import androidx.lifecycle.SavedStateHandle
@@ -8,13 +10,17 @@ import app.needler.core.domain.model.TrackKey
 import app.needler.core.domain.playback.PlaybackController
 import app.needler.core.domain.repository.LibraryRepository
 import app.needler.core.domain.repository.SessionRepository
+import app.needler.core.domain.repository.SyncRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.Optional
 import javax.inject.Inject
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -37,6 +43,7 @@ class GenreViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     library: LibraryRepository,
     sessions: SessionRepository,
+    private val sync: SyncRepository,
     private val playback: Optional<PlaybackController>,
 ) : ViewModel() {
 
@@ -60,18 +67,32 @@ class GenreViewModel @Inject constructor(
             ?.map { playbackState -> playbackState.currentItem?.track?.key }
             ?: flowOf(null)
 
+    /**
+     * How many tracks are being asked for right now.
+     *
+     * A bound the user can raise rather than a constant, which is what makes the capped genre's
+     * `Show more` a way to the rest instead of a second apology. `observeTracksByGenre` is a cap
+     * and not a cursor — there is no `after` to pass — so the only honest paging available is to
+     * re-read the genre with a larger bound. That re-read is a Room query over the mirror, which
+     * REQUIREMENTS.md "Search behaviour" budgets at under 50 ms for ten thousand albums, and
+     * `flatMapLatest` cancels the previous read so two taps cannot leave two collectors running.
+     */
+    private val limit = MutableStateFlow(TRACK_LIMIT)
+
     val state: StateFlow<GenreUiState> = combine(
-        library.observeTracksByGenre(genre, limit = TRACK_LIMIT),
+        limit.flatMapLatest { bound ->
+            library.observeTracksByGenre(genre, limit = bound).map { tracks -> bound to tracks }
+        },
         nowPlayingKey,
         sessions.observeConnectivity(),
-    ) { tracks, playingKey, connectivity ->
+    ) { (bound, tracks), playingKey, connectivity ->
         GenreUiState(
             loading = false,
             genre = genre,
             tracks = tracks,
             nowPlayingTrackKey = playingKey,
             offline = !connectivity.isOnline,
-            trackLimit = TRACK_LIMIT,
+            trackLimit = bound,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -125,6 +146,22 @@ class GenreViewModel @Inject constructor(
         viewModelScope.launch { controller.playTracks(tracks, startIndex = index) }
     }
 
+    /**
+     * Asks for another page's worth of the genre.
+     *
+     * No-op unless the list is actually full: raising a bound the query has not reached would
+     * re-read the same rows and move nothing, and the button that calls this is only drawn when it
+     * has.
+     */
+    fun onShowMore() {
+        if (state.value.atLimit) limit.value = limit.value + TRACK_LIMIT
+    }
+
+    /** The empty state's action. Forces a delta sync, as the library and genres screens do. */
+    fun onSyncNow() {
+        viewModelScope.launch { sync.deltaSync(force = true) }
+    }
+
     companion object {
         /** The navigation argument this ViewModel reads the genre name from. */
         const val GENRE_ARG: String = "genre"
@@ -136,8 +173,11 @@ class GenreViewModel @Inject constructor(
          * `LibraryRepository.observeTracks` sets out: a flow holding every track of
          * a large library and rebuilt on every change would spend the whole of
          * REQUIREMENTS.md's scroll budget on allocation. 200 is the repository's own
-         * default and is passed explicitly so that the screen and its "showing the
-         * first 200" line cannot disagree about the number.
+         * default and is passed explicitly so that the screen and its "First 200 tracks"
+         * header cannot disagree about the number.
+         *
+         * It is also the step `Show more` raises the bound by, so the second page is the same
+         * size as the first.
          */
         const val TRACK_LIMIT: Int = 200
 

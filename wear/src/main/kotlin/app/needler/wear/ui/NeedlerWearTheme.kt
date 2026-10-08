@@ -49,15 +49,25 @@ object NeedlerWearColours {
     val textSecondary: Color = Color(0xFFA8B3A0)
 
     /**
-     * Placeholders and disabled text. `#6f7a68`.
+     * Placeholders, captions and status lines. `#828f7a`.
      *
-     * `NeedlerColors.textMuted` carries a long note recording that this value fails WCAG AA on every
-     * background the pack uses, and that keeping it is a recorded product decision. That decision was
-     * made about a phone held at arm's length. On a watch it is used only for the "connecting" line,
-     * which is transient and never the only thing on screen; anything a user must read to act on is
-     * [textSecondary] or [textPrimary].
+     * ## Inherited again, now that the phone has moved
+     *
+     * This was `#6f7a68`, and the note here said the phone's decision to keep a value failing WCAG
+     * AA "was made about a phone held at arm's length", and that on a watch the colour was "used
+     * only for the 'connecting' line, which is transient and never the only thing on screen".
+     *
+     * Neither half held. `NeedlerColors.textMuted` has since moved to `#828f7a` for the reason that
+     * it is a whole tier of prose, and this token is used on ten-odd lines across three screens -
+     * the crate's captions, `+ N more on your phone`, the status under an album that will not fit,
+     * the playback-source label - at **9 to 11sp**. A watch is the worst case for the argument that
+     * was made, not an exception to it: smaller type, a smaller screen, and read outdoors at a
+     * glance. WCAG's relaxed 3:1 applies only to large text, which none of this is.
+     *
+     * Unlike the phone's palette this needs no `disabled` counterpart: every use here is prose, and
+     * nothing on the watch draws an inactive control in it.
      */
-    val textMuted: Color = Color(0xFF6F7A68)
+    val textMuted: Color = Color(0xFF828F7A)
 
     /** Primary buttons and the transport. `#aed5f2`. */
     val accent: Color = Color(0xFFAED5F2)

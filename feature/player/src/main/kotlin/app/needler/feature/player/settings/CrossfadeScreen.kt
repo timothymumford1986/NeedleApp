@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -124,7 +125,7 @@ fun CrossfadeScreen(
             }
 
             CrossfadePreview(
-                enabled = settings.isEnabled,
+                duration = settings.duration,
                 fromTrack = previewFrom,
                 toTrack = previewTo,
             )
@@ -234,7 +235,12 @@ private fun CrossfadeSlider(
         )
         Box(
             modifier = Modifier
-                .offset(x = trackWidth * fraction - thumb / 2)
+                // Inside the gutter at both ends. It was `trackWidth * fraction - thumb / 2`, which
+                // centres the thumb on its stop and therefore hangs half a thumb - 14 dp - outside
+                // the screen's 24 dp margin at Off and again at 12 s. The travel is the track less
+                // the thumb's own width instead, so the control's ink stays within the column every
+                // other row on the screen is aligned to, and the thumb still covers its stop.
+                .offset(x = (trackWidth - thumb) * fraction)
                 .size(thumb)
                 .clip(NeedlerTheme.shapes.circle)
                 .background(colors.accent),
@@ -249,16 +255,38 @@ private fun CrossfadeSlider(
  * it is drawn here as what actually happens - one track stopping where the next starts, square - and
  * the difference between the two pictures is the whole point of the setting.
  *
+ * ## Why it takes the duration and not a boolean
+ *
+ * It took `enabled: Boolean`, and that made a panel labelled PREVIEW draw one unchanging picture for
+ * three of the four stops. Measured: `player-crossfade-phone.png` at 4 s and
+ * `player-crossfade-twelve-phone.png` at 12 s were pixel-identical across the whole curve region -
+ * 0 differing pixels of 72,600 sampled at x 60 to 720, y 590 to 700 - so moving the slider two stops
+ * changed the number above the card and nothing inside it. A preview that does not respond teaches a
+ * listener that the control it previews does nothing, which is worse than no preview at all.
+ *
+ * ## What scales, and why it is the onset rather than the crossing point
+ *
+ * The handover **ends** where the pack puts it, at x=250, and a longer fade starts further back:
+ * [HANDOVER_UNITS_PER_SECOND] units of the 320-unit viewBox per second, so 4 s is the pack's own
+ * 180-to-250 drawing kept to the unit and 12 s begins at x=40. That is what a crossfade is - one
+ * track's last N seconds are the next track's first N - so the picture gets longer at the front,
+ * where the sound actually changes, rather than sliding sideways.
+ *
+ * The rejected alternative was to keep the crossing in the middle and widen it symmetrically. It is
+ * the easier arithmetic and the wrong picture: it moves the moment the next track arrives, which the
+ * setting does not do, and at 12 s it runs off both ends of the card.
+ *
  * It is decorative and hidden from the accessibility tree; the line under it names both tracks, and
  * the slider above already says how long the fade is.
  */
 @Composable
 private fun CrossfadePreview(
-    enabled: Boolean,
+    duration: CrossfadeDuration,
     fromTrack: String,
     toTrack: String,
     modifier: Modifier = Modifier,
 ) {
+    val enabled: Boolean = duration != CrossfadeDuration.OFF
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     val shape = NeedlerTheme.shapes.large
@@ -286,11 +314,11 @@ private fun CrossfadePreview(
             val w: Float = size.width
             val h: Float = size.height
             // The pack's own geometry, on a 320 by 56 viewBox: full level at y=12, silence at y=44,
-            // the handover between x=180 and x=250.
+            // the handover ending at x=250. Where it *begins* is the duration's doing.
             val high: Float = h * (12f / 56f)
             val low: Float = h * (44f / 56f)
-            val start: Float = w * (180f / 320f)
             val end: Float = w * (250f / 320f)
+            val start: Float = end - w * (handoverUnits(duration) / 320f)
             val cut: Float = w * (215f / 320f)
             val strokeWidth: Float = 3.dp.toPx()
 
@@ -374,7 +402,7 @@ private fun CheckRow(
                 Text(
                     text = label,
                     style = typography.body,
-                    color = if (enabled) colors.textPrimary else colors.textMuted,
+                    color = if (enabled) colors.textPrimary else colors.disabled,
                 )
                 if (subtitle != null) {
                     Text(text = subtitle, style = typography.caption, color = colors.textMuted)
@@ -382,14 +410,72 @@ private fun CheckRow(
             }
             if (checked) {
                 NeedlerCheckIcon(
-                    tint = if (enabled) colors.accent else colors.textMuted,
+                    tint = if (enabled) colors.accent else colors.disabled,
                     size = 20.dp,
                 )
+            } else {
+                UncheckedBox(enabled = enabled)
             }
         }
         NeedlerHairline()
     }
 }
+
+/**
+ * How wide the handover is, in units of the preview's 320-unit viewBox.
+ *
+ * Internal and not `@Composable` so the one thing that makes the preview move can be asserted as
+ * arithmetic, at every stop, without rendering a card and diffing two PNGs - which is how the
+ * identical-preview defect got as far as a committed golden in the first place.
+ *
+ * `Off` is given the pack's own 70 rather than nought. The off case draws a square cut at x=215 and
+ * never uses this width for anything, and returning nought would put the fade's start beyond its end.
+ */
+internal fun handoverUnits(duration: CrossfadeDuration): Float {
+    if (duration == CrossfadeDuration.OFF) return PACK_HANDOVER_UNITS
+    return duration.duration.inWholeSeconds * HANDOVER_UNITS_PER_SECOND
+}
+
+/**
+ * The pack's own handover: x=180 to x=250 at 4 s, which is 70 units.
+ *
+ * Every other stop is this figure per second, so the drawing the design pack signed off is the one
+ * that renders at the stop the pack drew.
+ */
+private const val PACK_HANDOVER_UNITS: Float = 70f
+
+/** 70 units over 4 seconds. Twelve seconds is therefore 210, which begins at x=40 and fits. */
+private const val HANDOVER_UNITS_PER_SECOND: Float = PACK_HANDOVER_UNITS / 4f
+
+/**
+ * What an off row draws where an on row draws its check.
+ *
+ * An off row used to draw nothing at all: `player-crossfade-phone.png`'s "Fade on pause" control
+ * column contained zero non-background pixels while the two rows above carried accent ticks, so the
+ * only off setting on the screen read as a line of prose rather than as a control in its off state.
+ * A reader cannot learn that a row is a toggle from a row that has no toggle on it.
+ *
+ * An empty box rather than a greyed check, which would have said "set, and unavailable". The border
+ * is `textSecondary` at 7.0:1 and not the hairline: REQUIREMENTS.md "Accessibility" measures the
+ * hairline at **1.20:1** against the canvas and carries that as an open question, and an empty box
+ * nobody can see is the defect this is fixing, drawn one shade lighter.
+ */
+@Composable
+private fun UncheckedBox(enabled: Boolean) {
+    val colors = NeedlerTheme.colors
+    Box(
+        modifier = Modifier
+            .size(20.dp)
+            .border(
+                width = 1.5.dp,
+                color = if (enabled) colors.textSecondary else colors.disabled,
+                shape = UNCHECKED_BOX_SHAPE,
+            ),
+    )
+}
+
+/** The check icon's own corner, so on and off are the same shape at the same size. */
+private val UNCHECKED_BOX_SHAPE: RoundedCornerShape = RoundedCornerShape(4.dp)
 
 /** `Off`, `4 s`, `6 s`, `12 s` - the readout beside "Fade between tracks". */
 fun durationLabel(duration: CrossfadeDuration): String = when (duration) {

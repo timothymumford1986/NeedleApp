@@ -8,6 +8,7 @@ package app.needler.screenshot
 
 import android.app.Application
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
+import androidx.compose.runtime.Composable
 import app.needler.connect.ConnectFailure
 import app.needler.connect.ConnectScreen
 import app.needler.connect.ConnectUiState
@@ -16,6 +17,7 @@ import app.needler.connect.ProxyFormState
 import app.needler.connect.ProxyPreset
 import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.OfflineCause
+import java.awt.image.BufferedImage
 import java.io.File
 import javax.imageio.ImageIO
 import kotlin.time.ExperimentalTime
@@ -162,17 +164,32 @@ class ConnectScreenshotTest {
         )
     }
 
+    /**
+     * The Cloudflare preset with both credentials typed in.
+     *
+     * [assertRevealsTheProxySection] is what makes this a test of the proxy section rather than
+     * another picture of the Connect form. Both of these goldens used to show the **top two
+     * millimetres** of the segmented preset control and nothing else: the section is last in a
+     * scrolling column, the Connect button is pinned below that column, and the scroll stopped
+     * wherever it happened to stop - so the cut ran through the middle of the control's glyphs and
+     * the two images named for the feature contained none of it. The fix is
+     * [app.needler.connect.ConnectScreen]'s rather than this file's; the assertion is this file's
+     * job, and it fails if opening the section stops moving most of the screen, which is precisely
+     * the state these two were committed in.
+     */
     @Test
     fun `the proxy fields filled in`() {
-        capture(
-            "connect-proxy-fields",
-            NeedlerDevice.Phone,
-            FILLED.copy(
-                proxy = ProxyFormState(
-                    expanded = true,
-                    preset = ProxyPreset.CloudflareAccess,
-                    cloudflareClientId = "8f3c1d2e4b5a6978.access",
-                    cloudflareClientSecret = "0123456789abcdef",
+        assertRevealsTheProxySection(
+            capture(
+                "connect-proxy-fields",
+                NeedlerDevice.Phone,
+                FILLED.copy(
+                    proxy = ProxyFormState(
+                        expanded = true,
+                        preset = ProxyPreset.CloudflareAccess,
+                        cloudflareClientId = "8f3c1d2e4b5a6978.access",
+                        cloudflareClientSecret = "0123456789abcdef",
+                    ),
                 ),
             ),
         )
@@ -180,18 +197,64 @@ class ConnectScreenshotTest {
 
     @Test
     fun `the custom header editor`() {
-        capture(
-            "connect-proxy-custom",
-            NeedlerDevice.Phone,
-            FILLED.copy(
-                proxy = ProxyFormState(
-                    expanded = true,
-                    preset = ProxyPreset.Custom,
-                    customHeaders = listOf(CustomHeaderDraft("X-Api-Key", "0123456789abcdef")),
-                    problem = "Needler sends that header itself. Choose another name.",
+        assertRevealsTheProxySection(
+            capture(
+                "connect-proxy-custom",
+                NeedlerDevice.Phone,
+                FILLED.copy(
+                    proxy = ProxyFormState(
+                        expanded = true,
+                        preset = ProxyPreset.Custom,
+                        customHeaders = listOf(CustomHeaderDraft("X-Api-Key", "0123456789abcdef")),
+                        problem = "Needler sends that header itself. Choose another name.",
+                    ),
                 ),
             ),
         )
+    }
+
+    /**
+     * Fails unless opening the proxy section changed a large part of the screen.
+     *
+     * The baseline is the same form with the section shut, rendered here and written to a scratch
+     * file rather than into `screenshots/`: it is a measurement, not a golden. Rendering it in this
+     * run rather than reading `connect-phone.png` off disk keeps the comparison about this build,
+     * and means the check cannot be satisfied by a stale file.
+     *
+     * The quantity is a fraction of all pixels because that is what the defect was expressible in
+     * and because a bounds assertion is not available here: `:app` carries no `compose-ui-test` on
+     * its unit-test classpath, so there is no semantics tree to read a node's position out of.
+     * `:feature:player`'s `NowPlayingMeasureTest` is what the stronger version of this looks like,
+     * and adding that dependency to `:app` to write one is a larger change than the screenshots are
+     * owed. See [MIN_REVEALED] for why the threshold is where it is.
+     */
+    private fun assertRevealsTheProxySection(expanded: File) {
+        val shut: File = File.createTempFile("needler-connect-proxy-shut", ".png")
+        captureTo(shut, NeedlerDevice.Phone, FILLED)
+
+        val fraction: Double = fractionOfPixelsDiffering(expanded, shut)
+        shut.delete()
+        assertTrue(
+            expanded.name + " differs from the same form with the proxy section shut in only " +
+                fraction * 100 + "% of its pixels, so the section it is named for is not in it",
+            fraction >= MIN_REVEALED,
+        )
+    }
+
+    /** How much of two same-sized renders disagrees, as a fraction of their pixels. */
+    private fun fractionOfPixelsDiffering(one: File, other: File): Double {
+        val a: BufferedImage = ImageIO.read(one)
+        val b: BufferedImage = ImageIO.read(other)
+        assertEquals("widths of " + one.name + " and " + other.name, a.width, b.width)
+        assertEquals("heights of " + one.name + " and " + other.name, a.height, b.height)
+
+        var differing = 0L
+        for (y in 0 until a.height) {
+            for (x in 0 until a.width) {
+                if (a.getRGB(x, y) != b.getRGB(x, y)) differing++
+            }
+        }
+        return differing.toDouble() / (a.width.toLong() * a.height.toLong()).toDouble()
     }
 
     @Test
@@ -203,25 +266,66 @@ class ConnectScreenshotTest {
         )
     }
 
-    private fun capture(name: String, device: NeedlerDevice, state: ConnectUiState) {
+    private fun capture(name: String, device: NeedlerDevice, state: ConnectUiState): File {
         val file = captureNeedlerScreen(name, device) {
-            ConnectScreen(
-                state = state,
-                widthSizeClass = when (device) {
-                    NeedlerDevice.Phone -> WindowWidthSizeClass.Compact
-                    NeedlerDevice.Tablet -> WindowWidthSizeClass.Expanded
-                },
-                onServerChange = {},
-                onUsernameChange = {},
-                onPasswordChange = {},
-                onConnect = {},
-                onTrustCertificate = {},
-            )
+            Screen(state, device)
         }
         assertRendered(file, device)
+        return file
+    }
+
+    /**
+     * The same render, left where it is asked for rather than in `screenshots/`.
+     *
+     * `captureNeedlerScreen` owns the file name, which is right for a golden and wrong for a
+     * baseline nobody commits, so the one caller that wants a scratch render moves the file
+     * afterwards. A name parameter on the shared helper would have every other caller reading past
+     * a case that applies to one.
+     */
+    private fun captureTo(file: File, device: NeedlerDevice, state: ConnectUiState) {
+        val rendered: File = captureNeedlerScreen(SCRATCH_NAME, device) {
+            Screen(state, device)
+        }
+        rendered.copyTo(file, overwrite = true)
+        rendered.delete()
+    }
+
+    @Composable
+    private fun Screen(state: ConnectUiState, device: NeedlerDevice) {
+        ConnectScreen(
+            state = state,
+            widthSizeClass = when (device) {
+                NeedlerDevice.Phone -> WindowWidthSizeClass.Compact
+                NeedlerDevice.Tablet -> WindowWidthSizeClass.Expanded
+            },
+            onServerChange = {},
+            onUsernameChange = {},
+            onPasswordChange = {},
+            onConnect = {},
+            onTrustCertificate = {},
+        )
     }
 
     private companion object {
+
+        /**
+         * The share of the image that opening the proxy section has to repaint.
+         *
+         * Ten per cent. The occluded renders moved a strip about 25px tall, which is under 2% of a
+         * 780x1688 image; a section actually brought into view repaints most of the form above it.
+         * Anything between the two is a disclosure half-done, which is worth failing on rather than
+         * recording.
+         */
+        const val MIN_REVEALED: Double = 0.10
+
+        /**
+         * The file name the scratch baseline is rendered under before it is moved.
+         *
+         * Prefixed so that a run interrupted between the render and the move leaves something
+         * obviously not a golden in `screenshots/` rather than something that looks like one.
+         */
+        const val SCRATCH_NAME: String = "scratch-connect-proxy-shut"
+
         /** The pack's own placeholder values, typed in. */
         val FILLED = ConnectUiState(
             server = "https://music.yourhome.net",

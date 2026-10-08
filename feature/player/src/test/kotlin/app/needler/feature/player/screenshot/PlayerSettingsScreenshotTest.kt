@@ -51,7 +51,6 @@ class PlayerSettingsScreenshotTest {
                 onPresetSelected = {},
                 onBandChange = { _, _ -> },
                 onPreampChange = {},
-                onResetToFlat = {},
                 onBack = {},
             )
         }
@@ -66,7 +65,6 @@ class PlayerSettingsScreenshotTest {
                 onPresetSelected = {},
                 onBandChange = { _, _ -> },
                 onPreampChange = {},
-                onResetToFlat = {},
                 onBack = {},
             )
         }

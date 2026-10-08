@@ -14,6 +14,21 @@ import org.junit.Test
  * inoperable. These are the assertions that keep the three apart, and they are plain colour comparisons
  * because the thing that was wrong was a token choice, not a rendering.
  *
+ * ## The argument, re-made
+ *
+ * [the two tokens are the pack's own values] is a tripwire: it pins the two values the separation
+ * rests on so that moving either forces this paragraph to be rewritten instead of silently
+ * inheriting a new ratio. It fired. `textMuted` moved from `#6f7a68` to `#828f7a` to clear WCAG AA
+ * as the product's third tier of prose, and it was `textMuted` that drew the unavailable state - so
+ * off against unavailable went from **2.06:1 to 1.56:1**, giving back a quarter of the separation
+ * this class exists to hold.
+ *
+ * The resolution was to split the role rather than pick one of the two requirements: `NeedlerColors`
+ * now has a `disabled` token holding the pack's drawn `#6f7a68` for inactive controls, which WCAG
+ * 2.2 exempts from both 1.4.3 and 1.4.11 by name, while the prose tier keeps the lighter value. The
+ * separation is back to **2.06:1** and the assertions below now pin `disabled`, which is the token
+ * that actually decides this control's third appearance.
+ *
  * `NeedlerDarkColors` is the one palette in the project - REQUIREMENTS.md "Design system": "No light
  * theme exists in the design pack" - so there is nothing to parameterise over.
  */
@@ -38,16 +53,30 @@ class TransportRowTest {
     }
 
     @Test
-    fun `unavailable keeps muted, which is what that token is for`() {
+    fun `unavailable wears the disabled token, which is what that token is for`() {
         assertEquals(
-            colors.textMuted,
+            colors.disabled,
             transportModeTint(colors, enabled = false, active = false),
         )
         // An unloaded crate cannot have shuffle meaningfully on, but if the state ever says so the
         // button must still read as unavailable rather than as the accent.
         assertEquals(
-            colors.textMuted,
+            colors.disabled,
             transportModeTint(colors, enabled = false, active = true),
+        )
+    }
+
+    /**
+     * And not the prose tier, which is a lighter colour than this control may use.
+     *
+     * The regression that split the token: `textMuted` is 1.56:1 against `textSecondary`, so an
+     * unavailable mode drawn in it is very nearly the off state beside it.
+     */
+    @Test
+    fun `unavailable is not the third text tier`() {
+        assertNotEquals(
+            colors.textMuted,
+            transportModeTint(colors, enabled = false, active = false),
         )
     }
 
@@ -63,13 +92,15 @@ class TransportRowTest {
     /**
      * And the palette the decision rests on has not moved.
      *
-     * REQUIREMENTS.md "Accessibility" records `#6f7a68` as kept despite failing AA, and names
-     * `textSecondary` as what carries the pack's secondary text. If either value changes, the contrast
-     * argument above needs re-making rather than silently inheriting a new one.
+     * `#6f7a68` is the pack's drawn value, kept on `disabled` because WCAG 2.2 exempts inactive
+     * components from 1.4.3 and 1.4.11 by name; `textSecondary` carries the off state. If either
+     * value changes, the contrast argument in this class's KDoc needs re-making rather than
+     * silently inheriting a new one. That is not hypothetical - it has fired once already, and the
+     * "## The argument, re-made" section is the result.
      */
     @Test
     fun `the two tokens are the pack's own values`() {
         assertEquals(0xFFA8B3A0.toInt(), colors.textSecondary.toArgb())
-        assertEquals(0xFF6F7A68.toInt(), colors.textMuted.toArgb())
+        assertEquals(0xFF6F7A68.toInt(), colors.disabled.toArgb())
     }
 }

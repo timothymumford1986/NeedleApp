@@ -400,8 +400,33 @@ enum class AlbumTransport {
         RESUME -> "Resume " + albumLabel + " where it stopped"
     }
 
-    /** The word on the shuffle button. */
-    val shuffleLabel: String get() = if (isLoaded) "Shuffle again" else "Shuffle"
+    /**
+     * The word on the shuffle button. One word, in every transport state.
+     *
+     * ## Why "Shuffle again" went
+     *
+     * It was six characters wider, and that was enough to break the action row. `FlowRow` places a
+     * child on the next line the moment it does not fit, and on `album-playing-phone.png` - a
+     * 390dp phone at **default** text size - Pause, "Shuffle again", "Pull to device" and the
+     * overflow no longer fitted, so the overflow stranded alone on a second line. The row grew
+     * about 60dp to carry one extra word that told the reader nothing they could not get from the
+     * label beside it: the album is playing, so of course shuffling it starts it over.
+     *
+     * The restart warning has not been dropped; it was never the label's job. It is in
+     * [shuffleDescription], which is what REQUIREMENTS.md "Accessibility" makes the thing a
+     * TalkBack user acts on, and it says the whole sentence there - "This starts the album over in
+     * a new order" - where there is no column to run out of.
+     *
+     * ## Rejected
+     *
+     * **Shorten the other labels instead.** "Pull to device" is one of the two labels this verb is
+     * now allowed, and "Pause" is the transport's own word. Neither is spendable.
+     *
+     * **Let it wrap.** It already does; that is the defect. A four-control row whose fourth control
+     * sits alone on a line reads as two rows, and the one that is alone is the overflow - which
+     * then looks like the primary action of a row of its own.
+     */
+    val shuffleLabel: String get() = "Shuffle"
 
     /**
      * Shuffle spoken.
@@ -431,10 +456,24 @@ sealed interface AlbumNotice {
     /** True for the ones that are bad news, which the screen tints differently. */
     val isProblem: Boolean get() = false
 
+    /**
+     * How the card that carries this is outlined. See [AlbumNoticeTone].
+     *
+     * Derived from [isProblem] so that the six notices which are neither a success nor a failure
+     * can say so by overriding one property, and nothing that does not override it changes
+     * behaviour.
+     */
+    val tone: AlbumNoticeTone
+        get() = if (isProblem) AlbumNoticeTone.Problem else AlbumNoticeTone.Done
+
     /** The pull was accepted and the server is acting on it. */
     data object PullAccepted : AlbumNotice {
         override val message: String
             get() = "Pulling. Track it on the Pulls tab; you will be told when it lands."
+
+        // The server took the request and is acting on it, which is the outcome asked for. The
+        // record is not here yet, and the sentence says where to watch for it.
+        override val tone: AlbumNoticeTone get() = AlbumNoticeTone.Pending
     }
 
     /**
@@ -447,17 +486,31 @@ sealed interface AlbumNotice {
     data object PullPendingApproval : AlbumNotice {
         override val message: String
             get() = "Requested. An administrator has to approve this before it is acquired."
+
+        // Nothing has happened yet and it may never: an administrator can reject this.
+        override val tone: AlbumNoticeTone get() = AlbumNoticeTone.Pending
     }
 
     /** Placed with no connection; the write queue will replay it. */
     data object PullQueuedOffline : AlbumNotice {
         override val message: String
             get() = "No connection, so this pull is queued. It is sent as soon as you are back online."
+
+        // The one the audit named: `album-queued-offline-phone.png` drew this in a positive-green
+        // outlined card, which is the treatment every success on this screen wears. Nothing has
+        // reached the server, nothing has been approved and nothing has been downloaded - the
+        // request is sitting in a write queue on the phone. Painting a deferral as a success is how
+        // a user comes to believe a pull is under way when it has not left the device.
+        override val tone: AlbumNoticeTone get() = AlbumNoticeTone.Pending
     }
 
     /** The server already has it. */
     data object AlreadyInLibrary : AlbumNotice {
         override val message: String get() = "This album is already in your library."
+
+        // A statement of fact in answer to a tap that did nothing. Not a failure, and not something
+        // the user achieved.
+        override val tone: AlbumNoticeTone get() = AlbumNoticeTone.Pending
     }
 
     /**
@@ -508,6 +561,9 @@ sealed interface AlbumNotice {
         override val message: String
             get() = "Queued. This album downloads when you are next on Wi-Fi — you can change " +
                 "that under Settings, Storage."
+
+        // Held, not done. The bytes are not on the device and may not be for hours.
+        override val tone: AlbumNoticeTone get() = AlbumNoticeTone.Pending
     }
 
     /** The album fits, but only just. */
@@ -579,4 +635,34 @@ sealed interface AlbumNotice {
             RequestStatus.REJECTED -> Problem("The server rejected this request.")
         }
     }
+}
+
+/**
+ * How a notice is outlined, which is not the same question as what it says.
+ *
+ * ## Why there are three and not two
+ *
+ * There were two: the destructive red for [AlbumNotice.isProblem] and the positive green for
+ * everything else. "Everything else" is nine notices, and only four of them report something that has
+ * actually happened. The other five report a deferral - queued for Wi-Fi, queued offline,
+ * waiting for an administrator - and `album-queued-offline-phone.png` is what that cost: a
+ * green-outlined card for a pull that has not left the phone, in the colour REQUIREMENTS.md
+ * "Design system" reserves for the on-device state and for "Ready".
+ *
+ * Green on this screen means *it is here*. A request sitting in a write queue is the opposite
+ * of that, and the artist screen's equivalent was correctly neutral, so the two screens
+ * disagreed about the same event.
+ *
+ * [Pending] takes the hairline, which is the app's own "this is information" treatment - the
+ * same border every other explanatory card on these two screens wears.
+ */
+enum class AlbumNoticeTone {
+    /** It happened. The positive green outline: added, started, removed, stopped. */
+    Done,
+
+    /** It will happen, or it might. The hairline: queued, waiting, already present. */
+    Pending,
+
+    /** It went wrong, or it is about to cost the user something. The destructive outline. */
+    Problem,
 }

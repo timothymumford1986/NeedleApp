@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import app.needler.core.domain.model.PlayQueue
 import app.needler.core.domain.model.QueueItem
 import app.needler.core.domain.playback.PlaybackState
+import app.needler.feature.player.fake.FakePins
 import app.needler.feature.player.fake.FakePlaybackController
 import app.needler.feature.player.fake.PlayerFixtures
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +34,9 @@ class CrateViewModelTest {
 
     private val controller = FakePlaybackController(initialQueue = PlayerFixtures.crate)
 
+    /** Empty by default: nothing in the pack's crate is on the device, so every row reads Server. */
+    private val pins = FakePins()
+
     @Before
     fun setUp() {
         Dispatchers.setMain(UnconfinedTestDispatcher())
@@ -45,7 +49,7 @@ class CrateViewModelTest {
 
     @Test
     fun `the crate splits into a playing row and up next, with the pack's summary`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             // The first emission is the empty initial value before the queue flow arrives.
@@ -72,7 +76,7 @@ class CrateViewModelTest {
      */
     @Test
     fun `dragging a row past the playing row does not change what is playing`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             var state: CrateUiState = awaitItem()
@@ -102,7 +106,7 @@ class CrateViewModelTest {
     fun `a move is applied locally before the session echoes it`() = runTest {
         // The session is deliberately silent: a drag must still look instant.
         controller.echoMoves = false
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             var state: CrateUiState = awaitItem()
@@ -121,7 +125,7 @@ class CrateViewModelTest {
 
     @Test
     fun `a stale index is ignored rather than clamped`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             var state: CrateUiState = awaitItem()
@@ -136,7 +140,7 @@ class CrateViewModelTest {
 
     @Test
     fun `an accessible move up is the same move a drag makes`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             var state: CrateUiState = awaitItem()
@@ -154,7 +158,7 @@ class CrateViewModelTest {
 
     @Test
     fun `tapping a row jumps by id, never by index`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
         viewModel.skipTo("q5")
 
         assertEquals(listOf("skipToQueueItem(q5)"), controller.commands)
@@ -162,7 +166,7 @@ class CrateViewModelTest {
 
     @Test
     fun `one row can be dropped without emptying the crate`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             var state: CrateUiState = awaitItem()
@@ -184,7 +188,7 @@ class CrateViewModelTest {
 
     @Test
     fun `removing the playing row hands the crate to the track that followed`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             var state: CrateUiState = awaitItem()
@@ -202,7 +206,7 @@ class CrateViewModelTest {
 
     @Test
     fun `clear empties the crate and stops`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             var state: CrateUiState = awaitItem()
@@ -238,7 +242,7 @@ class CrateViewModelTest {
 
     @Test
     fun `the playing row's glyph follows the session, not the queue`() = runTest {
-        val viewModel = CrateViewModel(controller)
+        val viewModel = CrateViewModel(controller, pins)
 
         viewModel.state.test {
             var state: CrateUiState = awaitItem()

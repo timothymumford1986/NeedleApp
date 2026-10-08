@@ -55,7 +55,7 @@ fun NeedlerSegmentedTabs(
             .defaultMinSize(minHeight = sizes.segmentedHeight)
             .clip(shape)
             .background(colors.surface)
-            .border(sizes.hairlineThickness, colors.hairline, shape)
+            .border(sizes.hairlineThickness, colors.componentBorder, shape)
             .padding(sizes.segmentedPadding)
             .selectableGroup()
             .semantics { if (label != null) contentDescription = label },
@@ -92,7 +92,7 @@ fun NeedlerSegmentedTabs(
                     text = option,
                     style = typography.metaStrong,
                     color = when {
-                        !enabled -> colors.textMuted
+                        !enabled -> colors.disabled
                         selected -> colors.onInverseSurface
                         else -> colors.textSecondary
                     },

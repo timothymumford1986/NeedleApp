@@ -15,6 +15,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.googlefonts.GoogleFont
 // Aliased: the downloadable-font builder shares its simple name with the platform one above.
 import androidx.compose.ui.text.googlefonts.Font as DownloadableFont
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -126,6 +128,43 @@ data class NeedlerTypography(
 /** Returns a copy of this style with tabular numerals switched on. */
 fun TextStyle.tabularNumerals(): TextStyle =
     copy(fontFeatureSettings = NeedlerTypography.TABULAR_NUMERALS)
+
+/**
+ * Returns a copy of this style that wraps between words and never inside one.
+ *
+ * ## What this fixes
+ *
+ * Four reviewers found the same thing on four surfaces: a title broken mid-word.
+ * `Death's Dateless Night` drawn as `Deat` / `h's ...`, `Mordechai` as `M` / `...`, `Submarine` as
+ * `Sub` / `m...`. The mechanism is in the layout rather than in the text - a fixed-width trailing
+ * element measured first and left the title a column narrower than one word - and that is fixed
+ * where it happens, in the row components themselves. This is the second half: when a column does
+ * end up narrower than a word, what the text should do about it.
+ *
+ * Two settings, each closing one route to a mid-word break:
+ *
+ *  - [Hyphens.None] stops the platform splitting a word at a syllable and hyphenating it. Android's
+ *    default is `Hyphens.Auto` once a locale's dictionary is available, which is where `Deat-` can
+ *    come from on a narrow column.
+ *  - [LineBreak.Simple] is the greedy word-boundary algorithm. The balanced and high-quality
+ *    strategies may move a break to even the lines out, and on a two-line column that is a break
+ *    the author did not choose.
+ *
+ * Neither is a guarantee on its own, and the KDoc says so rather than implying otherwise: a word
+ * genuinely wider than its column still has to break somewhere, because the alternative is drawing
+ * outside the column. The guarantee comes from the column being wide enough, which is
+ * `NeedlerAlbumRow`'s and `NeedlerQueueRow`'s business. This is what makes the common case correct
+ * and the pathological case rare.
+ *
+ * ## The rejected alternative
+ *
+ * Put the two settings into every title style in [needlerTypography]. Rejected because it is the
+ * wrong scope twice over: a screen title, a wordmark and a now-playing title are each one line on
+ * a full-width surface and have no wrap to govern, and a style that silently carries a line-break
+ * policy is a style whose next reader cannot tell which of its fields are doing work.
+ */
+fun TextStyle.wrapsAtWords(): TextStyle =
+    copy(hyphens = Hyphens.None, lineBreak = LineBreak.Simple)
 
 /** The two families Needler draws with, already resolved to a [FontFamily]. */
 @Immutable

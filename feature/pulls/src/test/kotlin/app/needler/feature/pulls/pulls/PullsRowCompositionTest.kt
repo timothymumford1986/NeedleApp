@@ -3,13 +3,15 @@
 package app.needler.feature.pulls.pulls
 
 import app.needler.core.design.component.NeedlerAlbumBadge
-import app.needler.core.design.component.label
 import app.needler.core.domain.model.Pull
 import app.needler.core.domain.model.PullBucket
 import app.needler.core.domain.model.PullProgress
 import app.needler.core.domain.model.PullState
 import app.needler.core.domain.model.PullStatus
+import app.needler.feature.pulls.common.PullsChip
 import app.needler.feature.pulls.common.PullsFormat
+import app.needler.feature.pulls.common.canStop
+import app.needler.feature.pulls.common.chipFor
 import app.needler.feature.pulls.SamplePulls
 import kotlin.time.ExperimentalTime
 import org.junit.Assert.assertEquals
@@ -53,7 +55,7 @@ class PullsRowCompositionTest {
         assertEquals("Kate Bush", subtitle)
         assertTrue(
             "the state is still named, in the column that has room for it",
-            badgeFor(pull).label().contains("attention"),
+            chipFor(pull).word.contains("attention"),
         )
     }
 
@@ -62,15 +64,15 @@ class PullsRowCompositionTest {
      *
      * This is the half of the fix that is easy to get wrong in the other direction. "Put only the
      * artist in the subtitle" would fix one row by emptying nine: `Pulling` does not say "12 of 19
-     * files", `Searching` does not say which source is being asked, `Waiting` does not say it is an
-     * administrator being waited on, and `Failed` does not say no source was found.
+     * files", `Searching` does not say which source is being asked, `Waiting` does not say what
+     * the wait is for, and `Not retrieved` does not say no source was found.
      */
     @Test
     fun `every other state keeps the explanation its badge does not carry`() {
         val kept: Map<Pull, String> = mapOf(
             SamplePulls.downloading to "12 of 19 files",
             SamplePulls.searching to "asking slskd",
-            SamplePulls.pendingApproval to "waiting for an administrator",
+            SamplePulls.pendingApproval to "needs approval",
             SamplePulls.failed to "no source found",
             SamplePulls.partial to "7 of 10 files",
         )
@@ -231,7 +233,7 @@ class PullsRowCompositionTest {
         // label to "Needs attention" - the words the pull widget had used all along - returned 81dp.
         // Asserting a floor rather than the old ceiling keeps the guard pointing at the fault: a
         // badge that grows back into a sentence fails here again.
-        assertTrue("the badge leaves only " + slot.toInt() + "dp for the title", slot > 140f)
+        assertTrue("the chip leaves only " + slot.toInt() + "dp for the title", slot > 140f)
         assertTrue(
             "the line is " + widthDp(rowSubtitle(pull, now)).toInt() + "dp in " + slot.toInt() + "dp",
             widthDp(rowSubtitle(pull, now)) <= slot,
@@ -331,34 +333,69 @@ class PullsRowCompositionTest {
      * all within 68dp. The model lands within 4dp of every row in that image, which is the accuracy
      * this needs: the defects it exists to catch were out by a factor of three.
      */
-    private fun slotWidthDp(pull: Pull): Float {
-        val percent: Int? = PullsFormat.percent(pull.progress.fraction)
-        // ActivePullRow draws the percentage *instead of* the badge when there is one to draw;
-        // FinishedPullRow always draws the badge.
-        val stated: Float = if (pull.bucket == PullBucket.ACTIVE && percent != null) {
-            widthDp(percent.toString() + "%", META_STRONG_DP)
-        } else {
-            badgeWidthDp(pull)
+    private fun slotWidthDp(pull: Pull): Float =
+        ROW_TEXT_AND_TRAILING_DP - STATUS_COLUMN_DP
+
+    /**
+     * Every chip still fits the fixed column, which is the other half of the status column being
+     * fixed at all: a word wider than its box wraps, and a wrapped chip puts the pill below it back
+     * where it was before this was straightened out.
+     */
+    @Test
+    fun `every chip fits the column it is drawn in`() {
+        val states: List<Pull> = SamplePulls.everyState + queued + processing
+        states.forEach { pull ->
+            assertTrue(
+                "'" + chipFor(pull).word + "' is " + badgeWidthDp(pull).toInt() +
+                    "dp in a " + STATUS_COLUMN_DP.toInt() + "dp column",
+                badgeWidthDp(pull) <= STATUS_COLUMN_DP,
+            )
         }
-        val pill: Float = if (pull.canCancel || pull.canRetry || pull.state == PullState.COMPLETED) {
-            PILL_DP
-        } else {
-            0f
+        // And the widest pill still fits beside them, since it shares the box.
+        assertTrue(PILL_DP <= STATUS_COLUMN_DP)
+    }
+
+    /**
+     * Punch-list: a `Waiting` pull could not be stopped.
+     *
+     * `screenshots/pulls-every-state-phone.png` drew it between a `Searching` row and a
+     * `Needs attention` row that both had a Stop, and `screenshots/pulls-history-phone.png` showed
+     * what it was waiting for - an approval nobody had granted, with no way out of the queue. The
+     * one state that genuinely cannot be stopped is still excluded, because REQUIREMENTS.md
+     * "Queue screen requirements" item 3 says the server refuses it.
+     */
+    @Test
+    fun `every row that has not finished offers a stop`() {
+        val states: List<Pull> = SamplePulls.everyState + queued + processing
+        assertEquals(
+            "a fixture per state, or this proves nothing",
+            PullState.entries.toSet(),
+            states.map { it.state }.toSet(),
+        )
+
+        states.forEach { pull ->
+            val expected: Boolean =
+                pull.bucket == PullBucket.ACTIVE && pull.state != PullState.PROCESSING
+            assertEquals(pull.state.toString(), expected, pull.canStop)
         }
-        return ROW_TEXT_AND_TRAILING_DP - maxOf(stated, pill)
     }
 
     private fun badgeWidthDp(pull: Pull): Float {
-        val badge: NeedlerAlbumBadge = badgeFor(pull)
-        val glyph: Float = when (badge) {
-            NeedlerAlbumBadge.Waiting,
-            NeedlerAlbumBadge.Searching,
-            NeedlerAlbumBadge.NeedsAttention,
-            NeedlerAlbumBadge.Ready,
-            is NeedlerAlbumBadge.Pulling -> GLYPH_DP
-            else -> 0f
+        val chip: PullsChip = chipFor(pull)
+        val glyph: Float = when (chip) {
+            is PullsChip.Badge -> when (chip.badge) {
+                NeedlerAlbumBadge.Waiting,
+                NeedlerAlbumBadge.Searching,
+                NeedlerAlbumBadge.NeedsAttention,
+                NeedlerAlbumBadge.InLibrary,
+                is NeedlerAlbumBadge.Pulling -> GLYPH_DP
+
+                else -> 0f
+            }
+
+            PullsChip.NotRetrieved -> 0f
         }
-        return glyph + widthDp(badge.label(), META_STRONG_DP)
+        return glyph + widthDp(chip.word, META_STRONG_DP)
     }
 
     private fun widthDp(text: String, perCharacter: Float = META_DP): Float =
@@ -381,8 +418,11 @@ class PullsRowCompositionTest {
         /** 13sp `meta`, averaged over the committed renders. */
         const val META_DP: Float = 5.8f
 
-        /** 13sp `metaStrong`, the badges and the percentage. */
+        /** 13sp `metaStrong`, the chips and the percentage. */
         const val META_STRONG_DP: Float = 6.0f
+
+        /** `PullsScreen.STATUS_COLUMN_DP`, the fixed width of the trailing column. */
+        const val STATUS_COLUMN_DP: Float = 124f
 
         /** A 16dp glyph and the 6dp `Arrangement.spacedBy` beside it, on the badges that have one. */
         const val GLYPH_DP: Float = 22f

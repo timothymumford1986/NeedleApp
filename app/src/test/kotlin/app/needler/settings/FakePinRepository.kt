@@ -31,10 +31,11 @@ import kotlinx.coroutines.flow.emptyFlow
 /**
  * A scriptable [PinRepository] for the Downloaded albums screen.
  *
- * Only the two members that screen uses are implemented - [observeDownloadedAlbums] and
- * [unpinAlbum]. Everything else throws rather than returning a plausible-looking default, for the
- * reason the whole project refuses inert callbacks: a fake that quietly answers a call the screen was
- * never supposed to make turns "this screen reached past its own concern" into a passing test.
+ * Only the three members that screen uses are implemented - [observeDownloadedAlbums], [unpinAlbum]
+ * and [pinAlbum], which is the removal's Undo. Everything else throws rather than returning a
+ * plausible-looking default, for the reason the whole project refuses inert callbacks: a fake that
+ * quietly answers a call the screen was never supposed to make turns "this screen reached past its
+ * own concern" into a passing test.
  *
  * A successful [unpinAlbum] removes the album from [observeDownloadedAlbums] as the real one does,
  * since REQUIREMENTS.md "Storage, and why there is no budget" is emphatic that the removal is the
@@ -50,6 +51,28 @@ internal class FakePinRepository(
 
     /** Every album [unpinAlbum] was called for, in order. */
     val unpinned: MutableList<ReleaseGroupMbid> = mutableListOf()
+
+    /** Every album [pinAlbum] was called for, in order. The Undo on a finished removal. */
+    val pinned: MutableList<ReleaseGroupMbid> = mutableListOf()
+
+    /**
+     * The albums [pinAlbum] can put back, keyed by MBID.
+     *
+     * Seeded from the constructor's list, so an album removed in a test can be restored by the same
+     * test without the fake having to invent one. The real repository re-creates the pin row and the
+     * download follows; here the row simply returns to the list, which is what the screen observes.
+     */
+    private val known: MutableMap<ReleaseGroupMbid, DownloadedAlbum> =
+        // `this.albums`, so this reads the property declared above and not the constructor parameter
+        // it shadows; the two have different types and the mix-up would only show as a compile error
+        // on a later edit.
+        this.albums.value.associateBy { it.releaseGroupMbid }.toMutableMap()
+
+    /** What [pinAlbum] answers. Null is a success that puts the album back on the list. */
+    var pinOutcome: Outcome<Unit>? = null
+
+    /** [unpinGate]'s counterpart, to hold an undo in flight. */
+    var pinGate: CompletableDeferred<Unit>? = null
 
     /** The orders [observeDownloadedAlbums] was asked for, so a test can assert the screen's query. */
     val ordersRequested: MutableList<DownloadedAlbumOrder> = mutableListOf()
@@ -104,8 +127,26 @@ internal class FakePinRepository(
 
     override fun observeCachedAudio(key: TrackKey): Flow<CachedAudio?> = emptyFlow()
 
-    override suspend fun pinAlbum(mbid: ReleaseGroupMbid, source: PinSource): Outcome<Unit> =
-        unreachable("pinAlbum")
+    /**
+     * The Undo on a finished removal: the pin comes back, and with it the row.
+     *
+     * The real one starts a download too, which is why the screen's copy says the server is sending
+     * the album again rather than claiming the bytes were never gone. Nothing here models the
+     * download, because the screen does not draw it - it draws the list, and the list is what the pin
+     * restores.
+     */
+    override suspend fun pinAlbum(mbid: ReleaseGroupMbid, source: PinSource): Outcome<Unit> {
+        pinned += mbid
+        pinGate?.await()
+        val outcome: Outcome<Unit> = pinOutcome ?: Outcome.Success(Unit)
+        if (outcome is Outcome.Success) {
+            val album: DownloadedAlbum? = known[mbid]
+            if (album != null && albums.value.none { it.releaseGroupMbid == mbid }) {
+                albums.value = albums.value + album
+            }
+        }
+        return outcome
+    }
 
     override suspend fun retryPinnedDownload(mbid: ReleaseGroupMbid): Outcome<Unit> =
         unreachable("retryPinnedDownload")

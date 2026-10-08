@@ -38,6 +38,7 @@ import app.needler.core.domain.model.OutputTarget
 import app.needler.feature.player.ui.PlayerBluetoothIcon
 import app.needler.feature.player.ui.PlayerFormat
 import app.needler.feature.player.ui.PlayerSpeakerIcon
+import app.needler.feature.player.ui.PlayerUnavailableSpeakerIcon
 import kotlin.math.roundToInt
 
 /**
@@ -124,24 +125,39 @@ fun OutputSheet(
 
         if (state.isEmpty) {
             Text(
-                text = "No speakers found. Sound plays on this device.",
+                text = "No speakers found. Sound plays on " +
+                    PlayerFormat.LOCAL_OUTPUT.replaceFirstChar { it.lowercase() } + ".",
                 style = typography.meta,
                 color = colors.textSecondary,
             )
         }
 
         Column {
-            state.targets.forEach { target ->
+            state.offerable.forEach { target ->
+                val unavailable: String? = PlayerFormat.unavailableReason(target)
                 NeedlerOutputRow(
-                    name = target.displayName,
+                    // Never `target.displayName`: the chip under the transport and this row are the
+                    // same speaker and must be the same string. See [PlayerFormat.outputName].
+                    name = PlayerFormat.outputName(target),
                     detail = PlayerFormat.outputDetail(target),
                     selected = state.isSelected(target),
                     onClick = { onSelect(target) },
                     enabled = target.isSelectable,
-                    unavailableReason = PlayerFormat.unavailableReason(target),
+                    unavailableReason = unavailable,
                     leadingIcon = { tint ->
-                        when (target) {
-                            is OutputTarget.Bluetooth -> PlayerBluetoothIcon(tint = tint, size = 22.dp)
+                        // A target that cannot be used is told apart by its glyph as well as by its
+                        // sentence. It was distinguishable only by *reading* the reason, set in
+                        // the pack's dim grey `#6f7a68` - 3.82:1 on surface, now the `disabled`
+                        // token - so the one row on the sheet a listener must not tap was also the
+                        // hardest one on it to read. The barred speaker says it without the sentence, which
+                        // is WCAG 1.4.1: the reason is not carried by prose alone.
+                        when {
+                            unavailable != null -> PlayerUnavailableSpeakerIcon(
+                                tint = NeedlerTheme.colors.destructive,
+                                size = 22.dp,
+                            )
+                            target is OutputTarget.Bluetooth ->
+                                PlayerBluetoothIcon(tint = tint, size = 22.dp)
                             else -> PlayerSpeakerIcon(tint = tint, size = 22.dp)
                         }
                     },

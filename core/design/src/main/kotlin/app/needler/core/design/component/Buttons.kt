@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.motion.needlerPressIndication
 import app.needler.core.design.theme.NeedlerTheme
+import app.needler.core.design.theme.wrapsAtWords
 
 /**
  * Which of the pack's two fills a button wears.
@@ -187,7 +188,7 @@ fun NeedlerPrimaryButton(
         else -> colors.surface
     }
     val content = when {
-        !enabled -> colors.textMuted
+        !enabled -> colors.disabled
         tone == NeedlerButtonTone.Accent -> colors.onAccent
         tone == NeedlerButtonTone.Positive -> colors.onPositive
         else -> colors.textPrimary
@@ -198,7 +199,7 @@ fun NeedlerPrimaryButton(
         enabled = enabled,
         background = background,
         contentColor = content,
-        borderColor = if (tone == NeedlerButtonTone.Neutral) colors.hairline else null,
+        borderColor = if (tone == NeedlerButtonTone.Neutral) colors.componentBorder else null,
         size = size,
         text = text,
         leadingIcon = leadingIcon,
@@ -234,7 +235,7 @@ fun NeedlerSecondaryButton(
 ) {
     val colors = NeedlerTheme.colors
     val content = when {
-        !enabled -> colors.textMuted
+        !enabled -> colors.disabled
         selected -> colors.positive
         else -> colors.textPrimary
     }
@@ -244,7 +245,7 @@ fun NeedlerSecondaryButton(
         enabled = enabled,
         background = if (filledSurface) colors.surface else Color.Transparent,
         contentColor = content,
-        borderColor = if (selected) colors.positive else colors.hairline,
+        borderColor = if (selected) colors.positive else colors.componentBorder,
         size = size,
         text = text,
         leadingIcon = leadingIcon,
@@ -263,7 +264,31 @@ fun NeedlerSecondaryButton(
  * Library (02, 09, 13). The EQ's chosen preset is the [selected] variant: a solid
  * [app.needler.core.design.theme.NeedlerColors.inverseSurface] fill with a canvas-coloured label.
  *
- * @param emphasised use the primary text colour rather than the secondary one, as Retry does.
+ * ## Why the label is the primary text colour now, and not the secondary one
+ *
+ * This is the shape `Stop`, `Retry`, `Clear done`, `Refresh` and `Try again` are drawn in - every
+ * destructive and every recovery control in the product. It drew a
+ * [app.needler.core.design.theme.NeedlerColors.hairline] border at 1.20:1, which is no border, and
+ * its label in [app.needler.core.design.theme.NeedlerColors.textSecondary], which is the colour of
+ * the artist line under every title on the same screen. So it read as a word in a list beside a
+ * filled [NeedlerButtonTone.Accent] `Play` that reads as a button instantly: the controls with
+ * consequences were the ones that did not look like controls. The border is now
+ * [app.needler.core.design.theme.NeedlerColors.componentBorder] at 4.10:1 and the label is
+ * [app.needler.core.design.theme.NeedlerColors.textPrimary] at 17.21:1, which is what the pack's
+ * other buttons already label with.
+ *
+ * ## The rejected alternative
+ *
+ * Keep the secondary label and fix only the border. Rejected because the two faults compound: the
+ * 1.20:1 edge was what made the body-copy label read as body copy, and a visible pill around text
+ * the same colour as the paragraph beside it is a pill the eye still skips. Both channels said "not
+ * a control", so both were changed.
+ *
+ * @param emphasised draws the label at `Bold` rather than the pack's 600, as Retry does. It used to
+ *   pick the colour - primary rather than secondary - and that distinction is gone, because the
+ *   colour it was promoting *to* is now what every pill gets. The parameter is kept and given the
+ *   weight because the emphasis itself is real: on the Pulls screen `Retry` and `Clear done` sit
+ *   side by side and only one of them is the thing to press.
  */
 @Composable
 fun NeedlerPillButton(
@@ -280,10 +305,9 @@ fun NeedlerPillButton(
     val shape = NeedlerTheme.shapes.pill
     val sizes = NeedlerTheme.sizes
     val content = when {
-        !enabled -> colors.textMuted
+        !enabled -> colors.disabled
         selected -> colors.onInverseSurface
-        emphasised -> colors.textPrimary
-        else -> colors.textSecondary
+        else -> colors.textPrimary
     }
     Row(
         modifier = modifier
@@ -302,7 +326,7 @@ fun NeedlerPillButton(
                 },
                 background = if (selected) colors.inverseSurface else Color.Transparent,
                 // The chosen pill is a solid fill with no outline; the others are the reverse.
-                borderColor = if (selected) null else colors.hairline,
+                borderColor = if (selected) null else colors.componentBorder,
             )
             .semantics {
                 this.selected = selected
@@ -314,7 +338,9 @@ fun NeedlerPillButton(
     ) {
         Text(
             text = text,
-            style = NeedlerTheme.typography.metaStrong,
+            style = NeedlerTheme.typography.metaStrong
+                .copy(fontWeight = if (emphasised) FontWeight.Bold else FontWeight.SemiBold)
+                .wrapsAtWords(),
             color = content,
             maxLines = 2,
         )
@@ -350,7 +376,7 @@ fun NeedlerTextButton(
         Text(
             text = text,
             style = NeedlerTheme.typography.body,
-            color = if (enabled) color else colors.textMuted,
+            color = if (enabled) color else colors.disabled,
         )
     }
 }
@@ -507,11 +533,11 @@ private fun ButtonSurface(
         leadingIcon?.invoke(contentColor)
         Text(
             text = text,
-            style = (textStyle ?: defaultStyle).copy(fontWeight = fontWeight),
+            style = (textStyle ?: defaultStyle).copy(fontWeight = fontWeight).wrapsAtWords(),
             color = contentColor,
             textAlign = TextAlign.Center,
             // Two lines rather than a clip: the pack sets `white-space: nowrap`, but a label grown
-            // to 200% has to go somewhere.
+            // to 200% has to go somewhere - and it goes between words, never inside one.
             maxLines = 2,
         )
     }

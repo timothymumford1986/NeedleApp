@@ -137,11 +137,19 @@ internal object SampleSearch {
         state = pinned(),
     )
 
+    /**
+     * Flyte's self-titled record, which is one album and therefore has one year.
+     *
+     * 2023, which is `SampleLibrary.flyte`'s year in `:feature:library`. There used to be a second
+     * fixture for the same release group - `flyteTablet`, slug `flyte`, year 2021 - so the phone
+     * goldens said 2024 and the tablet goldens 2021 about the identical row. Two fixtures for one
+     * record is a disagreement waiting to be committed, and this one had been.
+     */
     val flyte: Album = album(
         slug = "flyte",
         title = "Flyte",
         artistName = "Flyte",
-        year = 2024,
+        year = 2023,
         trackCount = 11,
         state = AlbumState.Owned,
         format = AudioFormat.MP3,
@@ -155,7 +163,12 @@ internal object SampleSearch {
         artistSlug = "dayes",
         year = 2024,
         trackCount = 19,
-        state = pulling(percent = null),
+        // The pack draws a percentage on this badge and the tablet fixture
+        // carries one; the phone's carried `null`, so `Pulling` rendered bare on
+        // the width where the user is actually standing waiting for it. A null
+        // percent is a real state - the window before the server reports any
+        // progress - and it is not the state screen 03 draws.
+        state = pulling(percent = 62),
         format = null,
     )
 
@@ -227,15 +240,6 @@ internal object SampleSearch {
         format = null,
     )
 
-    val flyteTablet: Album = album(
-        slug = "flyte",
-        title = "Flyte",
-        artistName = "Flyte",
-        year = 2021,
-        trackCount = 11,
-        state = AlbumState.Owned,
-    )
-
     val twoStar: Album = album(
         slug = "twostar",
         title = "Two Star & The Dream Police",
@@ -253,7 +257,7 @@ internal object SampleSearch {
         albums = listOf(
             blackClassicalMusicPulling,
             backStreetCrawler,
-            flyteTablet,
+            flyte,
             twoStar,
         ),
         catalogue = CatalogueLaneState.Ready(),

@@ -5,6 +5,7 @@ import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.CatalogueLaneState
 import app.needler.core.domain.model.NeedlerError
+import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RequestStatus
 import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.SearchSuggestion
@@ -147,6 +148,32 @@ data class SearchUiState(
 
     /** The crate's total running time in milliseconds, from the same flow. */
     val crateDurationMs: Long = 0L,
+
+    /**
+     * The release groups this session has already placed a request for, and what
+     * the server said about each.
+     *
+     * ## Why the screen cannot wait for the mirror
+     *
+     * A request answered `ACCEPTED` changes the album's state on the **server**.
+     * It reaches [results] only when the next sync writes it into the mirror,
+     * which is seconds away at best and a reconnect away for a pull placed
+     * offline. Until then [Album.state] is still [AlbumState.NotOwned] and the
+     * row still draws a **Pull** pill, so a second tap places a second request
+     * for the same record — the duplicate the device audit found under the
+     * banner that had just said "Pulling. Track it on the Pulls tab".
+     *
+     * So the outcome is held here, keyed on the release group, and
+     * [placedPull] is what the row reads instead of asking [Album.state] alone.
+     * It is the server's own [RequestStatus] rather than a boolean, because the
+     * three answers that mean "placed" are three different states to draw:
+     * accepted is pulling, pending approval is waiting, and a queued offline
+     * pull is waiting for a connection.
+     *
+     * Dropped whenever the query changes, with the pages and the notice: a
+     * receipt for one search has nothing to say about the next.
+     */
+    val placedPulls: Map<ReleaseGroupMbid, RequestStatus> = emptyMap(),
 ) {
 
     val artists: List<Artist> get() = results.artists
@@ -171,6 +198,26 @@ data class SearchUiState(
     val catalogueAlbums: List<Album> by lazy {
         results.albums.filter { album -> album.state == AlbumState.NotOwned }
     }
+
+    /**
+     * What this session's own request for [album] came back as, or null when no
+     * request has been placed for it.
+     *
+     * The row asks this before it asks [Album.state], because between a receipt
+     * and the sync that records it the two disagree and only this one has heard
+     * from the server. See [placedPulls].
+     */
+    fun placedPull(album: Album): RequestStatus? = placedPulls[album.releaseGroupMbid]
+
+    /**
+     * Whether a **Pull** may still be offered on [album].
+     *
+     * Not a question about the album's state on its own: a record whose request
+     * this session already placed is one the server is dealing with, whatever
+     * the mirror still says.
+     */
+    fun offersPull(album: Album): Boolean =
+        album.state == AlbumState.NotOwned && placedPull(album) == null
 
     /**
      * The artists to draw, capped until the user asks for all of them.
@@ -297,6 +344,49 @@ data class SearchUiState(
      */
     val showSuggestions: Boolean get() = showEmptyResult && suggestions.isNotEmpty()
 
+    /**
+     * The previous searches to offer when there are no completions to offer.
+     *
+     * `suggest` is `GET /api/v1/search/suggest` — a network call — so the
+     * no-results screen reached with no connection had nothing tappable on it at
+     * all: a heading and three lines of prose, where the same screen online
+     * offers three completions. The one thing a user can do from there is search
+     * for something else, and the list of things they have searched for before is
+     * already in hand, local, and the only source of candidates that needs no
+     * connection.
+     *
+     * The query that just failed is filtered out. Offering it back as a
+     * suggestion would be offering to repeat the search the screen is reporting
+     * on, which is what [showRetry] is for and is a different thing.
+     *
+     * Only when there are no completions, never beside them: the server's
+     * completions are about what was typed and these are about what was typed
+     * before, so a screen showing both would be ranking history against
+     * relevance.
+     */
+    val emptyResultRecents: List<String>
+        get() = if (!showEmptyResult || suggestions.isNotEmpty()) {
+            emptyList()
+        } else {
+            recentQueries.filter { !it.equals(query.trim(), ignoreCase = true) }
+        }
+
+    /**
+     * Whether the empty-result screen offers to run the search again.
+     *
+     * Only when a lane did not run. A search both lanes answered has been
+     * answered, and a retry there would ask the same question of the same two
+     * sources and redraw the same screen — an affordance whose only outcome is
+     * the state the user is already in. When the catalogue never ran, the half
+     * that is missing is missing because of a connection or a session, either of
+     * which may since have changed, so trying again is a real next step.
+     *
+     * Reads [catalogueAnswered] and not [offline], for the whole of the reasoning
+     * on that property: the question is what the lane did, and only the lane
+     * knows.
+     */
+    val showRetry: Boolean get() = showEmptyResult && !catalogueAnswered
+
     /** `Artist` for one, `Artists` for several — the pack writes the singular on screens 03 and 10. */
     val artistsHeader: String get() = if (artists.size == 1) "Artist" else "Artists"
 
@@ -416,32 +506,80 @@ data class SearchUiState(
      * ever blocks, dismisses or replaces the results — the library half of the
      * screen is unaffected by everything this note can report.
      */
-    val catalogueNote: String?
+    val catalogueBanner: SearchBanner?
         get() = when (val lane: CatalogueLaneState = catalogue) {
             // Before the 300 ms debounce elapses, and for a query too short to
             // send. Saying "not started yet" would be noise about a wait the
             // user cannot perceive.
             CatalogueLaneState.Idle -> null
 
-            CatalogueLaneState.Loading -> CATALOGUE_SEARCHING
+            CatalogueLaneState.Loading -> SearchBanner(
+                // "Your library results are already below" is a claim about the
+                // screen, and it was drawn over six empty skeleton rows: the
+                // state where neither lane has answered is exactly the state
+                // where the sentence is false. It is added only once there is
+                // something below to point at, which is the state
+                // `search-catalogue-loading-phone.png` shows and the only one it
+                // was ever written for.
+                message = if (results.isEmpty) {
+                    CATALOGUE_SEARCHING
+                } else {
+                    CATALOGUE_SEARCHING_WITH_RESULTS
+                },
+                kind = SearchBannerKind.PROGRESS,
+            )
 
             is CatalogueLaneState.Ready -> {
                 val status: ServiceStatus? = lane.serviceStatus
                 if (status == null || !status.isDegraded) {
                     null
                 } else {
-                    // The server's own words when it supplied any, because it
-                    // knows what upstream is doing and this app does not.
-                    status.message?.takeIf { it.isNotBlank() } ?: CATALOGUE_DEGRADED
+                    SearchBanner(
+                        // The server's own words when it supplied any, because it
+                        // knows what upstream is doing and this app does not.
+                        message = status.message?.takeIf { it.isNotBlank() } ?: CATALOGUE_DEGRADED,
+                        kind = SearchBannerKind.DEGRADED,
+                    )
                 }
             }
 
             is CatalogueLaneState.Unavailable -> when (val error: NeedlerError = lane.error) {
-                is NeedlerError.Offline -> CATALOGUE_OFFLINE
-                NeedlerError.SessionExpired -> CATALOGUE_SESSION_EXPIRED
-                else -> problemMessage(error)
+                is NeedlerError.Offline -> SearchBanner(
+                    // The honest form depends on what is under the banner. With
+                    // owned rows only, "this is your library only" is the whole
+                    // truth. With un-owned rows from the last sync under it -
+                    // which is the screen `search-offline-cached-catalogue` draws,
+                    // captioned "from your last sync" - the same sentence
+                    // contradicts the block 1300px below it.
+                    message = if (catalogueAlbums.isEmpty()) {
+                        CATALOGUE_OFFLINE
+                    } else {
+                        CATALOGUE_OFFLINE_CACHED
+                    },
+                    kind = SearchBannerKind.OFFLINE,
+                )
+
+                NeedlerError.SessionExpired -> SearchBanner(
+                    message = CATALOGUE_SESSION_EXPIRED,
+                    kind = SearchBannerKind.EXPIRED,
+                    // The sentence named Settings and gave the reader nothing to
+                    // press. The remedy is two taps away and the banner is where
+                    // the user is standing, so it carries the way there.
+                    action = SearchBannerAction.SIGN_IN,
+                )
+
+                else -> SearchBanner(message = problemMessage(error), kind = SearchBannerKind.PROBLEM)
             }
         }
+
+    /**
+     * The banner's sentence on its own.
+     *
+     * Kept as a property of its own because the copy is the thing that has lied
+     * on this screen twice, and a test that reads one string is the cheapest
+     * guard there is against it lying a third time.
+     */
+    val catalogueNote: String? get() = catalogueBanner?.message
 
     /** True when the catalogue note is bad news rather than progress, which the screen tints. */
     val catalogueNoteIsProblem: Boolean get() = catalogue is CatalogueLaneState.Unavailable
@@ -471,16 +609,23 @@ data class SearchUiState(
     val pullConfirmLabel: String get() = if (offline) QUEUE_PULL_LABEL else PULL_LABEL
 
     /**
-     * The caption line on the pull sheet: what will be downloaded, and — with no
-     * connection — when it will be asked for.
+     * The caption line on the pull sheet: where the record lands, — with no
+     * connection — when it will be asked for, and what will be downloaded.
      *
-     * The sheet has one caption slot. Online it carries the server's own
-     * `quality_snapshot_summary`, which `NeedlerRequestSheet` documents as the
-     * only version of what will be downloaded that is guaranteed to be true.
-     * Offline the queueing is put first and the snapshot follows it, because the
-     * snapshot describes a download nobody has been asked for yet; dropping the
-     * snapshot instead would lose the server's own words, and it is still the
-     * best account of what the request will fetch when it does go out.
+     * The sheet has one caption slot, so the three facts are ordered by how much
+     * the user can still decide with them. [PULL_DESTINATION] leads and is always
+     * said, because it is the question the sheet never answered and the answer
+     * does not depend on anything. The offline sentence comes next: it changes
+     * *when* the request goes out, which is the other thing the tap buys.
+     * The server's own `quality_snapshot_summary` is last — it is the most
+     * precise of the three and the least decisive, and it describes a download
+     * nobody has been asked for yet.
+     *
+     * Never null while a sheet is open, which means the sheet's own
+     * [app.needler.core.design.component.PULL_SHEET_EXPLANATION] fallback is
+     * never reached from this screen. That is the point: the fallback says the
+     * server "imports it into your library", and the whole of [PULL_DESTINATION]
+     * is about why that sentence is the ambiguous one here.
      *
      * Rejected: a parameter of its own on the sheet. `:core:design` offers one
      * caption there and has three callers — this screen and two in
@@ -495,12 +640,20 @@ data class SearchUiState(
             // that is not open would be true of nothing and assertable as such.
             val album: Album = pullSheetAlbum ?: return null
             val quality: String? = album.qualityPolicySummary?.takeIf { it.isNotBlank() }
-            if (!offline) return quality
-            return if (quality == null) {
-                PULL_QUEUED_OFFLINE
-            } else {
-                PULL_QUEUED_OFFLINE + " " + quality
+            val parts: List<String> = buildList {
+                // Where it lands, first and always. The sheet's own fallback
+                // copy says the server "imports it into your library", and
+                // "your library" is the one phrase on this screen that does not
+                // say which of the two places a record can be: REQUIREMENTS.md
+                // "Vocabulary" fixes Server and Device as different states, the
+                // badges beside every row draw them in different hues, and the
+                // sheet was the only surface naming neither. A pull reaches the
+                // server; getting it onto the phone is a second, separate act.
+                add(PULL_DESTINATION)
+                if (offline) add(PULL_QUEUED_OFFLINE)
+                if (quality != null) add(quality)
             }
+            return parts.joinToString(separator = " ")
         }
 
     /**
@@ -513,6 +666,75 @@ data class SearchUiState(
      * session confirms rather than reporting what this screen expected.
      */
     val crateLine: String? get() = SearchFormat.crateLine(crateTrackCount, crateDurationMs)
+}
+
+/**
+ * The line under the field about the catalogue lane: what it says, which of four
+ * conditions it is reporting, and what the user can do about it.
+ *
+ * ## Why the kind is on the state and not decided by the screen
+ *
+ * Four unlike conditions — a search in progress, a degraded upstream, an expired
+ * sign-in and no connection — were drawn as the identical rounded grey block
+ * with no icon, no action and no difference in weight, so the one state the user
+ * has to act on looked exactly like the one they only have to wait out. Which
+ * condition a banner reports is a fact about the lane, which is what this type
+ * carries; how heavily each is drawn is [SearchBannerKind]'s own table in
+ * `SearchScreen`.
+ *
+ * REQUIREMENTS.md "Failure handling" still applies to all four: none of them is
+ * a dialog, none blocks, and none hides the library results below, because the
+ * local lane made no network call and has nothing for a connection to break.
+ */
+data class SearchBanner(
+    val message: String,
+    val kind: SearchBannerKind,
+    /** The one thing the user can do about it, or null when there is nothing to offer. */
+    val action: SearchBannerAction? = null,
+)
+
+/**
+ * Which condition a [SearchBanner] reports.
+ *
+ * Ordered by how much it asks of the reader: [PROGRESS] asks for nothing,
+ * [DEGRADED] warns, and the last three say a capability is missing until
+ * something changes.
+ */
+enum class SearchBannerKind {
+    /** The catalogue lane is in flight. It will resolve itself. */
+    PROGRESS,
+
+    /** MusicBrainz answered and said it is struggling, so the results may be short. */
+    DEGRADED,
+
+    /** The sign-in expired. Nothing will search the catalogue until it is renewed. */
+    EXPIRED,
+
+    /** No connection. The library half is untouched; see REQUIREMENTS.md "Failure handling". */
+    OFFLINE,
+
+    /** Anything else the server named, in its own words. */
+    PROBLEM,
+}
+
+/**
+ * What a banner offers to do about itself.
+ *
+ * An enum rather than a lambda on the banner because [SearchUiState] is a value
+ * the screenshot tests build literally and compare: a state carrying a function
+ * is one no test can assert on and no `data class` can compare. The screen turns
+ * the member into the one callback the route wired for it.
+ */
+enum class SearchBannerAction {
+    /**
+     * Take the user to Settings, where the session is renewed.
+     *
+     * REQUIREMENTS.md "Failure handling" has an expired session leaving the
+     * library searchable and the catalogue not, which makes signing in again the
+     * only thing that restores half this screen — and the banner was naming it
+     * in prose with nothing tappable beside it.
+     */
+    SIGN_IN,
 }
 
 /**
@@ -591,8 +813,34 @@ data class SearchNotice(
             RequestStatus.REJECTED ->
                 SearchNotice("The server rejected this request.", isProblem = true)
         }
+
+        /** A pull in flight was stopped from its row's `⋯`. */
+        fun pullStopped(albumTitle: String): SearchNotice =
+            SearchNotice("Stopped pulling " + SearchFormat.albumTitle(albumTitle) + ".")
     }
 }
+
+/**
+ * Whether the server has taken this request on.
+ *
+ * The three that mean "placed" are the three that change what the row should
+ * draw: the record is being acquired, waiting for an administrator, or waiting
+ * for a connection. [RequestStatus.ALREADY_PRESENT] and
+ * [RequestStatus.REJECTED] are deliberately not among them — the first leaves a
+ * row that was already owned, and the second leaves one the user may reasonably
+ * try again, so suppressing its **Pull** would strand them.
+ */
+internal val RequestStatus.isPlaced: Boolean
+    get() = when (this) {
+        RequestStatus.ACCEPTED,
+        RequestStatus.PENDING_APPROVAL,
+        RequestStatus.QUEUED_OFFLINE,
+        -> true
+
+        RequestStatus.ALREADY_PRESENT,
+        RequestStatus.REJECTED,
+        -> false
+    }
 
 /**
  * The row under a capped results block.
@@ -721,6 +969,34 @@ internal const val PULL_LABEL: String = "Pull"
 internal const val QUEUE_PULL_LABEL: String = "Queue the pull"
 
 /**
+ * Where a pulled record ends up, said before the tap that asks for it.
+ *
+ * `NeedlerRequestSheet`'s own fallback copy says Dropped Needle "imports it into
+ * your library", and on this screen "your library" is the one phrase that does
+ * not say which half: REQUIREMENTS.md "Vocabulary" fixes **Server** and
+ * **Device** as different states, every row on the list behind the sheet wears
+ * one of the two in its own hue, and the sheet named neither. A reader who had
+ * learned the row vocabulary could reasonably read a green confirm button over
+ * "your library" as "this will be on my phone".
+ *
+ * It will not be. A pull is a request to the server, and REQUIREMENTS.md
+ * "Album states" makes getting the result onto the device a separate act with a
+ * separate badge. So the first thing the caption says is which of the two this
+ * buys, and the second is that the other one is still available afterwards -
+ * because the honest answer to "will I have this offline" is "not yet, and
+ * here is how".
+ *
+ * It replaces the sheet's fallback rather than preceding it: two sentences about
+ * sources and formats under two about destinations is more caption than a sheet
+ * with one slot can hold, and the server's own `quality_snapshot_summary`
+ * follows this whenever there is one, which is the only account of what will be
+ * downloaded that is guaranteed to be true.
+ */
+internal const val PULL_DESTINATION: String =
+    "It lands on the server, where it plays at once. Keeping a copy on this device is a " +
+        "separate step afterwards."
+
+/**
  * What the sheet says a pull placed offline will do, before it is placed.
  *
  * The same two facts, in the same order and nearly the same words, as the notice
@@ -733,12 +1009,46 @@ internal const val QUEUE_PULL_LABEL: String = "Queue the pull"
 internal const val PULL_QUEUED_OFFLINE: String =
     "No connection, so this pull is queued on the device and sent as soon as you are back online."
 
-internal const val CATALOGUE_SEARCHING: String =
+/**
+ * The catalogue lane is in flight and the library lane has not answered either.
+ *
+ * It says what is happening and stops. The longer form below claims something
+ * about the screen, and on this one there is nothing on the screen yet to claim
+ * it about.
+ */
+internal const val CATALOGUE_SEARCHING: String = "Searching the MusicBrainz catalogue."
+
+/**
+ * The same wait, with library results already drawn under it.
+ *
+ * The second sentence is the useful half — it tells a reader that the rows below
+ * are not what is being waited for — and it is true only here. Drawn over the
+ * six skeleton rows of a search that has returned nothing yet, it was a plain
+ * falsehood, which is why there are two constants rather than one.
+ */
+internal const val CATALOGUE_SEARCHING_WITH_RESULTS: String =
     "Searching the MusicBrainz catalogue. Your library results are already below."
 
 internal const val CATALOGUE_OFFLINE: String =
     "No connection, so this is your library only. Catalogue search needs one; everything " +
         "already synced is searchable and plays as usual."
+
+/**
+ * The same condition with un-owned rows from the mirror under it.
+ *
+ * [CATALOGUE_OFFLINE] says "this is your library only", and the screen it was
+ * drawn on also held an `ALBUMS TO PULL / from your last sync` block — records
+ * that are, by construction, not in the library. The caption on that block was
+ * honest and the banner above it was not.
+ *
+ * So the offline banner says which half is missing rather than claiming the
+ * whole screen: the records already synced are searchable and pullable, and what
+ * no connection costs is everything synced since. The word "sync" matches
+ * [FROM_LAST_SYNC], which is the caption the reader meets 1300px further down.
+ */
+internal const val CATALOGUE_OFFLINE_CACHED: String =
+    "No connection. Your library and everything from your last sync are below; the rest of " +
+        "the MusicBrainz catalogue needs one."
 
 internal const val CATALOGUE_SESSION_EXPIRED: String =
     "Your sign-in has expired, so only your library is searched. Sign in again from Settings " +

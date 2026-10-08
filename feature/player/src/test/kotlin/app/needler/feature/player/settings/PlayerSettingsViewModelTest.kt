@@ -135,13 +135,15 @@ class EqualiserViewModelTest {
     }
 
     @Test
-    fun `reset to flat clears the curve and the preamp but not the switch`() = runTest {
+    fun `the Flat preset clears the curve and the preamp but not the switch`() = runTest {
         val viewModel = EqualiserViewModel(settings)
         viewModel.state.test { awaitItem() }
 
         viewModel.setEnabled(true)
         viewModel.selectPreset(EqPreset.BRIGHT)
-        viewModel.resetToFlat()
+        // This is what the screen's "Reset to flat" button used to call, down to the expression.
+        // The button is gone; the chip that always did the same thing is the one control now.
+        viewModel.selectPreset(EqPreset.FLAT)
 
         assertEquals(EqSettings.FlatGains, settings.currentEq.bandGainsDb)
         assertEquals(0f, settings.currentEq.preampDb, 0.001f)

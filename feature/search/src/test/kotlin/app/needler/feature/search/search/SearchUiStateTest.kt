@@ -1,10 +1,12 @@
 package app.needler.feature.search.search
 
 import app.needler.core.design.component.artworkPlaceholderInitial
+import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.CatalogueLaneState
 import app.needler.core.domain.model.NeedlerError
+import app.needler.core.domain.model.RequestStatus
 import app.needler.core.domain.model.SearchBucket
 import app.needler.core.domain.model.ServiceStatus
 import app.needler.core.domain.model.UnifiedSearchResults
@@ -327,8 +329,14 @@ class SearchUiStateTest {
         assertFalse(state.searching)
         assertEquals(4, state.albums.size)
         assertEquals(FROM_LAST_SYNC, state.albumsSourceNote)
-        assertEquals(CATALOGUE_OFFLINE, state.catalogueNote)
         assertFalse("no page of a catalogue that cannot be reached", state.canPageCatalogue)
+
+        // The fixture holds un-owned rows, so the banner may not say "this is
+        // your library only" over a block of records that are not in it. See
+        // CATALOGUE_OFFLINE_CACHED.
+        assertTrue(state.catalogueAlbums.isNotEmpty())
+        assertEquals(CATALOGUE_OFFLINE_CACHED, state.catalogueNote)
+        assertEquals(SearchBannerKind.OFFLINE, state.catalogueBanner?.kind)
     }
 
     // ---- what a Pull offline says before it is tapped -----------------------
@@ -357,9 +365,17 @@ class SearchUiStateTest {
         assertTrue(state.pullSheetNote.orEmpty().contains("back online"))
     }
 
-    /** With a connection the sheet is the sheet the pack draws, and says nothing extra. */
+    /**
+     * With a connection the sheet keeps the pack's label, says where the record
+     * lands, and then gets out of the way.
+     *
+     * The destination is said whether or not the server sent a snapshot, because
+     * it is the one fact on the sheet that does not depend on the server: a pull
+     * reaches the **server**, and `NeedlerRequestSheet`'s own fallback copy
+     * ("imports it into your library") is the phrase that left that open.
+     */
     @Test
-    fun `a pull placed online keeps the pack's label and the server's own note`() {
+    fun `a pull placed online says where it lands, then the server's own note`() {
         val summary = "FLAC where available, else MP3 320"
         val state = SearchUiState(
             query = "niki",
@@ -368,9 +384,10 @@ class SearchUiStateTest {
         )
 
         assertEquals(PULL_LABEL, state.pullConfirmLabel)
-        assertEquals("the server's own words, unchanged", summary, state.pullSheetNote)
-        assertNull(
-            "and nothing invented when the server sent none",
+        assertEquals(PULL_DESTINATION + " " + summary, state.pullSheetNote)
+        assertEquals(
+            "the destination still, with nothing invented about the download",
+            PULL_DESTINATION,
             state.copy(pullSheetAlbum = SampleSearch.buzz).pullSheetNote,
         )
     }
@@ -388,7 +405,10 @@ class SearchUiStateTest {
             pullSheetAlbum = SampleSearch.buzz.copy(qualityPolicySummary = summary),
         )
 
-        assertEquals(PULL_QUEUED_OFFLINE + " " + summary, state.pullSheetNote)
+        assertEquals(
+            PULL_DESTINATION + " " + PULL_QUEUED_OFFLINE + " " + summary,
+            state.pullSheetNote,
+        )
     }
 
     /** No album, no sheet, so there is nothing for the caption to be about. */
@@ -621,6 +641,243 @@ class SearchUiStateTest {
         assertEquals("T", artworkPlaceholderInitial("  The Marías "))
         assertNull("nothing to draw rather than a question mark", artworkPlaceholderInitial("   "))
     }
+
+    // ---- the four banners --------------------------------------------------
+
+    /**
+     * Four unlike conditions, four kinds, and one of them with something to press.
+     *
+     * The kind is what the screen draws a glyph, a hue and a weight from, so it is
+     * asserted here rather than left to a render: four PNGs that differ only in
+     * their sentence is exactly the state this replaces, and four PNGs cannot say
+     * which of them is supposed to look different.
+     */
+    @Test
+    fun `each lane condition gets its own banner, and only one offers an action`() {
+        assertEquals(SearchBannerKind.PROGRESS, kindFor(CatalogueLaneState.Loading))
+        assertEquals(
+            SearchBannerKind.DEGRADED,
+            kindFor(CatalogueLaneState.Ready(SampleSearch.degraded)),
+        )
+        assertEquals(
+            SearchBannerKind.EXPIRED,
+            kindFor(CatalogueLaneState.Unavailable(NeedlerError.SessionExpired)),
+        )
+        assertEquals(
+            SearchBannerKind.OFFLINE,
+            kindFor(CatalogueLaneState.Unavailable(NeedlerError.Offline())),
+        )
+        assertEquals(
+            SearchBannerKind.PROBLEM,
+            kindFor(CatalogueLaneState.Unavailable(NeedlerError.ServerError(502))),
+        )
+        assertNull(kindFor(CatalogueLaneState.Idle))
+        assertNull(kindFor(CatalogueLaneState.Ready()))
+    }
+
+    /**
+     * The remedy is named and now reachable.
+     *
+     * REQUIREMENTS.md rule 4 leaves the library searchable and the catalogue not
+     * until the session is renewed, so this is the one banner on the screen whose
+     * condition the user can end.
+     */
+    @Test
+    fun `only the expired session carries a way out of itself`() {
+        assertEquals(
+            SearchBannerAction.SIGN_IN,
+            actionFor(CatalogueLaneState.Unavailable(NeedlerError.SessionExpired)),
+        )
+        assertNull(actionFor(CatalogueLaneState.Unavailable(NeedlerError.Offline())))
+        assertNull(actionFor(CatalogueLaneState.Loading))
+        assertNull(actionFor(CatalogueLaneState.Ready(SampleSearch.degraded)))
+    }
+
+    /**
+     * The sentence that was drawn over six empty skeleton rows.
+     *
+     * "Your library results are already below" is a claim about the screen, and
+     * the state where neither lane has answered is the state where it is false.
+     * Both halves are asserted, because the useful sentence has to survive: it is
+     * correct, and the only thing telling a reader that the rows under it are not
+     * what is being waited for.
+     */
+    @Test
+    fun `the searching banner claims results below only once there are some`() {
+        val nothingYet = SearchUiState(
+            query = "khruangbin",
+            results = UnifiedSearchResults(
+                query = "khruangbin",
+                catalogue = CatalogueLaneState.Loading,
+            ),
+        )
+        val libraryIn = nothingYet.copy(
+            results = SampleSearch.khruangbinResults.copy(catalogue = CatalogueLaneState.Loading),
+        )
+
+        assertTrue(nothingYet.searching)
+        assertEquals(CATALOGUE_SEARCHING, nothingYet.catalogueNote)
+        assertFalse(nothingYet.catalogueNote.orEmpty().contains("already below"))
+
+        assertEquals(CATALOGUE_SEARCHING_WITH_RESULTS, libraryIn.catalogueNote)
+        assertTrue(libraryIn.catalogueNote.orEmpty().contains("already below"))
+    }
+
+    /**
+     * The banner and the caption 1300px below it have to agree.
+     *
+     * Offline with owned rows only, "this is your library only" is the whole
+     * truth. Offline with un-owned rows from the mirror under it, the same
+     * sentence contradicts an ALBUMS TO PULL block captioned "from your last
+     * sync" that is telling the truth.
+     */
+    @Test
+    fun `the offline banner does not claim the library when un-owned rows are shown`() {
+        val ownedOnly = SearchUiState(
+            query = "khruangbin",
+            offline = true,
+            results = SampleSearch.khruangbinResults.copy(
+                albums = listOf(SampleSearch.mordechai, SampleSearch.flyte),
+                catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+            ),
+        )
+        val withCached = ownedOnly.copy(
+            results = SampleSearch.khruangbinResults.copy(
+                catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+            ),
+        )
+
+        assertTrue(ownedOnly.catalogueAlbums.isEmpty())
+        assertEquals(CATALOGUE_OFFLINE, ownedOnly.catalogueNote)
+
+        assertTrue(withCached.catalogueAlbums.isNotEmpty())
+        assertEquals(CATALOGUE_OFFLINE_CACHED, withCached.catalogueNote)
+        assertFalse(
+            "the block below it is captioned from your last sync, not in your library",
+            withCached.catalogueNote.orEmpty().contains("your library only"),
+        )
+        assertEquals(FROM_LAST_SYNC, withCached.albumsSourceNote)
+    }
+
+    // ---- a pull already placed ----------------------------------------------
+
+    /**
+     * The duplicate the device audit found: a banner saying "Pulling" over a row
+     * still offering Pull.
+     *
+     * The album's state lives in the mirror and the receipt had not reached it,
+     * so this is not a stale golden - it is the window between the server saying
+     * yes and the sync recording it, and a second tap in that window placed a
+     * second request.
+     */
+    @Test
+    fun `a request the server took stops the row offering another`() {
+        val placed = SearchUiState(
+            query = "khruangbin",
+            results = SampleSearch.khruangbinResults,
+            placedPulls = mapOf(
+                SampleSearch.buzz.releaseGroupMbid to RequestStatus.ACCEPTED,
+            ),
+        )
+
+        assertEquals(AlbumState.NotOwned, SampleSearch.buzz.state)
+        assertTrue("the mirror still has it un-owned", SampleSearch.buzz in placed.catalogueAlbums)
+        assertFalse(placed.offersPull(SampleSearch.buzz))
+        assertEquals(RequestStatus.ACCEPTED, placed.placedPull(SampleSearch.buzz))
+
+        val untouched = SearchUiState(results = SampleSearch.khruangbinResults)
+        assertTrue("every other un-owned row still offers one", untouched.offersPull(SampleSearch.buzz))
+    }
+
+    /**
+     * Two of the five answers leave the row exactly as it was, on purpose.
+     *
+     * A rejection is one the user may reasonably try again, and suppressing its
+     * Pull would strand them on a row with no action at all.
+     */
+    @Test
+    fun `only the three answers that mean the server has it count as placed`() {
+        assertTrue(RequestStatus.ACCEPTED.isPlaced)
+        assertTrue(RequestStatus.PENDING_APPROVAL.isPlaced)
+        assertTrue(RequestStatus.QUEUED_OFFLINE.isPlaced)
+        assertFalse(RequestStatus.REJECTED.isPlaced)
+        assertFalse(RequestStatus.ALREADY_PRESENT.isPlaced)
+    }
+
+    // ---- the offline no-results screen --------------------------------------
+
+    /**
+     * The screen that was a heading and three lines of prose.
+     *
+     * Online it offers three completions; offline `suggest` is a network call and
+     * returns nothing, so there was nothing on the screen to press at all. The
+     * retry is offered because a lane did not run, and the recent searches are
+     * offered because they are the only candidates that need no connection.
+     */
+    @Test
+    fun `an empty result with a lane that never ran offers a retry and local history`() {
+        val offline = SearchUiState(
+            query = "beastiedido",
+            results = UnifiedSearchResults(
+                query = "beastiedido",
+                catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+            ),
+            recentQueries = SampleSearch.recentQueries,
+        )
+
+        assertTrue(offline.showEmptyResult)
+        assertFalse(offline.showSuggestions)
+        assertTrue(offline.showRetry)
+        assertEquals(SampleSearch.recentQueries, offline.emptyResultRecents)
+    }
+
+    /** Both lanes answered, so there is nothing to try again and no gap to fill. */
+    @Test
+    fun `an empty result both lanes answered offers no retry`() {
+        val answered = SearchUiState(
+            query = "khruangbim",
+            results = UnifiedSearchResults(
+                query = "khruangbim",
+                catalogue = CatalogueLaneState.Ready(),
+            ),
+            suggestions = SampleSearch.suggestions,
+            recentQueries = SampleSearch.recentQueries,
+        )
+
+        assertFalse(answered.showRetry)
+        assertTrue(answered.showSuggestions)
+        assertTrue(
+            "the server's completions are about what was typed; history is not",
+            answered.emptyResultRecents.isEmpty(),
+        )
+    }
+
+    /** Offering back the query the screen is reporting on is the retry, not a suggestion. */
+    @Test
+    fun `the query that just failed is not offered back as history`() {
+        val state = SearchUiState(
+            query = "two star",
+            results = UnifiedSearchResults(
+                query = "two star",
+                catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
+            ),
+            recentQueries = SampleSearch.recentQueries,
+        )
+
+        assertTrue("two star" in SampleSearch.recentQueries)
+        assertFalse("two star" in state.emptyResultRecents)
+        assertEquals(SampleSearch.recentQueries.size - 1, state.emptyResultRecents.size)
+    }
+
+    private fun kindFor(lane: CatalogueLaneState): SearchBannerKind? = SearchUiState(
+        query = "khruangbin",
+        results = SampleSearch.khruangbinResults.copy(catalogue = lane),
+    ).catalogueBanner?.kind
+
+    private fun actionFor(lane: CatalogueLaneState): SearchBannerAction? = SearchUiState(
+        query = "khruangbin",
+        results = SampleSearch.khruangbinResults.copy(catalogue = lane),
+    ).catalogueBanner?.action
 
     private fun noteFor(lane: CatalogueLaneState): String? = SearchUiState(
         query = "khruangbin",

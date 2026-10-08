@@ -17,6 +17,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -32,12 +33,27 @@ import app.needler.core.design.theme.NeedlerTheme
 /**
  * The linear progress bar: a 4dp track with a 2dp radius.
  *
- * Ported from the pull rows on Pulls (06), where it is green because it reports acquisition, and
- * from the scrubber on Now Playing (07, 09, 14), where it is the accent because it reports playback.
- * Both are the same bar; only the colour and the thumb differ.
+ * Ported from the pull rows on Pulls (06) and from the scrubber on Now Playing (07, 09, 14). Both
+ * are the same bar; only the colour and the thumb differ.
  *
  * REQUIREMENTS.md's "2 px for progress bars" is the corner radius; the pack draws the bar itself
  * 4px thick.
+ *
+ * ## The default is accent, and the pack drew the pull bar green
+ *
+ * REQUIREMENTS.md "Design system" fixes the two signal hues permanently: accent means *on the
+ * server*, positive means *on this device*, and neither means anything else. A pull is the server
+ * fetching a record, which is why [NeedlerAlbumBadge.Pulling] is accent - and the bar underneath
+ * that badge was green, so one event was reported in two colours on one row, each of which already
+ * means something else. The badge is right and this was wrong.
+ *
+ * Pass [color] = `positive` for the other transition, a download **to this device**, which is the
+ * one kind of progress the green belongs to: [NeedlerAlbumBadge.PullingToDevice] is its badge.
+ *
+ * The rejected alternative was a `NeedlerProgressKind` enum choosing the hue from "server" or
+ * "device". It is the right shape and it is [NeedlerAlbumBadge]'s job, which already holds that
+ * distinction and already resolves it to these two colours; a second vocabulary for the same fact
+ * is how two of them come to disagree.
  *
  * @param progress 0f to 1f. Coerced, so an out-of-range server percentage cannot draw outside the
  *   track.
@@ -48,7 +64,7 @@ import app.needler.core.design.theme.NeedlerTheme
 fun NeedlerLinearProgress(
     progress: Float,
     modifier: Modifier = Modifier,
-    color: Color = NeedlerTheme.colors.positive,
+    color: Color = NeedlerTheme.colors.accent,
     trackColor: Color = NeedlerTheme.colors.progressTrack,
     thickness: Dp = NeedlerTheme.sizes.progressTrackThickness,
     contentDescription: String? = null,
@@ -167,6 +183,9 @@ fun NeedlerScrubBar(
  * A 34dp ring with a 4dp round-capped stroke, starting at twelve o'clock: the pack rotates its SVG
  * `-90deg` and uses `stroke-dasharray`, which is the same thing said in CSS.
  *
+ * Accent by default, for the reason [NeedlerLinearProgress] states at length: a pull is the server
+ * acquiring, and green is reserved for the device. Pass `positive` for a download to this device.
+ *
  * Put it over [app.needler.core.design.theme.NeedlerColors.artworkScrimStrong] on top of the
  * artwork, as screen 06 does.
  */
@@ -176,7 +195,7 @@ fun NeedlerProgressRing(
     modifier: Modifier = Modifier,
     size: Dp = NeedlerTheme.sizes.progressRing,
     strokeWidth: Dp = NeedlerTheme.sizes.progressRingStroke,
-    color: Color = NeedlerTheme.colors.positive,
+    color: Color = NeedlerTheme.colors.accent,
     trackColor: Color = NeedlerTheme.colors.progressTrackOnArtwork,
     contentDescription: String? = null,
 ) {
@@ -216,4 +235,46 @@ fun NeedlerProgressRing(
             )
         }
     }
+}
+
+/**
+ * One grey block of a loading skeleton.
+ *
+ * ## Why this exists at all
+ *
+ * Because every skeleton in the product was written at its call site in
+ * [app.needler.core.design.theme.NeedlerColors.surface], which measures **1.10:1** on the canvas -
+ * `rgb(22,29,18)` on `rgb(13,18,10)`. Eight screens draw one, nobody could see any of them, and
+ * nothing connected the eight so that measuring one would fix the rest. The colour is now
+ * [app.needler.core.design.theme.NeedlerColors.skeleton] at 1.71:1, and the component is here so
+ * that the next screen to need a skeleton inherits the measurement instead of copying the mistake.
+ *
+ * ## Why it is in this file
+ *
+ * A skeleton is not progress - it reports no quantity and has no range info - and it very nearly
+ * got a file of its own on that basis. It is here because this is the file of things that say work
+ * is happening, the component is nine lines, and a `Skeleton.kt` holding one `Box` would be a file
+ * read once.
+ *
+ * ## It is silent to a screen reader, deliberately
+ *
+ * No semantics of its own. A skeleton is a dozen blocks standing for one list, and a screen reader
+ * announcing twelve unlabelled shapes is worse than announcing nothing; the host says "Loading your
+ * library" once, on the container, as a `LiveRegionMode.Polite` node. Every existing call site
+ * already does that, which is why this takes no description and offers nowhere to put one.
+ *
+ * @param shape the block's corners. Pass the shape of the thing it stands in for -
+ *   `shapes.artworkGrid` for a cell, `shapes.artworkThumb` for a row thumbnail, `shapes.progress`
+ *   for a line of text - so the skeleton is the shape of the content and not a grid of rectangles.
+ */
+@Composable
+fun NeedlerSkeletonBlock(
+    modifier: Modifier = Modifier,
+    shape: Shape = NeedlerTheme.shapes.progress,
+) {
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(NeedlerTheme.colors.skeleton),
+    )
 }

@@ -19,9 +19,22 @@ import app.needler.core.domain.model.ReleaseGroupMbid
  * on from a literal [PullsUiState].
  *
  * Cancelling and retrying are methods on the ViewModel, because both are
- * repository calls whose result the screen has to render. Opening and playing
- * are callbacks, because both are navigation and navigation is the host's
- * business.
+ * repository calls whose result the screen has to render. Opening, playing and
+ * going to Search are callbacks, because all three are navigation and navigation
+ * is the host's business.
+ *
+ * ## Why [onOpenSearch] has a default and `LibraryRoute`'s does not
+ *
+ * Every empty state on this screen now ends in a button to Search — three of them said "find an
+ * album under Search" and offered no way to get there, which REQUIREMENTS.md "Accessibility" does
+ * not accept from a route. The host wires it exactly as `LibraryRoute`'s is wired, with
+ * `selectTab(NeedlerDestination.Search)`.
+ *
+ * It takes a default anyway, which `LibraryRoute`'s equivalent does not, and that is a deliberate
+ * concession rather than a style: `:app` is not this module's to change, several agents are editing
+ * it, and a required parameter would make this module's compilation depend on another's call site
+ * landing first. A no-op default is the thing that cannot break a build it does not own. The real
+ * wiring is one line and is done.
  *
  * ## The lanes need no route registering
  *
@@ -53,6 +66,7 @@ fun PullsRoute(
     widthSizeClass: WindowWidthSizeClass,
     onOpenAlbum: (ReleaseGroupMbid) -> Unit,
     onPlayAlbum: (ReleaseGroupMbid) -> Unit = onOpenAlbum,
+    onOpenSearch: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: PullsViewModel = hiltViewModel(),
 ) {
@@ -71,6 +85,7 @@ fun PullsRoute(
         onRefreshLane = viewModel::onRefreshLane,
         onLoadMoreHistory = viewModel::onLoadMoreHistory,
         onRetryRequest = viewModel::onRetryRequest,
+        onOpenSearch = onOpenSearch,
         modifier = modifier,
     )
 }

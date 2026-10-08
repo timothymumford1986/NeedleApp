@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerClockIcon
@@ -105,6 +106,7 @@ internal fun PlaylistNameForm(
             NeedlerPrimaryButton(
                 text = confirmLabel,
                 onClick = onConfirm,
+                modifier = Modifier.defaultMinSize(minWidth = PRIMARY_BUTTON_MIN_WIDTH),
                 size = NeedlerButtonSize.Medium,
                 enabled = draft.canSubmit,
                 contentDescription = confirmLabel + " this playlist",
@@ -126,6 +128,21 @@ internal fun PlaylistNameForm(
  * reason REQUIREMENTS.md "Accessibility" added one: "permanent data loss styled
  * exactly like the primary action" was the gap. A deleted playlist cannot be
  * recovered from the app.
+ *
+ * ## The order and the default
+ *
+ * It drew `Delete` on the left and `Keep it` on the right, both outlined. Left is where every
+ * other card in this module puts the action the user most likely wants - `Create`, `Rename`,
+ * `Play` - so the destructive action was sitting in the position the rest of the app has taught is
+ * safe, and neither button was styled as the one a confirming tap should land on. Two defects at
+ * once: the wrong thing in the easy position, and no easy position at all.
+ *
+ * Both are fixed by giving the card the default it was missing. `Keep it` is the primary and comes
+ * first, because it is what the card is for - the user is being asked to reconsider, and the
+ * answer the card exists to make easy is "no". `Delete` follows it, outlined, in the destructive
+ * colour, with "This cannot be undone" in its spoken label. Nothing here is a dialog, so there is
+ * no platform convention about left and right to honour; the convention being honoured is this
+ * module's own.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -160,17 +177,18 @@ internal fun PlaylistConfirmCard(
             horizontalArrangement = Arrangement.spacedBy(spacing.step4),
             verticalArrangement = Arrangement.spacedBy(spacing.step4),
         ) {
+            NeedlerPrimaryButton(
+                text = "Keep it",
+                onClick = onCancel,
+                modifier = Modifier.defaultMinSize(minWidth = PRIMARY_BUTTON_MIN_WIDTH),
+                size = NeedlerButtonSize.Medium,
+                enabled = enabled,
+            )
             DestructiveButton(
                 text = confirmLabel,
                 onClick = onConfirm,
                 enabled = enabled,
                 contentDescription = confirmLabel + ". This cannot be undone.",
-            )
-            NeedlerSecondaryButton(
-                text = "Keep it",
-                onClick = onCancel,
-                size = NeedlerButtonSize.Medium,
-                enabled = enabled,
             )
         }
     }
@@ -204,7 +222,7 @@ private fun DestructiveButton(
 ) {
     val colors = NeedlerTheme.colors
     val shape = NeedlerTheme.shapes.large
-    val tint = if (enabled) colors.destructive else colors.textMuted
+    val tint = if (enabled) colors.destructive else colors.disabled
     Row(
         modifier = Modifier
             .defaultMinSize(
@@ -313,6 +331,9 @@ internal fun PlaylistOfflineNote(modifier: Modifier = Modifier) {
  * the whole treatment" — reproduced for a state the pack does not draw, rather
  * than a new visual idea. It is not the positive green: nothing has succeeded
  * yet. It is not the destructive red either: nothing has failed.
+ *
+ * The words come from [PlaylistSyncState], which is the only place in the module that names this
+ * concept; see it for why all of them now say "sent" and "on your next connection".
  */
 @Composable
 internal fun PlaylistSyncBadge(
@@ -391,7 +412,7 @@ internal fun PlaylistMenuItem(
                 text = label,
                 style = NeedlerTheme.typography.body,
                 color = when {
-                    !enabled -> colors.textMuted
+                    !enabled -> colors.disabled
                     destructive -> colors.destructive
                     else -> colors.textPrimary
                 },
@@ -403,4 +424,19 @@ internal fun PlaylistMenuItem(
 
 internal const val OFFLINE_NOTE: String =
     "Offline. Your playlists are on this device, and anything you change here is sent to the " +
-        "server as soon as you are back online."
+        "server on your next connection."
+
+/**
+ * How wide the leading action is, at least.
+ *
+ * `screenshots/playlists-create-phone.png` measures `Create` at about 60dp and the outlined
+ * `Cancel` beside it at about 62dp, so the primary action was the smaller of the two and the
+ * dismissive one had a visible border making it look larger still. Both buttons size to their
+ * label, and "Create" and "Cancel" are the same length, so nothing about the type was going to fix
+ * it. A floor on the primary is the whole of the repair: it is now about twice the width of the
+ * control beside it and cannot be the smaller one whatever the two labels say. The same floor is
+ * on `Keep it` in [PlaylistConfirmCard], which is that card's default for the same reason.
+ *
+ * It is a floor rather than a fixed width so that a longer label and 200% text still grow it.
+ */
+private val PRIMARY_BUTTON_MIN_WIDTH: Dp = 120.dp

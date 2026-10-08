@@ -50,13 +50,27 @@ data class NeedlerNavItem(
  * The phone bottom navigation bar.
  *
  * 84dp tall on the pack's surface with a hairline along its top edge, holding four 56dp items with a
- * 24dp inset at the bottom for the gesture area. The selected item is accent, the rest muted, labels
- * 11sp/600 at `0.02em`.
+ * 24dp inset at the bottom for the gesture area. The selected item is accent on
+ * [app.needler.core.design.theme.NeedlerColors.surfaceRaised], the rest muted, labels 11sp/600 at
+ * `0.02em`.
  *
  * Drawn on screens 02, 03, 06, 12, 13, 19 and 20 - every phone screen that is not a modal.
  *
  * REQUIREMENTS.md's "Tablet layout" pairs this with [NeedlerNavigationRail]: one navigation model at
  * two widths, chosen by `WindowSizeClass` in the host, with neither built twice.
+ *
+ * ## Why the selected item has a container now
+ *
+ * It had none, and the rail beside it did, so the phone told the user which tab they were on by hue
+ * alone - accent `#aed5f2` against `textMuted`. WCAG 1.4.1 asks that colour never be the only means
+ * of conveying information, and the two navigation surfaces disagreeing about it meant one of them
+ * was wrong rather than that the pack had a phone idiom. `NeedlerNavigationScaffold` in `:app`
+ * recorded it as a `:core:design` problem; it is this line.
+ *
+ * The container is the rail's own `surfaceRaised`, which REQUIREMENTS.md "Design system" lists for
+ * "pressed and selected rows" - so nothing was invented, and the two widths now mark selection the
+ * same way. `Role.Tab` with `selected` already reported it to TalkBack, which is the third channel
+ * and was never the missing one.
  */
 @Composable
 fun NeedlerBottomNavBar(
@@ -80,6 +94,7 @@ fun NeedlerBottomNavBar(
                     modifier = Modifier.weight(1f),
                     selectedColor = colors.accent,
                     unselectedColor = colors.textMuted,
+                    selectedBackground = colors.surfaceRaised,
                 )
             }
         }

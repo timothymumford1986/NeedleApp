@@ -255,13 +255,32 @@ class SearchScreenshotTest {
         capture(
             "search-pull-sheet",
             NeedlerDevice.Phone,
-            RESULTS.copy(pullSheetAlbum = SampleSearch.buzz, monitorArtist = true),
+            // `monitorArtist` is deliberately not set. `SearchViewModel.onPull`
+            // resets it to false on every tap, so off is what a sheet opened from
+            // a result actually shows; this image forced it on and the offline
+            // image did not, which is why the same sheet for the same album
+            // appeared to flip its subscription toggle when the network went
+            // away. The ViewModel was right and the fixture was the lie.
+            RESULTS.copy(pullSheetAlbum = SampleSearch.buzz),
             // The sheet is what this image is about, and a field focused behind
             // it would draw an accent border through the scrim.
             autoFocus = false,
         )
     }
 
+    /**
+     * The banner after a successful pull, **and** the row it is about.
+     *
+     * The fixture used to carry the notice alone, so the image showed "Pulling.
+     * Track it on the Pulls tab" over a row still wearing a filled blue **Pull**
+     * pill — a second tap on which placed a second request for the same record.
+     * The golden was not stale: it was an accurate render of a state the app
+     * could really be in, because the album's state lives in the mirror and the
+     * receipt had not reached it yet.
+     *
+     * `placedPulls` is what closes that window, and this image is the proof: the
+     * same album now wears the Pulling badge the server's answer earned it.
+     */
     @Test
     fun `a pull has been accepted`() {
         capture(
@@ -269,6 +288,9 @@ class SearchScreenshotTest {
             NeedlerDevice.Phone,
             RESULTS.copy(
                 notice = SearchNotice.forRequest(RequestStatus.ACCEPTED),
+                placedPulls = mapOf(
+                    SampleSearch.buzz.releaseGroupMbid to RequestStatus.ACCEPTED,
+                ),
             ),
         )
     }
@@ -281,23 +303,19 @@ class SearchScreenshotTest {
 
     // ---- the crate ----------------------------------------------------------
 
-    /**
-     * The crate control on the song rows and on the albums this server already has.
-     *
-     * Two placements and one deliberate absence, all in one image: the song rows carry it
-     * beside their duration and claim the long press as well, an owned album row carries it
-     * beside its badge, and an un-owned row does not - a catalogue result's tracks exist in
-     * MusicBrainz and nowhere else, so its action is Pull and queueing it would add nothing.
-     */
-    @Test
-    fun `song rows and owned album rows offer the crate`() {
-        capture("search-crate-control", NeedlerDevice.Phone, RESULTS)
-    }
-
-    @Test
-    fun `the crate controls at 200 percent text size`() {
-        capture("search-crate-control-large-text", NeedlerDevice.Phone, RESULTS, fontScale = 2f)
-    }
+    // `search-crate-control` and `search-crate-control-large-text` used to be
+    // captured here, and both were byte-identical to `search-results` and
+    // `search-large-text`. They were not stale images and the control does not
+    // render nothing: the two fixtures were the same `SearchUiState` at the same
+    // font scale as the two above, so the renders could not have differed.
+    //
+    // The crate control *is* in those images - beside Device on the Mordechai row,
+    // beside Server on Flyte, beside the duration on both song rows, and absent on
+    // the un-owned row, which is the whole arrangement the deleted test described.
+    // Its one state a literal `SearchUiState` cannot reach is the menu open, which
+    // is `crateMenuOpen` inside the composable; a capture of that needs the Compose
+    // test rule, not this file. The honest replacement for two duplicate PNGs is no
+    // duplicate PNGs, and `search-crate-added` below still covers what an add says.
 
     /**
      * The line after an add, with the crate's count and total duration under it.
@@ -340,7 +358,7 @@ class SearchScreenshotTest {
                     TABLET_RESULTS.copy(
                         offline = true,
                         results = SampleSearch.yussefResults.copy(
-                            albums = listOf(SampleSearch.twoStar, SampleSearch.flyteTablet),
+                            albums = listOf(SampleSearch.twoStar, SampleSearch.flyte),
                             catalogue = CatalogueLaneState.Unavailable(NeedlerError.Offline()),
                         ),
                     ),
@@ -403,9 +421,12 @@ class SearchScreenshotTest {
             onRecentQuerySelect = {},
             onClearRecentQueries = {},
             onSuggestionSelect = {},
+            onRetrySearch = {},
+            onOpenSettings = {},
             onArtistClick = {},
             onAlbumClick = {},
             onPull = {},
+            onStopPull = {},
             onPlayTrack = {},
             onAddTrackToCrate = { _, _ -> },
             onAddAlbumToCrate = { _, _ -> },

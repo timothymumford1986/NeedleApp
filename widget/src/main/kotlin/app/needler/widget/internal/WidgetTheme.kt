@@ -57,14 +57,18 @@ internal object WidgetColours {
     val textSecondary: ColorProvider = ColorProvider(Color(0xFFA8B3A0))
 
     /**
-     * `NeedlerColors.textMuted`, `#6f7a68`: the two timecodes, exactly as drawn.
+     * `NeedlerColors.textMuted`, `#828f7a`: the two timecodes.
      *
-     * `:core:design` records that this value measures 4.21:1 on the canvas and so fails WCAG AA for
-     * normal text, and that keeping it is a deliberate product decision rather than an oversight.
-     * The same decision is inherited here rather than quietly re-taken: a widget that used the
-     * accessible alternative would be the one surface in the product drawing a different grey.
+     * The note here used to record `#6f7a68` "exactly as drawn", on the grounds that `:core:design`
+     * kept a value failing WCAG AA as a deliberate decision and "a widget that used the accessible
+     * alternative would be the one surface in the product drawing a different grey".
+     *
+     * That reasoning is why this moved. `:core:design` reversed the decision for its tertiary text
+     * tier, so inheriting it now means `#828f7a` - and keeping the old value would make the widget
+     * the odd surface, which is the thing the note was written to prevent. The timecodes are 11sp
+     * prose on the card's surface, where the drawn value measured 3.82:1.
      */
-    val textMuted: ColorProvider = ColorProvider(Color(0xFF6F7A68))
+    val textMuted: ColorProvider = ColorProvider(Color(0xFF828F7A))
 
     /** `NeedlerColors.accent`, `#aed5f2`: the transport disc and the elapsed bar. */
     val accent: ColorProvider = ColorProvider(Color(0xFFAED5F2))
@@ -271,7 +275,7 @@ internal object WidgetText {
         fontSize = 13.sp,
     )
 
-    /** `1:16`, the elapsed side: `11px`, `color: #6f7a68`. */
+    /** `1:16`, the elapsed side: `11px`, `color: #828f7a` (was `#6f7a68`, see [WidgetColours.textMuted]). */
     val timecode: TextStyle = TextStyle(
         color = WidgetColours.textMuted,
         fontSize = 11.sp,

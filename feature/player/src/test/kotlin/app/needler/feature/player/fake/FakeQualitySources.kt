@@ -42,12 +42,16 @@ import kotlinx.datetime.Instant
  */
 internal class FakePins(
     cached: CachedAudio? = null,
+    pinned: List<Pin> = emptyList(),
 ) : PinRepository {
 
     /** The on-device copy of whatever is playing. Set it to a pinned, complete row to get `Pulled:`. */
     val cachedAudio: MutableStateFlow<CachedAudio?> = MutableStateFlow(cached)
 
-    override fun observePins(): Flow<List<Pin>> = MutableStateFlow(emptyList())
+    /** The pin table, which the crate reads to mark each row **Device** or **Server**. */
+    val pins: MutableStateFlow<List<Pin>> = MutableStateFlow(pinned)
+
+    override fun observePins(): Flow<List<Pin>> = pins
 
     override fun observePin(mbid: ReleaseGroupMbid): Flow<Pin?> = MutableStateFlow(null)
 

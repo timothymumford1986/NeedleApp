@@ -112,6 +112,12 @@ object NeedlerTheme {
  * The pack draws no error colour - "Remove all from device" was accent-coloured, identical to
  * "Connect" - so [NeedlerColors.destructive] was added as a product decision and `error` maps to
  * it. See that property for the value and its measured contrast.
+ *
+ * `outline` is [NeedlerColors.componentBorder] and `outlineVariant` is [NeedlerColors.hairline],
+ * which is the WCAG 1.4.11 split those two properties already describe: Material draws `outline`
+ * round controls, where 3:1 is required, and `outlineVariant` as dividers, where nothing is. The
+ * mapping used to send `outline` to [NeedlerColors.textMuted], which cleared 3:1 by accident
+ * because it is a text colour.
  */
 internal fun NeedlerColors.toMaterialColorScheme() = darkColorScheme(
     primary = accent,
@@ -140,7 +146,7 @@ internal fun NeedlerColors.toMaterialColorScheme() = darkColorScheme(
     onError = onDestructive,
     errorContainer = surfaceRaised,
     onErrorContainer = destructive,
-    outline = textMuted,
+    outline = componentBorder,
     outlineVariant = hairline,
     scrim = artworkShadow,
 )

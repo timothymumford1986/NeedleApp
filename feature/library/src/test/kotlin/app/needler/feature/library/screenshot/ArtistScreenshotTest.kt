@@ -116,7 +116,7 @@ class ArtistScreenshotTest {
         capture(
             "artist-starred",
             NeedlerDevice.Phone,
-            LOADED.copy(artist = SampleLibrary.artists.first().copy(isFavourite = true)),
+            LOADED.copy(artist = SampleLibrary.marias.copy(isFavourite = true)),
         )
     }
 
@@ -326,8 +326,8 @@ class ArtistScreenshotTest {
 
         val LOADED = ArtistUiState(
             loading = false,
-            artist = SampleLibrary.artists.first(),
-            mbid = SampleLibrary.artists.first().mbid,
+            artist = SampleLibrary.marias,
+            mbid = SampleLibrary.marias.mbid,
             ownedAlbums = listOf(
                 SampleLibrary.submarine,
                 SampleLibrary.album(
@@ -364,9 +364,9 @@ class ArtistScreenshotTest {
             loading = false,
             artist = SampleLibrary.nameDerivedArtist,
             mbid = SampleLibrary.nameDerivedArtist.mbid,
-            ownedAlbums = listOf(SampleLibrary.submarine),
+            ownedAlbums = listOf(SampleLibrary.localBandAlbum),
             artistNotInCatalogue = true,
-            playableTracks = SampleLibrary.submarineTracks,
+            playableTracks = SampleLibrary.localBandTracks,
         )
 
         /** An artist reached from catalogue search: no mirror row, nothing owned. */

@@ -30,7 +30,7 @@ import org.robolectric.annotation.GraphicsMode
  * ## The defect
  *
  * A device audit started an album download, watched the badge read "Pulling to device, 31 percent,
- * playing now", and found the only action the screen offered beside it was "Device. Remove ... from
+ * playing now", and found the only action the screen offered beside it was a delete - "Remove ... from
  * this device" - which deletes. There was no way to stop a download in progress and keep what had
  * arrived, and the one action on offer threw it away.
  *
@@ -227,7 +227,16 @@ class AlbumStopControlTest {
         val PHONE_HEIGHT = 844.dp
 
         const val STOP = "Stop downloading Submarine to this device"
-        const val REMOVE = "Device. Remove Submarine from this device"
+        /**
+         * Remove's spoken description.
+         *
+         * It read "Device. Remove Submarine from this device", because the button's visible label
+         * was the state word **Device**. A state word is not an action: the slot read as a badge,
+         * the delete it performed was named nowhere, and the header two lines above was already
+         * saying `Device: FLAC`. The button now reads "Remove from device" and the description is
+         * the sentence alone.
+         */
+        const val REMOVE = "Remove Submarine from this device"
         const val PULL_LOCAL = "Pull to device. Download Submarine to this device"
     }
 }

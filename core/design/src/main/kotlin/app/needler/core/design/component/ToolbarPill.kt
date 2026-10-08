@@ -173,7 +173,7 @@ fun NeedlerToolbarIconPill(
 
 @Composable
 private fun toolbarPillContentColour(enabled: Boolean): Color =
-    if (enabled) NeedlerTheme.colors.textSecondary else NeedlerTheme.colors.textMuted
+    if (enabled) NeedlerTheme.colors.textSecondary else NeedlerTheme.colors.disabled
 
 /**
  * The shared skeleton: 48dp of touch around a 36dp pill, clipped before it is clickable.
@@ -207,7 +207,7 @@ private fun Modifier.toolbarPillSurface(
                 )
             },
             background = colors.surface,
-            borderColor = colors.hairline,
+            borderColor = colors.componentBorder,
             borderWidth = sizes.hairlineThickness,
         )
         // A merging node, so the pill is one target to a screen reader whatever it holds, and the

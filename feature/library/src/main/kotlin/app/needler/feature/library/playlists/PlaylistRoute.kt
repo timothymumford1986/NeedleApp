@@ -44,6 +44,7 @@ fun PlaylistRoute(
         onRemoveTrack = viewModel::onRemoveTrack,
         onMoveUp = viewModel::onMoveUp,
         onMoveDown = viewModel::onMoveDown,
+        onRetryTrack = viewModel::onRetryTrack,
         onAddTracksClick = viewModel::onAddTracksClick,
         onPickerQueryChange = viewModel::onPickerQueryChange,
         onToggleCandidate = viewModel::onToggleCandidate,

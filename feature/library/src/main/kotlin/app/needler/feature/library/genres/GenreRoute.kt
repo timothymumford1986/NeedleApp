@@ -36,6 +36,8 @@ fun GenreRoute(
         onPlayAll = viewModel::onPlayAll,
         onShuffleAll = viewModel::onShuffleAll,
         onPlayTrack = viewModel::onPlayTrack,
+        onShowMore = viewModel::onShowMore,
+        onSyncNow = viewModel::onSyncNow,
         modifier = modifier,
     )
 }

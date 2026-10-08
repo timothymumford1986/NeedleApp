@@ -186,8 +186,15 @@ internal class FakePullRepository : PullRepository {
         requests: List<AlbumRequest>,
     ): Outcome<BatchRequestReceipt> = error("not used by :feature:search")
 
-    override suspend fun cancelRequest(mbid: ReleaseGroupMbid): Outcome<Unit> =
-        error("not used by :feature:search")
+    /** The release groups a row's `⋯` asked to stop, newest last. */
+    val cancelled: MutableList<ReleaseGroupMbid> = mutableListOf()
+
+    var cancelOutcome: Outcome<Unit> = Outcome.Ok
+
+    override suspend fun cancelRequest(mbid: ReleaseGroupMbid): Outcome<Unit> {
+        cancelled += mbid
+        return cancelOutcome
+    }
 
     override suspend fun retryRequest(mbid: ReleaseGroupMbid): Outcome<Unit> =
         error("not used by :feature:search")

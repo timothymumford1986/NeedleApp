@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import app.needler.ui.navigation.NeedlerDestination
 import app.needler.ui.navigation.NeedlerNavigationScaffold
-import app.needler.ui.placeholder.DestinationPlaceholder
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -58,9 +57,36 @@ class NavigationScreenshotTest {
         }
     }
 
-    private fun capture(destination: NeedlerDestination, device: NeedlerDevice) {
-        val name = "nav-" + destination.route
-        val file = captureNeedlerScreen(name, device) {
+    /**
+     * The badge at 200% text, with the two-digit count the device was carrying.
+     *
+     * This is the image the defect had no golden for: the count scales with the text setting and the
+     * glyph does not, so at 200% an unscaled `36` sat on top of the download arrow and ran into the
+     * label beside it. `NeedlerNavigationScaffold` caps the chrome's type scale now, and this is the
+     * render that says whether the cap holds.
+     *
+     * Phone only. The rail gives an item 64dp and a whole column to grow into; the bar gives it a
+     * quarter of a 390dp width, which is where the badge ran out of room.
+     */
+    @Test
+    fun `the pulls badge at two hundred per cent text`() {
+        capture(
+            destination = NeedlerDestination.Pulls,
+            device = NeedlerDevice.Phone,
+            name = "nav-pulls-large-text",
+            badge = CROWDED_BADGE,
+            fontScale = 2f,
+        )
+    }
+
+    private fun capture(
+        destination: NeedlerDestination,
+        device: NeedlerDevice,
+        name: String = "nav-" + destination.route,
+        badge: Int = PULLS_BADGE,
+        fontScale: Float = 1f,
+    ) {
+        val file = captureNeedlerScreen(name, device, fontScale) {
             NeedlerNavigationScaffold(
                 widthSizeClass = when (device) {
                     NeedlerDevice.Phone -> WindowWidthSizeClass.Compact
@@ -68,14 +94,14 @@ class NavigationScreenshotTest {
                 },
                 selected = destination,
                 onSelect = {},
-                pullsBadgeCount = PULLS_BADGE,
+                pullsBadgeCount = badge,
                 // Composed at both widths, and drawn at neither unless the
                 // scaffold asks for it: the Compact branch never calls the
                 // slot. Passing it unconditionally is what keeps the two
                 // captures one call.
                 sidebar = { PlayerSidebarPlaceholder() },
             ) {
-                DestinationPlaceholder(destination)
+                DestinationFiller(destination)
             }
         }
         assertRendered(file, device)
@@ -84,5 +110,13 @@ class NavigationScreenshotTest {
     private companion object {
         /** The count the design pack draws on the Pulls item, on every screen. */
         const val PULLS_BADGE = 2
+
+        /**
+         * Two digits, which is the count the overlap was reported at.
+         *
+         * A single digit fits at any scale; the pill only outgrows its glyph once it has a second
+         * character to hold, so a large-text golden drawn with the pack's `2` would show nothing.
+         */
+        const val CROWDED_BADGE = 36
     }
 }

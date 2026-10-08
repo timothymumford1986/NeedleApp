@@ -241,7 +241,7 @@ class ArtistNamesakeTapTest {
         val VIEWPORT_HEIGHT = 2_400.dp
 
         /** The artist whose screen the namesakes are offered on: owned, with a name-derived id. */
-        val OWNED: Artist = SampleLibrary.artists.first()
+        val OWNED: Artist = SampleLibrary.marias
 
         /** The device's own case: several Didos, one of which carries a comment and one not. */
         val DIDO_SINGER = Artist(

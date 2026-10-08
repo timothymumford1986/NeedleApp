@@ -3,7 +3,9 @@ package app.needler.feature.player.crate
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.needler.core.domain.model.PlayQueue
+import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.playback.PlaybackController
+import app.needler.core.domain.repository.PinRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +43,7 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class CrateViewModel @Inject constructor(
     private val controller: PlaybackController,
+    pins: PinRepository,
 ) : ViewModel() {
 
     /** The locally-applied reorder, held only until the session confirms or contradicts it. */
@@ -53,9 +56,35 @@ class CrateViewModel @Inject constructor(
         .map { it.isPlaying }
         .distinctUntilChanged()
 
+    /**
+     * Which records this device holds, so every row can say where it is.
+     *
+     * REQUIREMENTS.md "Vocabulary" makes `Server` and `Device` "the words every surface draws", and
+     * the crate drew neither - which left the one screen a listener consults before going offline
+     * silent about the only question they are asking it.
+     *
+     * The whole pin list rather than a query per row: it is tens of rows at most, the crate is at
+     * most a few dozen, and a flow per row would be a Room subscription per visible item that
+     * re-subscribes on every reorder. `distinctUntilChanged` on the derived set keeps a download's
+     * progress ticks - which change `Pin.download` and nothing this screen reads - from recomposing
+     * the list.
+     */
+    private val onDeviceAlbums: Flow<Set<ReleaseGroupMbid>> = pins.observePins()
+        .map { held -> held.mapTo(HashSet(held.size)) { it.releaseGroupMbid } }
+        .distinctUntilChanged()
+
     val state: StateFlow<CrateUiState> =
-        combine(liveQueue, isPlaying, optimisticQueue) { upstream, playing, pending ->
-            CrateUiState(queue = pending ?: upstream, isPlaying = playing)
+        combine(
+            liveQueue,
+            isPlaying,
+            optimisticQueue,
+            onDeviceAlbums,
+        ) { upstream, playing, pending, onDevice ->
+            CrateUiState(
+                queue = pending ?: upstream,
+                isPlaying = playing,
+                onDeviceAlbums = onDevice,
+            )
         }.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),

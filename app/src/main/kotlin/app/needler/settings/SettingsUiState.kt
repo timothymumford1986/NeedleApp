@@ -197,6 +197,39 @@ data class ServerSectionState(
     /** A sync with no server to sync against is not an action, so the row does not offer it. */
     val canSyncNow: Boolean get() = host != null && !syncing
 
+    /**
+     * Whether **Sync now** is drawn at all.
+     *
+     * This is the screen's own split between *absent* and *disabled*, and it is the same split
+     * REQUIREMENTS.md rule 3 of "Streaming" takes for the transcoding rows: a control that can never
+     * work here is removed, a control that is momentarily busy is greyed.
+     *
+     *  * **No server** is structural. There is nothing to sync against and nothing the user can do
+     *    on this screen to change that except connect one, which is the control directly below. A
+     *    greyed Sync now in that state is the dead end `settings-fresh-phone.png` showed: a control
+     *    with no reason given and no way to earn it.
+     *  * **Syncing** is temporary, and the reason is already on screen - the row above reads
+     *    `Syncing…` - so the control stays, greyed, and comes back on its own.
+     *
+     * The rejected alternative was leaving it drawn-and-disabled in both cases and adding a line
+     * explaining the first. That is one more sentence on the lowest-contrast screen in the app to
+     * explain a control that should not have been offered.
+     */
+    val showSyncNow: Boolean get() = host != null
+
+    /**
+     * `Change server`, or `Connect a server` when there is none.
+     *
+     * The verb has to match the state. On a fresh install the row above reads `No server`, so
+     * "Change server" asks the user to change a thing that does not exist - and it is the only live
+     * control on that screen, which makes it the one word the whole screen turns on.
+     *
+     * Both labels lead to the same place, which is why this is a label and not a second callback:
+     * REQUIREMENTS.md's "Out of scope" table lists "Multiple server profiles", so there is exactly
+     * one server and exactly one screen that sets it.
+     */
+    val changeServerLabel: String get() = if (host == null) "Connect a server" else "Change server"
+
     // ---- the trusted certificate -------------------------------------------
 
     /**
@@ -336,6 +369,35 @@ data class PlayingSectionState(
         else -> StreamQualityAffordance.PICKERS_UNCONFIRMED
     }
 
+    /**
+     * The line under the single `Stream quality` row, saying why there is only one of it.
+     *
+     * **This is the sentence `settings-no-transcoding-phone.png` was missing.** That screen silently
+     * collapses two settings - `Stream quality on Wi-Fi` and `Stream quality on mobile data` - into
+     * one chevron-less row and says nothing about it, while the screen next to it spends a four-line
+     * paragraph explaining a caveat. The screen that has the most to explain explained the least.
+     *
+     * Two sentences, because [streamQuality] reaches [StreamQualityAffordance.STATEMENT] for two
+     * unrelated reasons and a single sentence covering both would have to be vague about which. A
+     * server that answered "no ffmpeg" is a settled fact about that server; a fresh install has no
+     * server to have asked. REQUIREMENTS.md rule 3 of "Streaming" is what removes the control in the
+     * first case, and it removes it rather than greying it precisely so nobody goes hunting for a
+     * switch that does not exist - which is only true if the screen says there is nothing to hunt
+     * for.
+     *
+     * The rejected alternative was reusing the row's own `value` slot - `Original only` instead of
+     * `Original` - which is shorter and says neither why nor what it cost.
+     *
+     * @param serverConfigured whether there is a saved server at all, as [streamQuality] takes it.
+     */
+    fun streamQualityStatement(serverConfigured: Boolean): String = if (!serverConfigured) {
+        "Needler asks every server for original files. Connect one to find out whether it can send " +
+            "smaller ones over mobile data."
+    } else {
+        "This server cannot re-encode, so every track arrives in its original format and there is " +
+            "one setting rather than one per connection."
+    }
+
     /** `Off`, `4 s`, `6 s`, `12 s` - the four stops screen 20 offers. */
     val crossfadeLabel: String
         get() = when (crossfade) {
@@ -449,11 +511,16 @@ enum class StreamQualityAffordance {
     PICKERS_UNCONFIRMED,
 
     /**
-     * One row reading `Original`, with no chevron and nothing behind it.
+     * One row reading `Original`, with no chevron, and one line underneath saying why.
      *
      * The truth on a server without ffmpeg, where every rung resolves to original bytes - and on a
      * fresh install, where there is no server to ask. Deliberately not a disabled picker:
      * REQUIREMENTS.md rule 3 of "Streaming" says to hide the setting rather than grey it out.
+     *
+     * The line is [PlayingSectionState.streamQualityStatement], and it is not optional. Hiding the
+     * setting answers "do not go hunting for a switch" only if the screen says there is no switch;
+     * without it the row is two settings quietly collapsed into one, which is what
+     * `settings-no-transcoding-phone.png` showed.
      */
     STATEMENT,
 }

@@ -85,10 +85,7 @@ class PullsFormatTest {
     /** Every state's drawn explanation, including the two derived client-side. */
     @Test
     fun `each state's line says what that state is`() {
-        assertEquals(
-            "waiting for an administrator",
-            PullsFormat.stateDetail(SamplePulls.pendingApproval),
-        )
+        assertEquals("needs approval", PullsFormat.stateDetail(SamplePulls.pendingApproval))
         assertEquals("asking slskd", PullsFormat.stateDetail(SamplePulls.searching))
         assertEquals(
             "looking for a source",
@@ -98,41 +95,64 @@ class PullsFormatTest {
             "a source needs picking on the server",
             PullsFormat.stateDetail(SamplePulls.awaitingSourceReview),
         )
-        assertEquals("waiting for a download slot", PullsFormat.stateDetail(queued))
+        assertEquals("waiting for a slot", PullsFormat.stateDetail(queued))
         assertEquals("12 of 19 files", PullsFormat.stateDetail(SamplePulls.downloading))
         assertEquals("importing", PullsFormat.stateDetail(processing))
         assertEquals("7 of 10 files", PullsFormat.stateDetail(SamplePulls.partial))
         assertEquals("no source found", PullsFormat.stateDetail(SamplePulls.failed))
 
-        // The badge is these two states' whole account; see `stateDetail`.
+        // The `Server` chip is this state's whole account; see `stateDetail`.
         assertNull(PullsFormat.stateDetail(SamplePulls.landedToday))
-        assertNull(PullsFormat.stateDetail(SamplePulls.cancelled))
+
+        // A cancelled pull used to answer null here on the same argument, when its chip read
+        // "Cancelled". Its chip now reads `Not retrieved`, which is where the record is and is
+        // equally true of a failure, so the line has to carry how it got there.
+        assertEquals("stopped", PullsFormat.stateDetail(SamplePulls.cancelled))
     }
 
     /**
-     * No state invents an administrator, and the one that reports one is the one the server parked.
+     * No state invents an approval, and the one that reports one is the one the server parked.
      *
      * Asserted over every state rather than over the states that happen to be suspect: a mapper that
      * reached for "waiting for approval" as its fallback would be caught here by whichever state it
      * swallowed, which is how this class of defect reaches a device at all.
+     *
+     * ## What changed, and why this is stricter than it was
+     *
+     * It used to look for the word "admin" and to exempt `PENDING_APPROVAL` from that search, since
+     * that state's line read "waiting for an administrator". A reviewer counted that phrase among
+     * the server jargon this module puts in front of users - it is the server's own name for its
+     * own role - and the line now reads "needs approval on the server", which says the same thing
+     * in words the user can act on without having read DroppedNeedle's documentation.
+     *
+     * So the guard is now two assertions where it was one, and both are tighter:
+     *
+     *  * **no** state may say "admin", `PENDING_APPROVAL` included, where before one was exempt;
+     *  * **exactly one** state may mention an approval at all, which is a narrower net than "admin"
+     *    was - the fallback the original defect reached for was the word *approval*, and under the
+     *    old assertion a mapper answering "waiting for approval" from the wrong state would have
+     *    passed.
      */
     @Test
-    fun `only a request the server parked names an administrator`() {
+    fun `only a request the server parked says it needs approving`() {
         val states: List<Pull> = SamplePulls.everyState + queued + processing
         assertEquals(PullState.entries.toSet(), states.map { it.state }.toSet())
 
-        states.filterNot { it.state == PullState.PENDING_APPROVAL }.forEach { pull ->
+        states.forEach { pull ->
             val lines: List<String> = listOf(
                 PullsFormat.stateDetail(pull).orEmpty(),
                 PullsFormat.subtitle(pull, now),
                 PullsFormat.spokenRow(pull, now),
             )
             lines.forEach { line -> assertFalse(line, line.contains("admin")) }
+
+            val parked: Boolean = pull.state == PullState.PENDING_APPROVAL
+            lines.forEach { line ->
+                assertEquals(line, parked, line.contains("approv"))
+            }
         }
 
-        assertTrue(
-            PullsFormat.stateDetail(SamplePulls.pendingApproval)!!.contains("administrator"),
-        )
+        assertEquals("needs approval", PullsFormat.stateDetail(SamplePulls.pendingApproval))
     }
 
     /** `queued` with a candidate already chosen: waiting for a slot, not for a person. */
@@ -173,13 +193,26 @@ class PullsFormatTest {
 
     // ---- individual rules ---------------------------------------------------
 
+    /**
+     * Punch-list: the header read "12 in progress" over twelve rows every one of which was parked
+     * on a person and none of which was progressing. The two populations are counted apart now,
+     * and the line says which is which rather than summing them under the wrong noun.
+     */
     @Test
-    fun `the header counts only what is in progress`() {
-        assertEquals("2 in progress", PullsFormat.headerLine(activeCount = 2, totalCount = 5))
-        assertEquals("1 in progress", PullsFormat.headerLine(activeCount = 1, totalCount = 1))
-        assertEquals("Nothing in progress", PullsFormat.headerLine(activeCount = 0, totalCount = 4))
-        assertEquals("", PullsFormat.headerLine(activeCount = 0, totalCount = 0))
+    fun `the header counts what is moving apart from what is parked`() {
+        assertEquals("2 in progress", line(moving = 2, waiting = 0, total = 5))
+        assertEquals("1 in progress", line(moving = 1, waiting = 0, total = 1))
+        assertEquals("12 waiting on the server", line(moving = 0, waiting = 12, total = 12))
+        assertEquals(
+            "2 in progress · 2 waiting on the server",
+            line(moving = 2, waiting = 2, total = 9),
+        )
+        assertEquals("Nothing in progress", line(moving = 0, waiting = 0, total = 4))
+        assertEquals("", line(moving = 0, waiting = 0, total = 0))
     }
+
+    private fun line(moving: Int, waiting: Int, total: Int): String =
+        PullsFormat.headerLine(movingCount = moving, waitingCount = waiting, totalCount = total)
 
     @Test
     fun `relative days are coarse and never negative`() {
@@ -241,7 +274,7 @@ class PullsFormatTest {
     @Test
     fun `the spoken row rejoins what the layout split apart`() {
         assertEquals(
-            "Black Classical Music, Yussef Dayes, pulling, 62 percent, 12 of 19 files, FLAC",
+            "Black Classical Music, Yussef Dayes, Pulling, 62 percent, 12 of 19 files, FLAC",
             PullsFormat.spokenRow(SamplePulls.downloading, now),
         )
     }
@@ -252,13 +285,16 @@ class PullsFormatTest {
             status = PullStatus.CANCELLED,
             failureReason = null,
         )
-        // Drawn: the `Cancelled` badge in the trailing column is the word, so
-        // the line carries only the artist and the date. Spoken: the state is
-        // read out in its own place and the detail parts add nothing.
-        assertNull(PullsFormat.stateDetail(cancelled))
-        assertEquals("Paul Kossoff · 3 days ago", PullsFormat.subtitle(cancelled, now))
+        // The chip says where the record is - `Not retrieved` - and the line says how it got
+        // there. Two different facts in two slots, which is the whole of the rule; what this still
+        // guards is that neither of them is the other one repeated.
+        assertEquals("stopped", PullsFormat.stateDetail(cancelled))
         assertEquals(
-            "Back Street Crawler, Paul Kossoff, cancelled, 3 days ago",
+            "Paul Kossoff · stopped · 3 days ago",
+            PullsFormat.subtitle(cancelled, now),
+        )
+        assertEquals(
+            "Back Street Crawler, Paul Kossoff, Not retrieved, stopped, 3 days ago",
             PullsFormat.spokenRow(cancelled, now),
         )
     }
@@ -285,13 +321,13 @@ class PullsFormatTest {
     @Test
     fun `a part-delivered pull with no counters still says something`() {
         val uncounted = SamplePulls.partial.copy(progress = PullProgress.Unknown)
-        assertEquals("some tracks did not arrive", PullsFormat.stateDetail(uncounted))
+        assertEquals("some tracks missing", PullsFormat.stateDetail(uncounted))
     }
 
     @Test
     fun `the spoken row says a failure as a state and a reason`() {
         assertEquals(
-            "Back Street Crawler, Paul Kossoff, failed, no source found, 3 days ago",
+            "Back Street Crawler, Paul Kossoff, Not retrieved, no source found, 3 days ago",
             PullsFormat.spokenRow(SamplePulls.failed, now),
         )
     }
@@ -303,9 +339,15 @@ class PullsFormatTest {
     // Cancel buttons whose content description was "Cancel the pull of " with
     // nothing after it. Every fixture supplied a title, so nothing here failed.
 
+    /**
+     * Punch-list: `screenshots/pulls-missing-titles-phone.png` drew three rows all titled "Untitled
+     * album", which cannot be told apart at all. The artist takes the slot when the mirror has no
+     * album name, and the placeholder is kept for the floor case - a row with neither.
+     */
     @Test
     fun `an empty title becomes a name rather than a hole`() {
-        assertEquals("Untitled album", PullsFormat.albumTitle(SamplePulls.untitled))
+        assertEquals("Kelly Lee Owens", PullsFormat.albumTitle(SamplePulls.untitled))
+        assertEquals("Untitled album", PullsFormat.albumTitle(SamplePulls.anonymous))
         assertEquals("Fever", PullsFormat.albumTitle(SamplePulls.searching))
     }
 
@@ -313,7 +355,18 @@ class PullsFormatTest {
     fun `a title of nothing but spaces is treated as no title`() {
         // `isEmpty` would let this through and draw an invisible title. The guard
         // is on `isBlank` for exactly this row.
-        assertEquals("Untitled album", PullsFormat.albumTitle(SamplePulls.titleAllSpaces))
+        assertEquals("Actress", PullsFormat.albumTitle(SamplePulls.titleAllSpaces))
+        assertEquals("Untitled album", PullsFormat.albumTitle("   "))
+    }
+
+    /** And each name is still drawn once: the line drops the artist the title has taken. */
+    @Test
+    fun `a title that fell back to the artist does not repeat it in the line`() {
+        assertEquals("4 of 11 files", PullsFormat.subtitle(SamplePulls.untitled, now))
+        assertEquals(
+            "Kelly Lee Owens, Pulling, 35 percent, 4 of 11 files",
+            PullsFormat.spokenRow(SamplePulls.untitled, now),
+        )
     }
 
     @Test
@@ -352,8 +405,8 @@ class PullsFormatTest {
     @Test
     fun `the spoken row still starts with a name when there is no title`() {
         assertEquals(
-            "Untitled album, Kelly Lee Owens, pulling, 35 percent, 4 of 11 files",
-            PullsFormat.spokenRow(SamplePulls.untitled, now),
+            "Untitled album, Not retrieved, no source found, 2 days ago",
+            PullsFormat.spokenRow(SamplePulls.anonymous, now),
         )
         // A blank first element used to leave the phrase starting ", Kelly...".
         assertFalse(PullsFormat.spokenRow(SamplePulls.untitled, now).startsWith(","))
@@ -363,7 +416,7 @@ class PullsFormatTest {
     fun `a pull with neither a title nor an artist still reads as a sentence`() {
         assertEquals("no source found · 2 days ago", PullsFormat.subtitle(SamplePulls.anonymous, now))
         assertEquals(
-            "Untitled album, failed, no source found, 2 days ago",
+            "Untitled album, Not retrieved, no source found, 2 days ago",
             PullsFormat.spokenRow(SamplePulls.anonymous, now),
         )
     }
@@ -373,14 +426,8 @@ class PullsFormatTest {
         // The split `stateDetail` makes — the badge says the state, the subtitle
         // explains it — was never the problem, and this pins that: the subtitle
         // of an unnamed pull is exactly the subtitle of a named one.
-        assertEquals(
-            "Kelly Lee Owens · 4 of 11 files",
-            PullsFormat.subtitle(SamplePulls.untitled, now),
-        )
-        assertEquals(
-            "Actress · FLAC · today",
-            PullsFormat.subtitle(SamplePulls.titleAllSpaces, now),
-        )
+        assertEquals("4 of 11 files", PullsFormat.subtitle(SamplePulls.untitled, now))
+        assertEquals("FLAC · today", PullsFormat.subtitle(SamplePulls.titleAllSpaces, now))
     }
 
     // ---- the same guard on the two lanes that are not a Pull ----------------
@@ -394,8 +441,12 @@ class PullsFormatTest {
 
     @Test
     fun `a history row with no title still names something`() {
-        assertEquals("Untitled album", PullsFormat.historyTitle(historyEntry(albumTitle = "")))
-        assertEquals("Untitled album", PullsFormat.historyTitle(historyEntry(albumTitle = "   ")))
+        assertEquals("Slint", PullsFormat.historyTitle(historyEntry(albumTitle = "")))
+        assertEquals("Slint", PullsFormat.historyTitle(historyEntry(albumTitle = "   ")))
+        assertEquals(
+            "Untitled album",
+            PullsFormat.historyTitle(historyEntry(albumTitle = "", artistName = "")),
+        )
         assertEquals("this album", PullsFormat.historyPhrase(historyEntry(albumTitle = "")))
         assertEquals("this album", PullsFormat.historyPhrase(historyEntry(albumTitle = "  ")))
         assertEquals("Spiderland", PullsFormat.historyTitle(historyEntry(albumTitle = "Spiderland")))
@@ -405,8 +456,8 @@ class PullsFormatTest {
     fun `a history row with neither a title nor an artist still reads as a sentence`() {
         val entry = historyEntry(albumTitle = "", artistName = "")
 
-        assertEquals("arrived · today", PullsFormat.historySubtitle(entry, now))
-        assertEquals("Untitled album, arrived, today", PullsFormat.spokenHistoryRow(entry, now))
+        assertEquals("today", PullsFormat.historySubtitle(entry, now))
+        assertEquals("Untitled album, Server, today", PullsFormat.spokenHistoryRow(entry, now))
     }
 
     @Test
@@ -426,11 +477,11 @@ class PullsFormatTest {
     @Test
     fun `a wanted row and a retrying row both name something`() {
         assertEquals(
-            "Untitled album, not found yet, checks again in 4 hours",
+            "Untitled album, Not retrieved, still looking, checks again in 4 hours",
             PullsFormat.spokenWantedRow(wantedWatch(albumTitle = ""), now),
         )
         assertEquals(
-            "Untitled album, being retried",
+            "Untitled album, Not retrieved, being retried",
             PullsFormat.spokenWantedRetryRow(wantedRetry(albumTitle = "  "), now),
         )
     }

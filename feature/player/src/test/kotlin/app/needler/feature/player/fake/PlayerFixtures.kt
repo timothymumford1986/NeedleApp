@@ -14,6 +14,7 @@ import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackFetchHandle
 import app.needler.core.domain.model.TrackKey
+import app.needler.feature.player.ui.PlayerFormat
 
 /**
  * The design pack's own placeholder music, typed in.
@@ -199,9 +200,15 @@ object PlayerFixtures {
         isConnected = false,
     )
 
-    val thisPhone: OutputTarget = OutputTarget.ThisDevice(displayName = "This phone")
-
-    val thisTablet: OutputTarget = OutputTarget.ThisDevice(displayName = "This tablet")
+    /**
+     * The speaker in the listener's hand, under the one name this module gives it.
+     *
+     * There was a `thisTablet` beside this reading "This tablet", and the tablet sidebar's golden
+     * drew it - so the committed screenshots had three names for one output. `PlayerFormat.outputName`
+     * now maps every `ThisDevice` to [PlayerFormat.LOCAL_OUTPUT] whatever `displayName` reached it, so
+     * a second fixture could only ever test that the override works; this one does that already.
+     */
+    val thisPhone: OutputTarget = OutputTarget.ThisDevice(displayName = PlayerFormat.LOCAL_OUTPUT)
 
     /** A Cast receiver that can fetch from the server. */
     val kitchen: OutputTarget = OutputTarget.Cast(

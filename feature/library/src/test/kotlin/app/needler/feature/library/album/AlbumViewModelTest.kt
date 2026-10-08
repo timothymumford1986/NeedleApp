@@ -536,7 +536,10 @@ class AlbumViewModelTest {
         model.state.test {
             awaitItem()
             val loaded = awaitItem()
-            assertEquals("Shuffle again", loaded.transport.shuffleLabel)
+            // One word in every transport state. "Shuffle again" was six characters wider and that
+            // was enough to strand the overflow on a line of its own at default text size; the
+            // restart it warned about is in the spoken description, which is where it belongs.
+            assertEquals("Shuffle", loaded.transport.shuffleLabel)
             assertEquals(
                 "Shuffle Submarine again. This starts the album over in a new order",
                 loaded.transport.shuffleDescription("Submarine"),

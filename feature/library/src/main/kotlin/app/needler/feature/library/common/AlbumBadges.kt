@@ -10,10 +10,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumBadge
 import app.needler.core.design.component.NeedlerAlbumSource
 import app.needler.core.design.component.NeedlerOnDeviceIcon
+import app.needler.core.design.component.NeedlerPullIcon
+import app.needler.core.design.component.NeedlerStateBadge
+import app.needler.core.design.component.accessibleLabel
 import app.needler.core.design.component.label
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.AlbumState
@@ -149,8 +154,8 @@ internal fun failureExplanation(reason: PullFailureReason, message: String?): St
 @Composable
 internal fun AlbumFormatLabel(
     quality: AudioQuality?,
-    onDevice: Boolean,
     modifier: Modifier = Modifier,
+    onDevice: Boolean = false,
 ) {
     val label: String = LibraryFormat.quality(quality) ?: return
     val colors = NeedlerTheme.colors
@@ -203,3 +208,72 @@ internal fun albumFormatSpokenLabel(quality: AudioQuality?, onDevice: Boolean): 
         label + ", " + lossless
     }
 }
+
+/**
+ * Where this album is, in the word REQUIREMENTS.md "Vocabulary" fixes for it.
+ *
+ * ## What this replaces, and why a word was the only fix
+ *
+ * The library drew three states four ways and never used any of their names. A boxed green
+ * `FLAC`, an unboxed green `MP3 320`, a boxed grey `FLAC` and a plain grey `MP3 320` were four
+ * distinct treatments on one list, and cross-referencing the grid's own ticks showed that boxed
+ * green and unboxed green both meant [NeedlerAlbumSource.Device] - so one of the two axes carried
+ * no discoverable meaning at all, and the other carried a state nothing on the screen named. The
+ * canonical words existed and appeared only in Search.
+ *
+ * REQUIREMENTS.md "Accessibility" settles how it has to be fixed rather than leaving it to taste:
+ * accent and positive "measure 1.01:1 against each other", which makes them one swatch to a
+ * red-green colour-blind reader, so "the hue is never the signal: each state's word is drawn
+ * wherever its hue is". Search's album row already obeys that - [albumBadge] into
+ * `NeedlerStateBadge`, the word beside the row with its glyph and its hue - and this is that row's
+ * treatment, lifted whole so the two surfaces cannot drift.
+ *
+ * ## Why the un-owned case is drawn here rather than by the badge
+ *
+ * `NeedlerAlbumBadge` has no member for it: Search gives an un-owned album a **Pull** button
+ * instead of a badge, and [albumBadge] returns null to say so. A library list is not a search
+ * result - the row's action is Play, and an album with no audio behind it has none - so the row
+ * still has to say *why* it offers nothing, and "Not retrieved" is the word for that in
+ * [NeedlerAlbumSource.NotRetrieved]. It is drawn in the muted colour with the pull glyph: muted
+ * because the record is nowhere, and the glyph because what would change that is a pull.
+ *
+ * The rejected alternative was to leave the row blank for this state, which is what the grid did -
+ * a tick or nothing, so `Server` and `Not retrieved` were the same picture.
+ */
+@Composable
+internal fun AlbumStateLabel(
+    state: AlbumState,
+    modifier: Modifier = Modifier,
+) {
+    val badge: NeedlerAlbumBadge? = albumBadge(state)
+    if (badge != null) {
+        NeedlerStateBadge(badge = badge, modifier = modifier)
+        return
+    }
+    val colors = NeedlerTheme.colors
+    val label: String = NeedlerAlbumSource.NotRetrieved.label()
+    Row(
+        modifier = modifier.semantics(mergeDescendants = true) { contentDescription = label },
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        NeedlerPullIcon(tint = colors.textMuted)
+        Text(
+            text = label,
+            style = NeedlerTheme.typography.metaStrong,
+            color = colors.textMuted,
+            maxLines = 2,
+        )
+    }
+}
+
+/**
+ * The same state as a phrase, for a row or tile that builds its own content description.
+ *
+ * Separate from the drawn label for the reason [NeedlerAlbumBadge.accessibleLabel] exists: a
+ * percentage reads as a symbol on screen and as a word aloud. Never null - every album is in one
+ * of the states, and a row that said nothing about where its record is would be the defect this
+ * function was added to remove.
+ */
+internal fun albumStateSpokenLabel(state: AlbumState): String =
+    albumBadge(state)?.accessibleLabel() ?: NeedlerAlbumSource.NotRetrieved.label()

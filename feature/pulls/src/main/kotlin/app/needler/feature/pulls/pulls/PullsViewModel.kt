@@ -18,6 +18,7 @@ import app.needler.core.domain.repository.PullRepository
 import app.needler.core.domain.repository.SessionRepository
 import app.needler.feature.pulls.common.HISTORY_LANE_SUBJECT
 import app.needler.feature.pulls.common.WANTED_LANE_SUBJECT
+import app.needler.feature.pulls.common.canStop
 import app.needler.feature.pulls.common.laneProblemMessage
 import app.needler.feature.pulls.common.problemMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -248,7 +249,10 @@ class PullsViewModel @Inject constructor(
      * trying and handling the rejection".
      */
     fun onCancel(pull: Pull) {
-        if (!pull.canCancel) return
+        // `canStop`, not `Pull.canCancel`: the domain rule is about a download task and a pending
+        // approval has none. See `app.needler.feature.pulls.common.canStop` for the whole argument
+        // and for why `PROCESSING` is still refused here rather than at the server.
+        if (!pull.canStop) return
         runExclusively {
             val taskId: PullTaskId? = pull.taskId
             val result: Outcome<Unit> = if (taskId != null) {

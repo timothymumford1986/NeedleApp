@@ -28,7 +28,8 @@ import app.needler.feature.library.common.hasPlayableFile
  *   genre; see [trackLimit].
  * @property trackLimit how many tracks were asked for. `observeTracksByGenre` is
  *   "bounded rather than paged" — a cap, not a cursor — and a genre on a large
- *   library can exceed it.
+ *   library can exceed it. The screen raises it rather than only apologising for it;
+ *   see [headerLine].
  */
 data class GenreUiState(
 
@@ -59,16 +60,40 @@ data class GenreUiState(
     val hasPlayableTracks: Boolean get() = playableTracks.isNotEmpty()
 
     /**
-     * `42 tracks · 2 hr 51 min`.
+     * `42 tracks · 2 hr 51 min`, or `First 8 tracks · 28 min` when the list is capped.
      *
      * The running time is summed from the rows, and only when every row has a
      * duration: a sum over half of them is a wrong number wearing the confidence
      * of a right one. Unknown draws nothing rather than zero.
+     *
+     * ## Why the capped reading had to change
+     *
+     * `screenshots/genre-capped-phone.png` contradicts itself two lines apart: the header reads
+     * `8 tracks · 28 min` and the banner under it reads "Showing the first 8 tracks of this
+     * genre". The number in the header was the cap, presented in the same words a complete count
+     * would use, so the one figure on the screen that looks like a total was the one figure
+     * guaranteed not to be one.
+     *
+     * **The true total is not available.** `LibraryRepository` has no count-by-genre, and the one
+     * query that could produce one is the unbounded read of every track in the genre that
+     * [trackLimit] exists to prevent — `observeTracks` is "bounded rather than paged" because
+     * holding the lot in a flow "would spend the whole of REQUIREMENTS.md's scroll budget on
+     * allocation". So the header says what it actually knows: these are the first N, and N is not
+     * the total. The way to the rest is `Show more`, which raises the cap; that is why the cap is
+     * state rather than a constant.
+     *
+     * The rejected alternative was `8 of more than 8`, which is the same fact spelled worse, and
+     * the rejected shortcut was asking for `limit + 1` to learn "there are more" — true, already
+     * implied by the list being full, and still not a total.
      */
     val headerLine: String
         get() {
             val parts: List<String> = buildList {
-                add(LibraryFormat.plural(tracks.size.toLong(), "track"))
+                if (atLimit) {
+                    add("First " + LibraryFormat.plural(tracks.size.toLong(), "track"))
+                } else {
+                    add(LibraryFormat.plural(tracks.size.toLong(), "track"))
+                }
                 LibraryFormat.runningTime(summedDurationMs())?.let { add(it) }
             }
             return parts.joinToString(separator = " · ")

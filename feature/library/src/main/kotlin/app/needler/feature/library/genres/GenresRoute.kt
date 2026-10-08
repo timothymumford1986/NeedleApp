@@ -33,6 +33,7 @@ fun GenresRoute(
         state = state,
         widthSizeClass = widthSizeClass,
         onGenreClick = { genre -> onOpenGenre(genre.name) },
+        onSyncNow = viewModel::onSyncNow,
         modifier = modifier,
     )
 }

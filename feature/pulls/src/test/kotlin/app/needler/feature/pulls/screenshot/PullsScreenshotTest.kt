@@ -548,6 +548,7 @@ class PullsScreenshotTest {
             onRefreshLane = {},
             onLoadMoreHistory = {},
             onRetryRequest = {},
+            onOpenSearch = {},
         )
     }
 

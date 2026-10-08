@@ -31,8 +31,8 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import app.needler.core.design.component.AsyncAlbumArt
 import app.needler.core.design.component.NeedlerAlbumRow
+import app.needler.core.design.component.NeedlerArtwork
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerMoreIcon
@@ -55,7 +55,7 @@ import app.needler.feature.library.common.LibraryFormat
  * ## One list, three sync states
  *
  * A row says what the server knows about it in its own subtitle rather than in a
- * badge column: "12 tracks · 48 min · Not sent yet". That is a deliberate
+ * badge column: "12 tracks, 48 min, Not sent yet". That is a deliberate
  * trade. A badge beside the overflow button reads better on a wide screen and
  * squeezes the title to nothing at 200% text on a phone, which REQUIREMENTS.md
  * "Accessibility" does not allow; the subtitle wraps instead. The full sentence —
@@ -288,8 +288,13 @@ private fun PlaylistRow(
         showDivider = true,
         contentDescription = playlistRowDescription(playlist),
         artwork = {
-            AsyncAlbumArt(
+            // Keyed on the id rather than the name, and drawn through the placeholder layer, so a
+            // playlist with no cover is a tinted letter rather than an empty square; see
+            // `PlaylistArtwork` on the detail screen for the whole of why.
+            NeedlerArtwork(
                 model = playlist.artwork,
+                identity = playlist.id.value,
+                name = playlist.name,
                 contentDescription = null,
                 modifier = Modifier.size(NeedlerTheme.sizes.artworkRow),
                 shape = NeedlerTheme.shapes.artworkThumb,

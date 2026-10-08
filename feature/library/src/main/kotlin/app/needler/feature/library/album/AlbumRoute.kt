@@ -58,5 +58,6 @@ fun AlbumRoute(
         modifier = modifier,
         onOverrideQuality = viewModel::onOverrideQuality,
         onClearQualityOverride = viewModel::onClearQualityOverride,
+        onReload = viewModel::reload,
     )
 }

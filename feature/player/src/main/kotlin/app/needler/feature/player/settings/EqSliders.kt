@@ -133,6 +133,28 @@ fun EqBandSlider(
                     .clip(NeedlerTheme.shapes.progress)
                     .background(colors.progressTrack),
             )
+            // 0 dB, drawn.
+            //
+            // The card's whole claim is that ten sliders read as one curve, and a curve needs a line
+            // to be a curve *about*. There was none: the fill below already grows from the centre of
+            // the track, so the information was in the drawing, but a reader had to infer where the
+            // centre was by eye across ten 4 dp tracks - and the only figure on screen was the
+            // readout at the top of the column, up to 220 dp away from the thumb it describes.
+            //
+            // One tick per band rather than one rule across the card. The ten of them sit at the same
+            // height and read as a dashed line, and each one's position is arithmetic on its own
+            // track rather than a guess at where the card's padding, the readout and the gap have
+            // left the centre. Drawn before the fill, so a boosted band's bar crosses it.
+            //
+            // Decorative: the column already speaks its gain, and "0 decibels" is where the fill
+            // starts from in the spoken form too.
+            Box(
+                modifier = Modifier
+                    .offset(y = trackHeight / 2 - ZERO_LINE_THICKNESS / 2)
+                    .width(thumb)
+                    .height(ZERO_LINE_THICKNESS)
+                    .background(colors.textMuted),
+            )
             // The bar between 0 dB and the thumb. Drawn from whichever of the two is higher.
             val centreFraction = 0.5f
             val top: Float = minOf(fromTop, centreFraction)
@@ -194,7 +216,7 @@ fun PreampSlider(
             Text(
                 text = "Preamp",
                 style = NeedlerTheme.typography.body,
-                color = if (enabled) colors.textPrimary else colors.textMuted,
+                color = if (enabled) colors.textPrimary else colors.disabled,
             )
             Text(
                 text = gainLabel(clamped) + " dB",
@@ -272,6 +294,9 @@ fun PreampSlider(
         }
     }
 }
+
+/** The 0 dB reference across the band card: a hairline in the literal sense, 1 dp. */
+private val ZERO_LINE_THICKNESS: Dp = 1.dp
 
 /** `+2`, `0`, `-1` - the readout above each band, rounded to whole decibels as the pack prints it. */
 fun gainLabel(gainDb: Float): String {

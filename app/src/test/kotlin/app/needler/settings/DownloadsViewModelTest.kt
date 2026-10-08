@@ -80,7 +80,8 @@ class DownloadsViewModelTest {
         subscribe(viewModel)
 
         assertTrue(viewModel.state.value.isEmpty)
-        assertEquals("Nothing is downloaded to this device.", viewModel.state.value.summary)
+        // No header figure: the empty state says it once, in words, at heading size.
+        assertEquals("", viewModel.state.value.summary)
     }
 
     // ---- removal -------------------------------------------------------------
@@ -109,8 +110,25 @@ class DownloadsViewModelTest {
 
         viewModel.onRemove(THREE_ALBUMS[0])
 
-        assertEquals("Removed Submarine: 12 tracks, 1.1 GB freed.", viewModel.state.value.notice)
+        val notice: DownloadsNotice? = viewModel.state.value.notice
+        assertEquals("Removed Submarine", notice?.headline)
+        assertEquals("12 tracks deleted, 1.1 GB freed.", notice?.detail)
     }
+
+    @Test
+    fun `a removal that deleted bytes offers to put the album back, and is marked destructive`() =
+        runTest {
+            // The one red thing on the screen, and the only way back from an action the screen's own
+            // copy calls irreversible.
+            val viewModel = DownloadsViewModel(pins)
+            subscribe(viewModel)
+
+            viewModel.onRemove(THREE_ALBUMS[0])
+
+            val notice: DownloadsNotice? = viewModel.state.value.notice
+            assertEquals(THREE_ALBUMS[0], notice?.undo)
+            assertTrue("bytes left the device, so this is the destructive notice", notice!!.destructive)
+        }
 
     @Test
     fun `the removed album leaves the list`() = runTest {
@@ -137,10 +155,12 @@ class DownloadsViewModelTest {
 
         viewModel.onRemove(THREE_ALBUMS[2])
 
-        assertEquals(
-            "Removed Fetch the Bolt Cutters. None of it was on this device.",
-            viewModel.state.value.notice,
-        )
+        val notice: DownloadsNotice? = viewModel.state.value.notice
+        assertEquals("Removed Fetch the Bolt Cutters", notice?.headline)
+        assertEquals("None of it had reached this device, so nothing was freed.", notice?.detail)
+        // Nothing was lost, so this one is not drawn in the destructive colour. That is what keeps
+        // the colour meaning "bytes are gone" rather than "something happened".
+        assertFalse(notice!!.destructive)
     }
 
     @Test
@@ -151,11 +171,14 @@ class DownloadsViewModelTest {
 
         viewModel.onRemove(THREE_ALBUMS[0])
 
+        val notice: DownloadsNotice? = viewModel.state.value.notice
+        assertEquals("Could not remove Submarine", notice?.headline)
         assertEquals(
-            "Could not remove Submarine. Your sign-in has expired. Sign in again to restore " +
-                "search and pulls.",
-            viewModel.state.value.notice,
+            "Your sign-in has expired. Sign in again to restore search and pulls.",
+            notice?.detail,
         )
+        // Nothing to undo: the album never left.
+        assertEquals(null, notice?.undo)
         assertEquals(3, viewModel.state.value.albums.size)
     }
 
@@ -169,7 +192,20 @@ class DownloadsViewModelTest {
         subscribe(viewModel)
 
         viewModel.onRemove(THREE_ALBUMS[0])
-        assertTrue("the first removal is in flight", viewModel.state.value.working)
+        assertEquals(
+            "the row in flight is named, not just flagged",
+            THREE_ALBUMS[0].releaseGroupMbid,
+            viewModel.state.value.removing,
+        )
+        assertEquals(
+            DownloadedRowState.Removing,
+            viewModel.state.value.rowState(THREE_ALBUMS[0]),
+        )
+        assertEquals(
+            "the rows that are not going are not marked as going",
+            DownloadedRowState.Idle,
+            viewModel.state.value.rowState(THREE_ALBUMS[1]),
+        )
         assertFalse("remove controls stop responding while one is running", viewModel.state.value.canRemove)
 
         viewModel.onRemove(THREE_ALBUMS[1])
@@ -180,7 +216,100 @@ class DownloadsViewModelTest {
         )
 
         gate.complete(Unit)
-        assertFalse(viewModel.state.value.working)
+        assertEquals(null, viewModel.state.value.removing)
+    }
+
+    // ---- undo ----------------------------------------------------------------
+
+    @Test
+    fun `undo re-pins the album the notice names, and the row comes back`() = runTest {
+        val viewModel = DownloadsViewModel(pins)
+        subscribe(viewModel)
+
+        viewModel.onRemove(THREE_ALBUMS[0])
+        val undo: DownloadedAlbum = viewModel.state.value.notice!!.undo!!
+        viewModel.onUndo(undo)
+
+        assertEquals(listOf(THREE_ALBUMS[0].releaseGroupMbid), pins.pinned)
+        assertTrue(
+            "the album is back on the list",
+            viewModel.state.value.albums.any { it.title == "Submarine" },
+        )
+    }
+
+    @Test
+    fun `a finished undo says the server is sending it again, and offers nothing further`() =
+        runTest {
+            // Never "restored". The bytes were deleted when the removal reported what it freed, and
+            // what comes back comes over the network - which is what the screen's own explainer says
+            // is the only way back.
+            val viewModel = DownloadsViewModel(pins)
+            subscribe(viewModel)
+
+            viewModel.onRemove(THREE_ALBUMS[0])
+            viewModel.onUndo(viewModel.state.value.notice!!.undo!!)
+
+            val notice: DownloadsNotice? = viewModel.state.value.notice
+            assertEquals("Submarine is back on the list", notice?.headline)
+            assertEquals("The server is sending it to this device again.", notice?.detail)
+            assertEquals(null, notice?.undo)
+            assertFalse(notice!!.destructive)
+        }
+
+    @Test
+    fun `an undo that failed says why and keeps offering itself`() = runTest {
+        pins.pinOutcome = Outcome.Failure(NeedlerError.DownloadForbidden)
+        val viewModel = DownloadsViewModel(pins)
+        subscribe(viewModel)
+
+        viewModel.onRemove(THREE_ALBUMS[0])
+        val undo: DownloadedAlbum = viewModel.state.value.notice!!.undo!!
+        viewModel.onUndo(undo)
+
+        val notice: DownloadsNotice? = viewModel.state.value.notice
+        assertEquals("Could not put Submarine back", notice?.headline)
+        assertEquals("This server does not allow downloads for your account.", notice?.detail)
+        assertEquals("trying again is all the user can do from here", undo, notice?.undo)
+    }
+
+    @Test
+    fun `no removal starts while an undo is putting an album back`() = runTest {
+        // Both talk to the same repository about the same files. A removal fired under a restore
+        // would race it, and the loser would be reported as the winner.
+        val gate = CompletableDeferred<Unit>()
+        val viewModel = DownloadsViewModel(pins)
+        subscribe(viewModel)
+
+        viewModel.onRemove(THREE_ALBUMS[0])
+        pins.pinGate = gate
+        viewModel.onUndo(viewModel.state.value.notice!!.undo!!)
+        assertTrue("the undo is in flight", viewModel.state.value.undoing)
+        assertFalse(viewModel.state.value.canRemove)
+
+        viewModel.onRemove(THREE_ALBUMS[1])
+        assertEquals(
+            "the second album never reached the repository",
+            listOf(THREE_ALBUMS[0].releaseGroupMbid),
+            pins.unpinned,
+        )
+
+        gate.complete(Unit)
+        assertFalse(viewModel.state.value.undoing)
+    }
+
+    // ---- dismissing ----------------------------------------------------------
+
+    @Test
+    fun `dismissing clears the notice, so the Undo stops waiting to be hit`() = runTest {
+        val viewModel = DownloadsViewModel(pins)
+        subscribe(viewModel)
+
+        viewModel.onRemove(THREE_ALBUMS[0])
+        assertTrue(viewModel.state.value.notice != null)
+
+        viewModel.onDismissNotice()
+
+        assertEquals(null, viewModel.state.value.notice)
     }
 
     /**

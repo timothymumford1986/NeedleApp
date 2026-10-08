@@ -144,7 +144,12 @@ fun NowPlayingScreen(
                     artistName = state.item?.track?.artistName,
                     playing = state.isPlaying,
                     metrics = ArtworkOnRecordMetrics.phone(),
-                    emptyLabel = if (state.hasTrack) null else "Nothing playing",
+                    // The sleeve carried "Nothing playing" and the title under it carried
+                    // "Nothing playing", so the idle player said the same two words twice,
+                    // 400 px apart, and neither said what to do next. The title keeps the
+                    // phrase - it is the heading, and the one a screen reader reaches - and
+                    // the sleeve goes back to being an empty sleeve, which already reads as one.
+                    emptyLabel = null,
                 )
             }
 
@@ -210,15 +215,17 @@ fun NowPlayingScreen(
                 onClearRung = onClearQualityOverride,
             )
 
-            Scrubber(
-                progress = progress,
-                durationMs = state.durationMs,
-                onSeek = onSeek,
-                enabled = state.hasTrack,
-            )
-
             // Playback first: a track that will not play is the more urgent of the two, and a
             // refused star is still true on the next frame.
+            //
+            // Above the scrubber, not below it. It used to sit between the scrubber and the
+            // transport, which put a line of red prose through the middle of the two controls that
+            // belong together and pushed the transport - and with it the output chip - down the
+            // screen: measured, `player-now-playing-error-phone.png` ends at row 1638 against the
+            // default golden's 1560. The output chip is the first thing a listener reaches for when
+            // the server is unreachable, so the failure must not be what displaces it; up here the
+            // line belongs to the track it is about, which is named directly above it, and the
+            // scrubber, the transport and the chips stay one uninterrupted block.
             val error: String? = state.errorMessage ?: state.favouriteErrorMessage
             if (error != null) {
                 Text(
@@ -230,6 +237,13 @@ fun NowPlayingScreen(
                         .semantics { liveRegion = LiveRegionMode.Polite },
                 )
             }
+
+            Scrubber(
+                progress = progress,
+                durationMs = state.durationMs,
+                onSeek = onSeek,
+                enabled = state.hasTrack,
+            )
 
             TransportRow(
                 isPlaying = state.isPlaying,

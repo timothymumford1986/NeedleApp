@@ -3,6 +3,8 @@
 package app.needler.feature.library.playlists
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -45,18 +49,22 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import app.needler.core.design.component.AsyncAlbumArt
 import app.needler.core.design.component.NeedlerAlbumRow
+import app.needler.core.design.component.NeedlerArtwork
 import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerCheckIcon
+import app.needler.core.design.component.NeedlerHairline
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerMoreIcon
+import app.needler.core.design.component.NeedlerNowPlayingIcon
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerSearchField
 import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerStrokeIcon
+import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.PathChevronLeft
 import app.needler.core.design.component.PathPlay
 import app.needler.core.design.component.albumArtContentDescription
@@ -64,7 +72,6 @@ import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Playlist
 import app.needler.core.domain.model.Track
 import app.needler.feature.library.common.LibraryFormat
-import app.needler.feature.library.library.LibraryTrackRow
 
 /**
  * One playlist: its header, its actions and its tracks, editable in place.
@@ -114,6 +121,7 @@ fun PlaylistScreen(
     onRemoveTrack: (PlaylistTrack) -> Unit,
     onMoveUp: (PlaylistTrack) -> Unit,
     onMoveDown: (PlaylistTrack) -> Unit,
+    onRetryTrack: (PlaylistTrack) -> Unit,
     onAddTracksClick: () -> Unit,
     onPickerQueryChange: (String) -> Unit,
     onToggleCandidate: (Track) -> Unit,
@@ -170,7 +178,7 @@ fun PlaylistScreen(
                 )
 
                 state.loading -> PlaylistSkeleton(gutter = gutter)
-                state.notFound -> PlaylistNotFound(gutter = gutter)
+                state.notFound -> PlaylistNotFound(gutter = gutter, onBack = onBack)
                 wide -> TabletPlaylist(
                     state = state,
                     gutter = gutter,
@@ -181,6 +189,8 @@ fun PlaylistScreen(
                     onRemoveTrack = onRemoveTrack,
                     onMoveUp = onMoveUp,
                     onMoveDown = onMoveDown,
+                    onRetryTrack = onRetryTrack,
+                    onAddTracksClick = onAddTracksClick,
                     onRenameNameChange = onRenameNameChange,
                     onRenameConfirm = onRenameConfirm,
                     onRenameCancel = onRenameCancel,
@@ -199,6 +209,8 @@ fun PlaylistScreen(
                     onRemoveTrack = onRemoveTrack,
                     onMoveUp = onMoveUp,
                     onMoveDown = onMoveDown,
+                    onRetryTrack = onRetryTrack,
+                    onAddTracksClick = onAddTracksClick,
                     onRenameNameChange = onRenameNameChange,
                     onRenameConfirm = onRenameConfirm,
                     onRenameCancel = onRenameCancel,
@@ -226,6 +238,8 @@ private fun PhonePlaylist(
     onRemoveTrack: (PlaylistTrack) -> Unit,
     onMoveUp: (PlaylistTrack) -> Unit,
     onMoveDown: (PlaylistTrack) -> Unit,
+    onRetryTrack: (PlaylistTrack) -> Unit,
+    onAddTracksClick: () -> Unit,
     onRenameNameChange: (String) -> Unit,
     onRenameConfirm: () -> Unit,
     onRenameCancel: () -> Unit,
@@ -277,9 +291,10 @@ private fun PhonePlaylist(
             onRemoveTrack = onRemoveTrack,
             onMoveUp = onMoveUp,
             onMoveDown = onMoveDown,
+            onRetryTrack = onRetryTrack,
         )
         if (state.isEmpty) {
-            item(key = "empty") { PlaylistEmptyTracks() }
+            item(key = "empty") { PlaylistEmptyTracks(onAddTracks = onAddTracksClick) }
         }
     }
 }
@@ -306,6 +321,8 @@ private fun TabletPlaylist(
     onRemoveTrack: (PlaylistTrack) -> Unit,
     onMoveUp: (PlaylistTrack) -> Unit,
     onMoveDown: (PlaylistTrack) -> Unit,
+    onRetryTrack: (PlaylistTrack) -> Unit,
+    onAddTracksClick: () -> Unit,
     onRenameNameChange: (String) -> Unit,
     onRenameConfirm: () -> Unit,
     onRenameCancel: () -> Unit,
@@ -362,9 +379,10 @@ private fun TabletPlaylist(
                 onRemoveTrack = onRemoveTrack,
                 onMoveUp = onMoveUp,
                 onMoveDown = onMoveDown,
+                onRetryTrack = onRetryTrack,
             )
             if (state.isEmpty) {
-                item(key = "empty") { PlaylistEmptyTracks() }
+                item(key = "empty") { PlaylistEmptyTracks(onAddTracks = onAddTracksClick) }
             }
         }
     }
@@ -423,14 +441,34 @@ private fun PlaylistTopBar(
     }
 }
 
+/**
+ * A playlist's cover.
+ *
+ * ## Why it is no longer a flat square
+ *
+ * `AsyncAlbumArt` alone degrades to `NeedlerColors.artworkPlaceholder`, the same grey as a pressed
+ * row, and no mapper resolves an `ArtworkRef` in any module below `:app` yet - so on every render
+ * in `screenshots/` a playlist's artwork is an empty box with nothing in it. On a tablet that box
+ * is about 280dp and is the first thing the eye reaches on the screen.
+ *
+ * [NeedlerArtwork] is the layer that already solves this for albums: the derived tint and the
+ * name's first letter underneath, the image over it when there is one. The identity is the
+ * playlist id rather than the name, for the reason that function gives - two playlists called
+ * "Jazz" should be two colours, and renaming one must not change its colour. A provisional
+ * `local-` id is a legal identity here and is replaced when the queue replays `createPlaylist`,
+ * which is the one case where a playlist does change colour; it is also the case where it changes
+ * id, so there is nothing stable to key on until the server has answered.
+ */
 @Composable
 private fun PlaylistArtwork(
     playlist: Playlist,
     modifier: Modifier,
     shape: Shape,
 ) {
-    AsyncAlbumArt(
+    NeedlerArtwork(
         model = playlist.artwork,
+        identity = playlist.id.value,
+        name = playlist.name,
         // A playlist has no artist, so the pack's "title by artist" alt text
         // collapses to the name — which `albumArtContentDescription` already does
         // for a null artist rather than printing "by null".
@@ -561,8 +599,17 @@ private fun PlaylistCardStack(
                 enabled = !state.busy,
             )
         }
-        if (state.offline) PlaylistOfflineNote()
-        state.syncState?.explanation?.let { PlaylistInfoCard(message = it) }
+        // One of the two, never both. `screenshots/playlist-not-sent-phone.png` stacked a
+        // "Not sent yet" badge, a 3-line offline card and a 2-line explanation card - 280dp
+        // saying one thing three times. The badge is the state's name and the card is what
+        // happens next; the generic offline note says the same "it reaches the server when you
+        // reconnect" in more words and is redundant the moment a pending state is on screen.
+        val pending: String? = state.syncState?.explanation
+        if (pending != null) {
+            PlaylistInfoCard(message = pending)
+        } else if (state.offline) {
+            PlaylistOfflineNote()
+        }
         if (state.isPartlyUnplayable) UnplayableNote(state)
     }
 }
@@ -580,7 +627,8 @@ private fun PlaylistCardStack(
 private fun UnplayableNote(state: PlaylistUiState) {
     val message: String = LibraryFormat.plural(state.unplayableEntries.size.toLong(), "track") +
         " in this playlist cannot be played: either the server has no file for it, or its album " +
-        "is not in this device's copy of the library yet. The rest plays normally."
+        "is not in the copy of your library on this device yet. Each one offers a retry, and the " +
+        "rest plays normally."
     PlaylistInfoCard(message = message)
 }
 
@@ -590,6 +638,7 @@ private fun LazyListScope.entryRows(
     onRemoveTrack: (PlaylistTrack) -> Unit,
     onMoveUp: (PlaylistTrack) -> Unit,
     onMoveDown: (PlaylistTrack) -> Unit,
+    onRetryTrack: (PlaylistTrack) -> Unit,
 ) {
     items(
         count = state.entries.size,
@@ -608,22 +657,43 @@ private fun LazyListScope.entryRows(
             onRemoveTrack = onRemoveTrack,
             onMoveUp = onMoveUp,
             onMoveDown = onMoveDown,
+            onRetryTrack = onRetryTrack,
         )
     }
 }
 
 /**
- * One track of the playlist.
+ * One track of the playlist: its position, its title, who made it, how long it is, and - when the
+ * server has no file for it - what is wrong and what to do about it.
  *
- * The row is the module's shared track row, so a playlist's list and an album's
- * list are the same rhythm, numbering and playing mark. What this adds is the
- * editing: an overflow menu with Move up, Move down and Remove, and the same three
- * as custom accessibility actions on the row so that TalkBack reaches them from
- * its local context menu without opening a menu at all.
+ * ## Why this is no longer `LibraryTrackRow`
  *
- * Move up is absent on the first row and Move down on the last, in both the menu
- * and the actions — an action that cannot do anything is worse than no action,
- * because a screen reader still offers it.
+ * Three findings met in this row and the shared track row could carry none of them.
+ *
+ * **A playlist row named no artist.** `screenshots/playlist-holes-phone.png` is an index, a title
+ * and a duration, which is album detail's row - and album detail can leave the artist out because
+ * the screen above the list already names them. A playlist is the one list in the app that is
+ * cross-artist by definition, so the one row that most needed the name was the row without it. The
+ * genre row is the right shape and this is now the same shape: title, artist and album, duration.
+ *
+ * **Greying was the only mark on an unplayable row, and there was no retry.** REQUIREMENTS.md
+ * "Partial content is a normal state" asks for both - missing tracks "listed in their right
+ * positions, greyed, each with a retry" - and REQUIREMENTS.md "Accessibility" does not accept
+ * colour as the only carrier of a state in any case. The row keeps the greying and adds the words
+ * and the action beside them; see [MissingTrackLine].
+ *
+ * **The playing mark moved between screens.** Here it replaced the index, so a playlist read
+ * 1, 2, dot, 4, 5 and lost its numbering at the one row the eye goes to; on the genre screen and
+ * the Songs tab the same mark sits on the right and the row keeps everything else. Two conventions
+ * for one fact, and this was the one that destroyed information, so this is the one that moved.
+ * `NeedlerTrackRow` swaps the index for the glyph internally and cannot be told not to; wanting it
+ * to is in the handover notes, with album detail as the other caller.
+ *
+ * The editing is unchanged: an overflow menu with Move up, Move down and Remove, and the same
+ * three as custom accessibility actions on the row so that TalkBack reaches them from its local
+ * context menu without opening a menu at all. Move up is absent on the first row and Move down on
+ * the last, in both the menu and the actions - an action that cannot do anything is worse than no
+ * action, because a screen reader still offers it.
  */
 @Composable
 private fun PlaylistEntryRow(
@@ -637,10 +707,15 @@ private fun PlaylistEntryRow(
     onRemoveTrack: (PlaylistTrack) -> Unit,
     onMoveUp: (PlaylistTrack) -> Unit,
     onMoveDown: (PlaylistTrack) -> Unit,
+    onRetryTrack: (PlaylistTrack) -> Unit,
 ) {
+    val colors = NeedlerTheme.colors
+    val typography = NeedlerTheme.typography
     var menuOpen: Boolean by remember { mutableStateOf(false) }
     val canMoveUp: Boolean = canReorder && !isFirst && !busy
     val canMoveDown: Boolean = canReorder && !isLast && !busy
+    val title: String = LibraryFormat.trackTitle(row.track.title)
+    val subtitle: String = LibraryFormat.songRowSubtitle(row.track)
     val actions: List<CustomAccessibilityAction> = buildList {
         if (canMoveUp) {
             add(CustomAccessibilityAction("Move up in this playlist") { onMoveUp(row); true })
@@ -652,43 +727,167 @@ private fun PlaylistEntryRow(
             add(CustomAccessibilityAction("Remove from this playlist") { onRemoveTrack(row); true })
         }
     }
+    val spoken: String = buildString {
+        append(row.displayNumber.toString())
+        append(". ")
+        append(title)
+        if (subtitle.isNotEmpty()) {
+            append(", ")
+            append(subtitle.replace(SUBTITLE_SEPARATOR, ", "))
+        }
+        LibraryFormat.spokenDuration(row.track.durationMs)?.let {
+            append(", ")
+            append(it)
+        }
+        if (isPlaying) append(", playing")
+        if (!row.available) append(", " + MISSING_TRACK)
+    }
 
-    Box {
-        LibraryTrackRow(
-            index = row.displayNumber,
-            track = row.track,
-            isPlaying = isPlaying,
-            available = row.available,
-            onClick = { onPlayTrack(row) },
-            onMoreClick = { menuOpen = true },
-            modifier = Modifier.semantics {
-                if (actions.isNotEmpty()) customActions = actions
-            },
-        )
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            if (row.available) {
-                PlaylistMenuItem(label = "Play", enabled = !busy) {
-                    menuOpen = false
-                    onPlayTrack(row)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = NeedlerTheme.sizes.trackRowMinHeight)
+                .then(
+                    if (row.available) {
+                        Modifier.clickable(role = Role.Button) { onPlayTrack(row) }
+                    } else {
+                        Modifier
+                    },
+                )
+                .semantics(mergeDescendants = true) {
+                    contentDescription = spoken
+                    if (actions.isNotEmpty()) customActions = actions
+                }
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                // A fixed column, as the shared track row draws it, so the titles line up down the
+                // list however many digits a position has.
+                text = row.displayNumber.toString(),
+                style = typography.trackIndex,
+                color = colors.textMuted,
+                modifier = Modifier.width(18.dp),
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = if (isPlaying) typography.rowTitle else typography.rowTitleRegular,
+                    color = when {
+                        isPlaying -> colors.accent
+                        !row.available -> colors.textMuted
+                        else -> colors.textPrimary
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (subtitle.isNotEmpty()) {
+                    Text(
+                        text = subtitle,
+                        style = typography.meta,
+                        color = if (row.available) colors.textSecondary else colors.textMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (!row.available) {
+                    MissingTrackLine(busy = busy, onRetry = { onRetryTrack(row) })
                 }
             }
-            if (canReorder) {
-                PlaylistMenuItem(label = "Move up", enabled = canMoveUp) {
-                    menuOpen = false
-                    onMoveUp(row)
-                }
-                PlaylistMenuItem(label = "Move down", enabled = canMoveDown) {
-                    menuOpen = false
-                    onMoveDown(row)
-                }
+            // On the right, where the genre screen and the Songs tab put it, so the row keeps its
+            // number. See this function's notes.
+            if (isPlaying) NeedlerNowPlayingIcon(tint = colors.accent)
+            LibraryFormat.duration(row.track.durationMs)?.let { duration ->
+                Text(text = duration, style = typography.duration, color = colors.textMuted)
             }
-            PlaylistMenuItem(label = "Remove from playlist", enabled = !busy, destructive = true) {
-                menuOpen = false
-                onRemoveTrack(row)
+            Box {
+                NeedlerIconButton(
+                    contentDescription = "More actions for " + title,
+                    onClick = { menuOpen = true },
+                    visualSize = 36.dp,
+                ) {
+                    NeedlerMoreIcon(tint = colors.textMuted)
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (row.available) {
+                        PlaylistMenuItem(label = "Play", enabled = !busy) {
+                            menuOpen = false
+                            onPlayTrack(row)
+                        }
+                    }
+                    if (canReorder) {
+                        PlaylistMenuItem(label = "Move up", enabled = canMoveUp) {
+                            menuOpen = false
+                            onMoveUp(row)
+                        }
+                        PlaylistMenuItem(label = "Move down", enabled = canMoveDown) {
+                            menuOpen = false
+                            onMoveDown(row)
+                        }
+                    }
+                    PlaylistMenuItem(
+                        label = "Remove from playlist",
+                        enabled = !busy,
+                        destructive = true,
+                    ) {
+                        menuOpen = false
+                        onRemoveTrack(row)
+                    }
+                }
             }
         }
+        NeedlerHairline()
     }
 }
+
+/**
+ * What an unplayable row says, and the one thing that can change it.
+ *
+ * The words are the second channel the greying needed: REQUIREMENTS.md "Accessibility" forbids
+ * colour as the only means, and the muted grey it is drawn in measures 4.21:1 on the canvas, so a
+ * reader who does not already know what a dimmed row means has nothing at all to read.
+ *
+ * The retry asks the server for the album again - `PullRepository.retryRequest`, the same call the
+ * Pulls screen's Retry makes - because that is the only thing that can produce the file. A track
+ * whose album the mirror has merely lost sight of comes back on the next sync, and the user cannot
+ * be expected to know which of the two they are looking at; that is why
+ * [PlaylistUiState.unplayableEntries] does not distinguish them either, and why asking again is
+ * the right offer in both cases.
+ */
+@Composable
+private fun MissingTrackLine(busy: Boolean, onRetry: () -> Unit) {
+    val colors = NeedlerTheme.colors
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = MISSING_TRACK,
+            style = NeedlerTheme.typography.caption,
+            color = colors.textMuted,
+            maxLines = 2,
+            modifier = Modifier.weight(1f),
+        )
+        NeedlerTextButton(
+            text = "Retry",
+            onClick = onRetry,
+            enabled = !busy,
+            contentDescription = "Ask the server for this track's album again",
+        )
+    }
+}
+
+/** What a row with no file behind it is called, on screen and aloud. */
+private const val MISSING_TRACK: String = "The server has no file for this"
+
+/** The separator `LibraryFormat` joins a row subtitle with, swapped for a comma when spoken. */
+private const val SUBTITLE_SEPARATOR: String = " · "
 
 // ---------------------------------------------------------------------------
 // Adding tracks
@@ -767,8 +966,8 @@ private fun TrackPickerPane(
             }
             if (!picker.hasQuery) {
                 Text(
-                    text = "Type to find songs in the copy of your library on this device. This " +
-                        "works with no connection.",
+                    text = "Type to find songs in the copy of your library on this device. " +
+                        "This works with no connection.",
                     style = typography.caption,
                     color = colors.textSecondary,
                 )
@@ -806,11 +1005,24 @@ private fun TrackPickerPane(
 /**
  * One search result, tickable.
  *
- * The chosen state is carried three ways, because colour alone is no signal at all
- * to a reader who cannot separate the palette's green from its off-white: the check
- * glyph, the `selected` semantics property, and the word in the spoken description.
- * The whole row is the target, not the glyph — it is already 64dp tall and a 16dp
- * tick would fail REQUIREMENTS.md's 48dp minimum.
+ * ## The list has to look selectable before anything is selected
+ *
+ * It drew a tick on a chosen row and nothing at all on the others, so a user arriving at
+ * `screenshots/playlist-add-tracks-empty-phone.png` saw an ordinary list of songs with no sign
+ * that tapping one would choose rather than play it - the affordance only appeared after the
+ * gesture that needed it. Every row now carries the control in one of its two states: an empty
+ * hairline circle, or a filled one with the check. That is the one channel that was missing;
+ * `selected` in the semantics tree and the word in the spoken description were already there.
+ *
+ * ## And it is not the device green
+ *
+ * The tick was `positive`, which REQUIREMENTS.md "Vocabulary" gives to
+ * [app.needler.core.design.component.NeedlerAlbumSource.Device] and nothing else - so on a screen
+ * listing tracks, the colour that means "on this device" was being used to mean "I picked this
+ * one". The accent is the app's ordinary selection colour and carries no state of its own.
+ *
+ * The whole row is the target, not the circle: the row is already 64dp tall and a 20dp glyph would
+ * fail REQUIREMENTS.md's 48dp minimum.
  */
 @Composable
 private fun CandidateRow(
@@ -820,15 +1032,19 @@ private fun CandidateRow(
 ) {
     val colors = NeedlerTheme.colors
     val subtitle: String = LibraryFormat.songRowSubtitle(track)
+    val title: String = LibraryFormat.trackTitle(track.title)
+    val duration: String? = LibraryFormat.duration(track.durationMs)
     NeedlerAlbumRow(
-        title = track.title,
+        title = title,
         subtitle = subtitle,
         onClick = { onToggle(track) },
         showDivider = true,
         contentDescription = buildString {
-            append(track.title)
-            append(", ")
-            append(subtitle)
+            append(title)
+            if (subtitle.isNotEmpty()) {
+                append(", ")
+                append(subtitle.replace(SUBTITLE_SEPARATOR, ", "))
+            }
             LibraryFormat.spokenDuration(track.durationMs)?.let {
                 append(", ")
                 append(it)
@@ -837,14 +1053,58 @@ private fun CandidateRow(
         },
         modifier = Modifier.semantics { selected = chosen },
         trailing = {
-            if (chosen) NeedlerCheckIcon(tint = colors.positive, size = 20.dp)
+            // The duration is what tells two songs of the same name apart, and the button above
+            // this list counts in tracks, so the rows have to be countable things.
+            if (duration != null) {
+                Text(
+                    text = duration,
+                    style = NeedlerTheme.typography.duration,
+                    color = colors.textMuted,
+                )
+            }
+            SelectionMark(chosen = chosen)
         },
     )
 }
 
-/** A playlist with nothing in it, which is what a freshly created one is. */
+/** The chosen-or-not control on a picker row. See [CandidateRow] for why it is always drawn. */
 @Composable
-private fun PlaylistEmptyTracks() {
+private fun SelectionMark(chosen: Boolean) {
+    val colors = NeedlerTheme.colors
+    Box(
+        modifier = Modifier
+            .size(22.dp)
+            .clip(NeedlerTheme.shapes.circle)
+            .then(
+                if (chosen) {
+                    Modifier.background(colors.accent)
+                } else {
+                    Modifier.border(
+                        width = NeedlerTheme.sizes.hairlineThickness,
+                        color = colors.textMuted,
+                        shape = NeedlerTheme.shapes.circle,
+                    )
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (chosen) NeedlerCheckIcon(tint = colors.onAccent, size = 14.dp)
+    }
+}
+
+/**
+ * A playlist with nothing in it, which is what a freshly created one is.
+ *
+ * ## Why the copy stopped naming a control
+ *
+ * It read "Add tracks with the more-actions button at the top of this screen", which asks the user
+ * to map a developer's name for a control onto an unlabelled three-dot glyph about 600dp away, at
+ * the opposite corner of the screen from the sentence pointing at it. The button is here instead.
+ * It opens the same picker the overflow item does - one callback, so the two cannot come to mean
+ * different things - and the overflow keeps its item for the case this empty state is not drawn.
+ */
+@Composable
+private fun PlaylistEmptyTracks(onAddTracks: () -> Unit) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     Column(
@@ -861,16 +1121,32 @@ private fun PlaylistEmptyTracks() {
             modifier = Modifier.semantics { heading() },
         )
         Text(
-            text = "Add tracks with the more-actions button at the top of this screen, or from " +
-                "any album.",
+            text = "Add songs from the copy of your library on this device, or from any album.",
             style = typography.caption,
             color = colors.textSecondary,
+        )
+        Spacer(modifier = Modifier.height(NeedlerTheme.spacing.step4))
+        NeedlerPrimaryButton(
+            text = "Add tracks",
+            onClick = onAddTracks,
+            size = NeedlerButtonSize.Medium,
+            contentDescription = "Add tracks to this playlist",
         )
     }
 }
 
+/**
+ * The playlist this screen was opened for is not in the local copy of the library.
+ *
+ * Two repairs. The copy said "the mirror on this device", which is the data layer's word for the
+ * local store and appears nowhere a user can learn it; every screen in this module now says "the
+ * copy of your library on this device", which is what the picker and the offline notes already
+ * said. And the screen was a heading, a paragraph and about 1400px of nothing - a dead end with no
+ * control on it at all, on a screen whose back button is a 24dp glyph in the top corner. The way
+ * back is a button now, because a dead end is the one state that most needs one.
+ */
 @Composable
-private fun PlaylistNotFound(gutter: Dp) {
+private fun PlaylistNotFound(gutter: Dp, onBack: () -> Unit) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     Column(
@@ -887,10 +1163,16 @@ private fun PlaylistNotFound(gutter: Dp) {
             modifier = Modifier.semantics { heading() },
         )
         Text(
-            text = "It is not in the mirror on this device. It may have been deleted on the " +
-                "server, or on another client.",
+            text = "It is not in the copy of your library on this device. It may have been " +
+                "deleted on the server, or on another client.",
             style = typography.body,
             color = colors.textSecondary,
+        )
+        Spacer(modifier = Modifier.height(NeedlerTheme.spacing.step6))
+        NeedlerPrimaryButton(
+            text = "Back to playlists",
+            onClick = onBack,
+            size = NeedlerButtonSize.Medium,
         )
     }
 }

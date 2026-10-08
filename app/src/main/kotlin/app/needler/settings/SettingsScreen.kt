@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
@@ -144,6 +146,35 @@ data class SettingsCallbacks(
  * | Storage | Storage | Rewritten: no budget, usage split by tier, albums listed and removable |
  * | *(legal block)* | About | Gains the version row; the rest is the pack's copy verbatim |
  *
+ * ## One rule for what a row looks like
+ *
+ * Screen 12 carried five interaction idioms with no rule between them - a static value, a value with
+ * a chevron, a value with no chevron that was nonetheless tappable, a switch, and blue text links -
+ * so nothing on the screen told a user which rows did anything. That is the fault that let the inert
+ * `Stream quality` row ship: a control that did not look like one, sitting beside rows that were not
+ * controls and looked identical.
+ *
+ * There are four shapes now, and each one means exactly one thing:
+ *
+ * | Shape | Means | Drawn with |
+ * | --- | --- | --- |
+ * | Label, value, **chevron** | tapping opens or expands something | `NeedlerSettingsRow` with `onClick` |
+ * | Label, value, **no chevron** | reports a fact; nothing happens on tap | `NeedlerSettingsRow` with no `onClick` |
+ * | Label and a switch | a setting with two states, changed in place | `NeedlerToggleRow` |
+ * | Accent text on its own | performs an action here and now | `NeedlerTextButton` |
+ *
+ * The rule that follows from the table is the one worth stating: **a row that does something carries
+ * a chevron, and a row with no chevron is not tappable.** `NeedlerSettingsRow` already defaults
+ * `showChevron` to `onClick != null`, so the rule holds by default and can only be broken by passing
+ * `showChevron` explicitly - which nothing in this file does any more. `Check for updates` did, and
+ * it has become a text button, which is what it always was: it performs an action rather than
+ * leading anywhere, so it belongs with `Sync now` and `Clear cached music` rather than among the
+ * rows that open screens.
+ *
+ * The rejected alternative was giving the chevron to every tappable row, including the actions. That
+ * reads as "this opens a screen" on six controls that change something in place, and it would have
+ * put a chevron on `Remove all from device`.
+ *
  * ## Why this is a LazyColumn, and what bounds the one section that was unbounded
  *
  * Everything on this screen is a fixed handful of rows except one section. REQUIREMENTS.md "Storage,
@@ -174,6 +205,14 @@ data class SettingsCallbacks(
  * transcription: at Medium and Expanded width the content is capped at [TABLET_CONTENT_MAX_WIDTH]
  * and centred. Settings rows are a label at one end and a control at the other, and stretching that
  * pair across a 1280dp pane puts half a metre between a switch and the word that says what it does.
+ *
+ * @param listState the scroll position. A parameter rather than a `rememberLazyListState()` buried
+ *   in the body because three of this screen's states - the low-space warning, the armed
+ *   "Remove all from device" confirmation and the album list - render below the fold on the pack's
+ *   390x844 artboard, so a screenshot taken at the top of the list cannot see any of them. Two
+ *   goldens were byte-identical to `settings-phone.png` for exactly that reason and asserted nothing
+ *   about the states they were named for. `SettingsScreenshotTest` now hands in a position; the app
+ *   takes the default and behaves as it did.
  */
 @Composable
 fun SettingsScreen(
@@ -181,6 +220,7 @@ fun SettingsScreen(
     callbacks: SettingsCallbacks,
     widthSizeClass: WindowWidthSizeClass,
     modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
 ) {
     val colors = NeedlerTheme.colors
     val spacing = NeedlerTheme.spacing
@@ -196,6 +236,7 @@ fun SettingsScreen(
         contentAlignment = Alignment.TopCenter,
     ) {
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .widthIn(max = if (wide) TABLET_CONTENT_MAX_WIDTH else Dp.Unspecified)
                 .fillMaxSize(),
@@ -371,6 +412,15 @@ private fun ServerSection(
     callbacks: SettingsCallbacks,
 ) {
     SettingsSection(title = "Server") {
+        // Above the rows, not below them. The expiry warning used to sit between "Diagnostics log"
+        // and "Sync now" in the dimmest grey the palette has, which made the most consequential
+        // sentence on the screen the hardest thing on it to read and the last thing reached. See
+        // SessionAlert.
+        val sessionNotice: String? = state.sessionNotice
+        if (sessionNotice != null) {
+            SessionAlert(text = sessionNotice, onSignInAgain = callbacks.onSignInAgain)
+        }
+
         NeedlerSettingsRow(label = state.hostLabel, value = state.username)
         NeedlerSettingsRow(label = "Last synced", value = state.lastSyncedLabel)
 
@@ -396,24 +446,67 @@ private fun ServerSection(
             NoticeLine(text = "No connection to the server. Everything on this device still plays.")
         }
 
-        val sessionNotice: String? = state.sessionNotice
-        if (sessionNotice != null) {
-            NoticeLine(text = sessionNotice, tone = NeedlerTheme.colors.textSecondary)
-            val signInAgain: (() -> Unit)? = callbacks.onSignInAgain
-            if (signInAgain != null) {
-                NeedlerTextButton(text = "Sign in again", onClick = signInAgain)
-            }
+        // Absent with no server, greyed while syncing. See ServerSectionState.showSyncNow for why
+        // those two are not the same state and must not look like it.
+        if (state.showSyncNow) {
+            NeedlerTextButton(
+                text = "Sync now",
+                onClick = callbacks.onSyncNow,
+                enabled = state.canSyncNow,
+            )
         }
-
-        NeedlerTextButton(
-            text = "Sync now",
-            onClick = callbacks.onSyncNow,
-            enabled = state.canSyncNow,
-        )
         val syncNotice: String? = state.syncNotice
         if (syncNotice != null) NoticeLine(text = syncNotice)
 
-        NeedlerTextButton(text = "Change server", onClick = callbacks.onChangeServer)
+        NeedlerTextButton(text = state.changeServerLabel, onClick = callbacks.onChangeServer)
+    }
+}
+
+/**
+ * The standing warning about this device's session, drawn as the thing it is.
+ *
+ * REQUIREMENTS.md requires the companion bearer be warned about "from day 25", and the warning this
+ * replaces was a caption in [app.needler.core.design.theme.NeedlerColors.textSecondary] wedged
+ * between two rows - lower contrast than the row labels either side of it, no container, no colour,
+ * and no action, on the one message on this screen that costs the user search and pulls if they
+ * ignore it.
+ *
+ * So it gets a raised surface, the body type the rows use, primary text, and the action it names.
+ * **The action is the point**: the sentence says "Sign in again" and until now the only live control
+ * on the screen was "Change server", which is a different promise - it asks for an address, and this
+ * user's address is fine. [SettingsCallbacks.onSignInAgain] goes to the same Connect screen, but the
+ * button agrees with the sentence that sent the user to it.
+ *
+ * The button is still absent when the host has not wired the callback, which is this file's standing
+ * rule about optional callbacks: the affordance disappears rather than sitting there doing nothing.
+ * The warning itself is unaffected, because the fact is true whether or not anything is wired.
+ *
+ * The rejected alternative was the destructive colour. It is reserved for things that delete, and an
+ * expiring session deletes nothing - the app keeps playing, browsing and favouriting throughout.
+ * Raising the contrast and giving it a container says "read this" without saying "something broke".
+ */
+@Composable
+private fun SessionAlert(text: String, onSignInAgain: (() -> Unit)?) {
+    val colors = NeedlerTheme.colors
+    val spacing = NeedlerTheme.spacing
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = spacing.step4)
+            .background(colors.surfaceRaised, NeedlerTheme.shapes.medium)
+            .padding(horizontal = spacing.step6, vertical = spacing.step4),
+    ) {
+        Text(
+            text = text,
+            style = NeedlerTheme.typography.body,
+            color = colors.textPrimary,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { liveRegion = LiveRegionMode.Polite },
+        )
+        if (onSignInAgain != null) {
+            NeedlerTextButton(text = "Sign in again", onClick = onSignInAgain)
+        }
     }
 }
 
@@ -443,7 +536,7 @@ private fun TrustedCertificateBlock(
 
     val fingerprint: String? = state.trustedCertificateFingerprint
     if (fingerprint != null) {
-        NoticeLine(text = fingerprint, tone = colors.textMuted)
+        NoticeLine(text = fingerprint, tone = colors.textSecondary)
     }
 
     val notice: String? = state.certificateNotice
@@ -540,11 +633,14 @@ private fun PlayingSection(
             // Nothing to choose between: without ffmpeg the server serves original bytes whatever it
             // is asked for. The row reports rather than offering, and carries no chevron, because a
             // chevron on a row that goes nowhere is the same lie as an inert tap target.
-            NeedlerSettingsRow(label = "Stream quality", value = "Original")
+            //
+            // The line under it is why there is one row here and two everywhere else. Without it the
+            // screen collapses two settings into one and says nothing - see
+            // PlayingSectionState.streamQualityStatement.
+            NeedlerSettingsRow(label = "Stream quality", value = "Original", showDivider = false)
+            NoticeLine(text = state.streamQualityStatement(serverConfigured))
+            NeedlerHairline()
         } else {
-            if (affordance == StreamQualityAffordance.PICKERS_UNCONFIRMED) {
-                NoticeLine(text = TRANSCODING_UNCONFIRMED)
-            }
             StreamRungRow(
                 label = "Stream quality on Wi-Fi",
                 selected = state.wifiRung,
@@ -556,6 +652,7 @@ private fun PlayingSection(
                 },
                 onSelect = callbacks.onWifiRungChange,
             )
+            val unconfirmed: Boolean = affordance == StreamQualityAffordance.PICKERS_UNCONFIRMED
             StreamRungRow(
                 label = "Stream quality on mobile data",
                 selected = state.dataRung,
@@ -566,7 +663,19 @@ private fun PlayingSection(
                         if (openPicker == StreamRungPicker.DATA) null else StreamRungPicker.DATA
                 },
                 onSelect = callbacks.onDataRungChange,
+                // The block's closing hairline moves below the paragraph, so the paragraph stays
+                // inside the block it belongs to instead of starting the next one.
+                showDivider = !unconfirmed,
             )
+            // Below the rows it is about, not above them. It used to sit between "Equaliser" and
+            // "Stream quality on Wi-Fi", which read as an explanation of the equaliser - while the
+            // cache paragraph 150px further down sat below its own row. Two conventions on one
+            // screen is no convention; this file now has one, and it is that an explanation follows
+            // the thing it explains.
+            if (unconfirmed) {
+                NoticeLine(text = TRANSCODING_UNCONFIRMED)
+                NeedlerHairline()
+            }
         }
         NeedlerToggleRow(
             label = state.scrobbleLabel,
@@ -610,6 +719,20 @@ private const val TRANSCODING_UNCONFIRMED: String =
  * @param notice the cache-cliff sentence for this rung, or null when the rung keeps its bytes. It sits
  *   on the row as a subtitle, where it is visible without opening the picker - the point of it is to
  *   be read by someone who is *not* currently thinking about caching.
+ *
+ *   It is drawn in [app.needler.core.design.theme.NeedlerColors.textSecondary], not `textMuted`, and
+ *   that is a decision about what the tier is *for* rather than about what it measures. `textMuted`
+ *   is the palette's dimmest text role - placeholders, timecodes, disabled labels - all of which are
+ *   short and none of which a user has to finish reading. This is the longest piece of prose on the
+ *   screen and the only explanation of why streaming at a lower rung builds no offline library, so it
+ *   is read end to end or it is wasted.
+ *
+ *   The same went for the rest of the long copy on these two screens: the certificate fingerprint, the
+ *   update-check result, the About disclaimer and the Downloaded-albums explainer were all on the
+ *   muted tier and are all on the secondary one now.
+ *
+ * @param showDivider false when the caller is drawing something after this row that belongs to the
+ *   same block, and will close the block itself.
  */
 @Composable
 private fun StreamRungRow(
@@ -619,6 +742,7 @@ private fun StreamRungRow(
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
     onSelect: (StreamRung) -> Unit,
+    showDivider: Boolean = true,
 ) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
@@ -627,13 +751,13 @@ private fun StreamRungRow(
             label = label,
             value = SettingsFormat.rung(selected),
             onClick = onToggleExpanded,
-            showDivider = notice == null && !expanded,
+            showDivider = showDivider && notice == null && !expanded,
         )
         if (notice != null) {
             Text(
                 text = notice,
                 style = typography.caption,
-                color = colors.textMuted,
+                color = colors.textSecondary,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
         }
@@ -655,7 +779,7 @@ private fun StreamRungRow(
                 }
             }
         }
-        if (notice != null || expanded) NeedlerHairline()
+        if (showDivider && (notice != null || expanded)) NeedlerHairline()
     }
 }
 
@@ -821,18 +945,19 @@ private fun AboutSection(
     SettingsSection(title = "About") {
         NeedlerSettingsRow(label = "Version", value = state.versionLabel, showDivider = true)
 
-        NeedlerSettingsRow(
-            label = "Check for updates",
+        // A button, not a row. This was the one row in the file that was tappable with no chevron,
+        // which is the idiom this screen's header rules out: it does something here and now rather
+        // than leading anywhere, so it is drawn the way "Sync now" and "Clear cached music" are.
+        NeedlerTextButton(
+            text = "Check for updates",
             onClick = onCheckForUpdates,
-            showChevron = false,
-            showDivider = false,
             enabled = state.updateCheck != UpdateCheckStatus.Checking,
         )
         state.updateCheck.message?.let { message ->
             Text(
                 text = message,
                 style = typography.caption,
-                color = colors.textMuted,
+                color = colors.textSecondary,
                 modifier = Modifier.padding(top = spacing.step2, bottom = spacing.step4),
             )
         }
@@ -853,10 +978,10 @@ private fun AboutSection(
                     append(NeedlerLegal.CREDITS_SUFFIX)
                 },
                 style = typography.caption,
-                color = colors.textMuted,
+                color = colors.textSecondary,
             )
             NeedlerLegal.disclaimer.forEach { paragraph ->
-                Text(text = paragraph, style = typography.caption, color = colors.textMuted)
+                Text(text = paragraph, style = typography.caption, color = colors.textSecondary)
             }
             if (onOpenLicences != null) {
                 NeedlerTextButton(text = "Licences and full terms", onClick = onOpenLicences)

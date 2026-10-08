@@ -114,8 +114,21 @@ internal object SampleGenres {
     val dreamPop: Genre = Genre(name = "Dream pop", albumCount = 4)
     val jazz: Genre = Genre(name = "Jazz", albumCount = 1)
 
-    /** One with no counts at all, which the mirror can legitimately produce. */
-    val uncounted: Genre = Genre(name = "Shoegaze")
+    /**
+     * A genre the mirror counted and found nothing in.
+     *
+     * `DefaultLibraryRepository.observeGenres` folds the album mirror's genre column, so a genre
+     * it returns always has a counted number - which is why zero is a count here and not an
+     * absence. The row draws it.
+     */
+    val empty: Genre = Genre(name = "Shoegaze", albumCount = 0)
 
-    val all: List<Genre> = listOf(soul, dreamPop, jazz, uncounted)
+    /**
+     * One with no counts at all, which `observeGenres` cannot produce and a hand-built [Genre]
+     * can. The row says so in words rather than drawing a blank trailing column; see
+     * `genreRowValue`.
+     */
+    val uncounted: Genre = Genre(name = "Post-punk")
+
+    val all: List<Genre> = listOf(soul, dreamPop, jazz, empty)
 }

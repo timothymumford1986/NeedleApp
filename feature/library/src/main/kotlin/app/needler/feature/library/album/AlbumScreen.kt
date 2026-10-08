@@ -51,7 +51,6 @@ import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumBadge
 import app.needler.core.design.component.NeedlerAlbumSource
 import app.needler.core.design.component.NeedlerButtonSize
-import app.needler.core.design.component.NeedlerButtonTone
 import app.needler.core.design.component.NeedlerCrateControl
 import app.needler.core.design.component.NeedlerFavouriteButton
 import app.needler.core.design.component.PathChevronLeft
@@ -62,6 +61,7 @@ import app.needler.core.design.component.NeedlerOnDeviceIcon
 import app.needler.core.design.component.NeedlerPillButton
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerQualityTag
+import app.needler.core.design.component.NeedlerRowLayout
 import app.needler.core.design.component.NeedlerQualityTagEmphasis
 import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerStateBadge
@@ -155,6 +155,9 @@ fun AlbumScreen(
     modifier: Modifier = Modifier,
     onOverrideQuality: ((StreamRung) -> Unit)? = null,
     onClearQualityOverride: (() -> Unit)? = null,
+    // Defaulted so a preview or a bounds test still compiles. `AlbumRoute` passes
+    // `AlbumViewModel::reload`, which is the only thing the not-found screen's Try again can do.
+    onReload: () -> Unit = {},
 ) {
     val colors = NeedlerTheme.colors
     val spacing = NeedlerTheme.spacing
@@ -179,7 +182,12 @@ fun AlbumScreen(
 
             when {
                 state.loading -> AlbumSkeleton(gutter = gutter)
-                state.notFound -> AlbumNotFound(gutter = gutter)
+                state.notFound -> AlbumNotFound(
+                    gutter = gutter,
+                    busy = state.busy,
+                    onReload = onReload,
+                    onBack = onBack,
+                )
                 wide -> TabletAlbum(
                     state = state,
                     gutter = gutter,
@@ -339,6 +347,27 @@ private fun PhoneAlbum(
  * The left column scrolls on its own so a very long album does not push the
  * Play button off the top of the screen — on a tablet it is the one control
  * that must never scroll away.
+ *
+ * ## Why the hero column is a share of the pane and not 280dp
+ *
+ * It was `Modifier.width(HERO_COLUMN_WIDTH)`, a fixed 280dp transcribed from screen 11. On
+ * `album-owned-tablet.png` and three others the action row then wrapped inside that column - Play,
+ * Shuffle, "Pull to device" and the overflow do not fit across 280dp - while about 1000px of empty
+ * pane sat beside it. The artist screen gets this right with the same `FlowRow` of the same buttons,
+ * because it lays them out across the whole pane; one component, two widths, two results.
+ *
+ * So the column takes a **share** of the pane instead. On a 1280dp tablet [HERO_COLUMN_FRACTION]
+ * gives it about 530dp, which fits the row on one line with room for the labels to grow at larger
+ * text sizes, and the track list keeps the larger share because it is the list.
+ *
+ * The artwork does **not** grow with it. It is capped at the pack's own 280dp, so the hero still
+ * looks like screen 11; what the extra width buys is the action row and the title block beneath it.
+ * Rejected: letting the artwork fill the column, which on a wide tablet is a 530dp album cover and
+ * pushes Play below the fold - the one thing this layout exists to prevent.
+ *
+ * Rejected: moving the actions into the right-hand pane, above the track list. That reads as a
+ * toolbar over the list rather than as the record's own controls, and it separates them from the
+ * title and the quality tags they are about.
  */
 @Composable
 private fun TabletAlbum(
@@ -372,13 +401,14 @@ private fun TabletAlbum(
     ) {
         Column(
             modifier = Modifier
-                .width(HERO_COLUMN_WIDTH)
+                .weight(HERO_COLUMN_FRACTION)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(spacing.step12),
         ) {
             AlbumArtwork(
                 album = album,
                 modifier = Modifier
+                    .widthIn(max = HERO_ARTWORK_MAX)
                     .fillMaxWidth()
                     .aspectRatio(1f),
                 shape = NeedlerTheme.shapes.artworkHeroTablet,
@@ -408,13 +438,22 @@ private fun TabletAlbum(
                     onDismiss = onDismissNotice,
                 )
             }
-            PartialDeliveryNote(state)
+            // No PartialDeliveryNote here. It explains the greyed rows and their Retry pills, and
+            // on a tablet those are in the other pane - up to 1000px away, with the artwork between
+            // them. A reader who found a greyed track had no reason to look left for the sentence
+            // saying why, so it now sits at the head of the list it is about. See [trackRows].
             Spacer(modifier = Modifier.height(spacing.step12))
         }
         LazyColumn(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(TRACK_COLUMN_FRACTION),
             contentPadding = PaddingValues(bottom = spacing.step12),
         ) {
+            if (state.isPartiallyDelivered) {
+                item(key = "partial-note") {
+                    PartialDeliveryNote(state)
+                    Spacer(modifier = Modifier.height(NeedlerTheme.spacing.step5))
+                }
+            }
             trackRows(
                 state = state,
                 onPlayTrack = onPlayTrack,
@@ -486,7 +525,10 @@ private fun LazyListScope.trackRows(
                     onExpandedChange = { crateMenuOpen = it },
                     onAddToCrate = { onAddTrackToCrate(row, false) },
                     onPlayNext = { onAddTrackToCrate(row, true) },
-                    visualSize = 36.dp,
+                    // Scaled with the text. `NeedlerRowLayout.controlSize` is what the component's
+                    // own default applies; passing a raw 36dp was what stopped these two growing
+                    // while the track title beside them doubled.
+                    visualSize = NeedlerRowLayout.controlSize(36.dp),
                 )
                 NeedlerFavouriteButton(
                     isFavourite = row.track.isFavourite,
@@ -495,8 +537,8 @@ private fun LazyListScope.trackRows(
                         name = LibraryFormat.trackLabel(row.track.title),
                     ),
                     onToggle = { onToggleTrackFavourite(row) },
-                    visualSize = 36.dp,
-                    glyphSize = 18.dp,
+                    visualSize = NeedlerRowLayout.controlSize(36.dp),
+                    glyphSize = NeedlerRowLayout.controlSize(18.dp),
                 )
             }
         } else if (!owned) {
@@ -511,12 +553,35 @@ private fun LazyListScope.trackRows(
                 onClick = null,
             )
         } else {
-            // A track a part-delivered pull never brought. Greyed, not tappable,
-            // and carrying its own retry — the only way to ask the server for
-            // the one track that is missing.
+            // A track a part-delivered pull never brought. Greyed, not tappable, carrying its own
+            // retry — the only way to ask the server for the one track that is missing — and now
+            // its own star.
+            //
+            // ## Why the star came back
+            //
+            // These rows had neither a star nor a crate control, on the rule stated two branches
+            // up: starring goes out as Subsonic `star` on a track id, and a row with no file has
+            // nothing to send. That rule is right for an **un-owned** album, whose track list is
+            // catalogue metadata with no server-side rows at all. It is wrong here. A
+            // part-delivered pull is `Owned`; REQUIREMENTS.md "Partial content is a normal state"
+            // has these tracks "listed in their right positions" *in the library*, so the server
+            // has a row for each of them and `star` has an id to carry. On
+            // `album-partial-phone.png` the effect was that two tracks of a fourteen-track record
+            // could not be favourited while the other twelve could, for a reason no user could
+            // infer.
+            //
+            // The crate control stays off. Appending a track with no file behind it would queue
+            // something unplayable, which is a different thing from recording that you like it.
+            //
+            // ## Why the 8dp went
+            //
+            // `Arrangement.spacedBy(8.dp)` was 8dp the playable rows do not have, so every greyed
+            // row's duration column sat 8dp left of every other row's - a visible step down the
+            // list, on the screen whose whole point is that the missing tracks are in their right
+            // positions. Exact alignment also wants the trailing controls to measure the same,
+            // which needs `NeedlerTrackRow`'s own column rule; reported.
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 LibraryTrackRow(
@@ -532,6 +597,16 @@ private fun LazyListScope.trackRows(
                     onClick = { onRetryTrack(row) },
                     emphasised = true,
                     contentDescription = "Retry " + LibraryFormat.trackLabel(row.track.title),
+                )
+                NeedlerFavouriteButton(
+                    isFavourite = row.track.isFavourite,
+                    contentDescription = favouriteContentDescription(
+                        isFavourite = row.track.isFavourite,
+                        name = LibraryFormat.trackLabel(row.track.title),
+                    ),
+                    onToggle = { onToggleTrackFavourite(row) },
+                    visualSize = NeedlerRowLayout.controlSize(36.dp),
+                    glyphSize = NeedlerRowLayout.controlSize(18.dp),
                 )
             }
         }
@@ -578,8 +653,9 @@ private fun AlbumTopBar(
                     ),
                     onToggle = onToggleFavourite,
                     enabled = !busy,
-                    visualSize = 44.dp,
-                    glyphSize = 22.dp,
+                    // No size overrides: 44dp and 22dp are this component's own defaults written
+                    // out, and the defaults now scale with the text. Passing the raw figures was
+                    // the only thing that could stop it.
                 )
             }
             // No overflow menu. It held one item, "Go to artist", which called
@@ -618,15 +694,30 @@ private fun AlbumTitleBlock(
             color = colors.textPrimary,
             modifier = Modifier.semantics { heading() },
         )
+        // An artist the record actually names, and an id to open them by. Both, or neither.
+        //
+        // `album-untitled-phone.png` drew **"Unknown artist"** in the accent blue, with a 48dp
+        // target under it, for a release group the catalogue sent no title and no credit for. The
+        // link was live - `artistMbid` can be non-null while `artistName` is blank, because the two
+        // come off different columns - so the one affordance on that header opened an artist screen
+        // for an artist nobody can name. `LibraryFormat.artistName` exists to stop a blank line
+        // being drawn; it was never meant to make a placeholder tappable.
+        //
+        // Rejected: keep the link and let the destination say "Unknown artist" too. It already
+        // does, and that is the dead end `ArtistUiState.notFound` was rewritten to stop being -
+        // sending the user there deliberately is not an improvement on not offering it.
+        val linkable: Boolean = album.artistMbid != null && album.artistName.isNotBlank()
         Text(
             text = LibraryFormat.artistName(album.artistName),
             style = typography.bodyStrong,
-            color = colors.accent,
+            // Accent is this app's one signal for "you may tap this". A placeholder that cannot be
+            // tapped must not wear it.
+            color = if (linkable) colors.accent else colors.textSecondary,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .then(
-                    if (album.artistMbid != null) {
+                    if (linkable) {
                         // REQUIREMENTS.md "Accessibility" puts the floor for any control at 48dp,
                         // and one line of `bodyStrong` measures about 20dp - so this link was a
                         // little under half the legal target. The floor goes on before the
@@ -644,7 +735,7 @@ private fun AlbumTitleBlock(
                     },
                 )
                 .semantics {
-                    if (album.artistMbid != null) {
+                    if (linkable) {
                         contentDescription = "Go to " + LibraryFormat.artistLabel(album.artistName)
                     }
                 },
@@ -655,21 +746,42 @@ private fun AlbumTitleBlock(
             color = colors.textSecondary,
             modifier = Modifier.semantics { contentDescription = meta.replace(" · ", ", ") },
         )
-        // Only the states whose action area does not already say it. An owned
-        // album's buttons read Play and Pull to device, and a pinned one's read
-        // "Device"; repeating the badge above them would say the same thing
-        // twice in the same eyeful.
+        // Only the states some other node on this header already names in words.
         //
-        // A download in flight is the exception, and it is why the full-width
-        // progress banner that used to sit under the actions could go. The
-        // buttons say where the record will end up, not that bytes are arriving
-        // now, so the badge is the only place that is said - and being derived
-        // from the pin row on every emission, it clears itself on success,
-        // failure, cancellation and a backgrounded app alike.
+        // ## What the old condition got wrong
+        //
+        // It suppressed the badge whenever the album was owned, on the argument that the action row
+        // said it: *"an owned album's buttons read Play and Pull to device, and a pinned one's read
+        // Device."* Two problems. The pinned button no longer says "Device" - it says **Remove from
+        // device**, because a state word on an action is not an action, see [AlbumActions] - so the
+        // argument is gone. And for the plain **Server** state it was never true: Play and "Pull to
+        // device" are offered on a record that is on the server, and neither of them is the word
+        // "Server". `album-owned-phone.png` is the result - a header reading "2024 · 8 tracks ·
+        // 28 min · FLAC" and nothing else, so there was no visible difference between a record on
+        // the server and one that is **Not retrieved**. The two states that matter most on this
+        // screen were drawn identically.
+        //
+        // ## What suppresses it now
+        //
+        // The quality tags, and only when they are actually drawn. `Device: FLAC` and the active
+        // `Server: FLAC` each spell the state out beside its format; a badge above them would say
+        // one word twice in one eyeful. But [AlbumUiState.serverTagValue] is null until the
+        // resolver has answered, and [AlbumUiState.pulledTagValue] is null unless the record is
+        // fully downloaded - which is exactly why the owned header could end up saying nothing.
+        // The badge now fills that gap instead of assuming it away.
+        //
+        // A download in flight is still drawn, and it is why the full-width progress banner that
+        // used to sit under the actions could go. The buttons say where the record will end up, not
+        // that bytes are arriving now, so the badge is the only place that is said - and being
+        // derived from the pin row on every emission, it clears itself on success, failure,
+        // cancellation and a backgrounded app alike.
         val badge = albumBadge(album.state)
-        val saidByTheActions: Boolean = album.isOwned &&
-            (badge == NeedlerAlbumBadge.InLibrary || badge == NeedlerAlbumBadge.OnDevice)
-        if (badge != null && !saidByTheActions) {
+        val saidByTheQualityTags: Boolean = when (badge) {
+            NeedlerAlbumBadge.OnDevice -> state.pulledTagValue != null
+            NeedlerAlbumBadge.InLibrary -> state.serverTagValue != null && !state.isPulled
+            else -> false
+        }
+        if (badge != null && !saidByTheQualityTags) {
             Spacer(modifier = Modifier.height(2.dp))
             NeedlerStateBadge(badge = badge)
         }
@@ -959,18 +1071,44 @@ private fun AlbumActions(
                                 contentDescription = "Stop downloading " + label + " to this device",
                             )
                         } else {
+                            // Remove, not "Device".
+                            //
+                            // The button read **Device** with the phone-and-check glyph, drawn as
+                            // selected in the positive green, directly below a quality tag already
+                            // saying `Device: FLAC`. So the third slot stopped being an action: it
+                            // was a state word in the row of verbs, reporting a fact the header had
+                            // just reported, and the one thing it actually did - delete every byte
+                            // of this record from the phone - was named nowhere on the screen. A
+                            // user looking for "Remove from device" could not find it, and a user
+                            // reading the row had no reason to think the green badge-looking thing
+                            // was a control at all, let alone a destructive one.
+                            //
+                            // Selection goes with it. `selected` paints the control in the
+                            // on-device green and `reportSelection` has TalkBack announce it as
+                            // selected; a destructive action is not a toggle that happens to be on.
+                            // The glyph goes too - a phone-and-check on a button that empties the
+                            // phone is the same error as the download arrow that used to sit on
+                            // Retry.
+                            //
+                            // Rejected: "Remove". The screen holds two removals one tap apart - the
+                            // crate and the device - and REQUIREMENTS.md "Offline and caching" is
+                            // explicit that this one deletes bytes. The destination is the whole
+                            // point of the sentence.
                             NeedlerSecondaryButton(
-                                text = if (pinned) "Device" else "Pull to device",
+                                text = if (pinned) "Remove from device" else PULL_TO_DEVICE_LABEL,
                                 onClick = if (pinned) onRemoveFromDevice else onDownloadToDevice,
                                 size = NeedlerButtonSize.Medium,
                                 enabled = !state.busy,
-                                selected = pinned,
-                                reportSelection = true,
-                                leadingIcon = { tint -> NeedlerOnDeviceIcon(tint = tint) },
-                                contentDescription = if (pinned) {
-                                    "Device. Remove " + label + " from this device"
+                                leadingIcon = if (pinned) {
+                                    null
                                 } else {
-                                    "Pull to device. Download " + label + " to this device"
+                                    { tint -> NeedlerOnDeviceIcon(tint = tint) }
+                                },
+                                contentDescription = if (pinned) {
+                                    "Remove " + label + " from this device"
+                                } else {
+                                    PULL_TO_DEVICE_LABEL + ". Download " + label +
+                                        " to this device"
                                 },
                             )
                         }
@@ -998,7 +1136,7 @@ private fun AlbumActions(
                         onPlayNext = { onAddToCrate(true) },
                         enabled = !state.busy && state.hasPlayableTracks,
                         emphasised = true,
-                        visualSize = 44.dp,
+                        visualSize = NeedlerRowLayout.controlSize(44.dp),
                     )
                 }
                 if (!state.downloadAllowed) {
@@ -1012,10 +1150,23 @@ private fun AlbumActions(
 
             AlbumPrimaryAction.PULL -> {
                 NeedlerPrimaryButton(
-                    text = "Pull this album",
+                    // One of the two labels this verb is allowed - see [PULL_LABEL]. "Pull this
+                    // album" was a third, on a button that is the full width of a screen headed by
+                    // the album's own title and artwork.
+                    text = PULL_LABEL,
                     onClick = onPull,
                     modifier = Modifier.fillMaxWidth(),
-                    tone = NeedlerButtonTone.Positive,
+                    // Accent, not the pack's positive green.
+                    //
+                    // `album-not-owned-phone.png` drew a full-width **green** button for a record
+                    // that is **not** on the device, and green is the one colour in this palette
+                    // that means it is: REQUIREMENTS.md "Design system" lists the positive green's
+                    // uses as progress, Ready, the on-device check and the FLAC badge. The screen
+                    // was painting "you do not have this" in the colour for "you do".
+                    //
+                    // It also made one verb two colours. The row pills on the artist screen and in
+                    // search are `NeedlerPullButton`, which is accent, so `artist-phone.png` drew a
+                    // green "Pull all" above a column of blue "Pull" pills.
                     size = NeedlerButtonSize.Medium,
                     enabled = !state.busy,
                     textStyle = typography.rowTitle,
@@ -1055,6 +1206,15 @@ private fun AlbumActions(
                     NeedlerLinearProgress(
                         progress = fraction,
                         modifier = Modifier.fillMaxWidth(),
+                        // Accent, to match the badge above it.
+                        //
+                        // `NeedlerLinearProgress` defaults to the positive green, and
+                        // `NeedlerAlbumBadge.Pulling` is accent - deliberately, for the reason its
+                        // own KDoc gives: a record on its way to the *server* is the server's
+                        // colour for the whole journey. So `album-acquiring-phone.png` drew a blue
+                        // "Pulling 62%" directly above a green bar measuring the same percentage.
+                        // One event, two hues, 2dp apart.
+                        color = colors.accent,
                         contentDescription = "Pulling, " +
                             (fraction * 100f).toInt() + " percent complete",
                     )
@@ -1078,14 +1238,19 @@ private fun AlbumActions(
                         color = colors.textSecondary,
                     )
                 }
+                // No glyph. `album-failed-phone.png` put `PathPull` - a downward arrow onto a
+                // baseline, the icon this app uses for "download this" - on a button whose job is
+                // to ask the server to look for a source again. Nothing is downloading when it is
+                // pressed and nothing may ever; the arrow promised an outcome the button cannot
+                // deliver. The icon set has no retry glyph (`Icons.kt` holds check, pull, play,
+                // pause, chevrons, close and a clock), and inventing one in a feature module is
+                // the wrong place for it, so the word stands alone - which is what the pack's own
+                // per-track Retry pill does two inches below.
                 NeedlerPrimaryButton(
                     text = "Retry",
                     onClick = onRetryPull,
                     size = NeedlerButtonSize.Medium,
                     enabled = !state.busy,
-                    leadingIcon = { tint ->
-                        NeedlerStrokeIcon(pathData = PathPull, tint = tint, size = 18.dp)
-                    },
                     contentDescription = "Retry the pull of " + label,
                 )
             }
@@ -1133,7 +1298,28 @@ private fun PartialDeliveryNote(state: AlbumUiState) {
 }
 
 /**
- * The result of the last action, dismissible.
+ * The result of the last action, dismissible. **Both detail screens draw this one.**
+ *
+ * ## Why it is shared rather than copied
+ *
+ * The artist screen had its own `NoticeLine` for the same job: a grey hairline card with no dismiss
+ * control, against this one's coloured outline and close button. So "Added 12 tracks to the crate" -
+ * the single piece of feedback in the app that fires identically from both screens - looked like two
+ * different features depending on which screen the user had been on, and on one of them it could
+ * not be got rid of at all. `ArtistViewModel.onDismissNotice` had existed the whole time with
+ * nothing calling it.
+ *
+ * `NoticeLine` stays on the artist screen for what it is actually for: the standing explanatory
+ * lines - the catalogue is unavailable, this list may be short, that is the whole discography. Those
+ * are not results of an action and there is nothing to dismiss about them.
+ *
+ * Rejected: promoting this to `:core:design`. It takes an [AlbumNotice], which is a
+ * `:feature:library` type, and the only two screens that draw one are in the same package pair.
+ *
+ * ## The outline is three-valued
+ *
+ * See [AlbumNoticeTone]. It was two - destructive red or positive green - which painted five
+ * deferrals as successes, `album-queued-offline-phone.png` being the one the audit named.
  *
  * @param detail a second line under the message, for a figure the message refers to
  *   rather than states - today the crate's count and total duration after an add. It
@@ -1143,10 +1329,14 @@ private fun PartialDeliveryNote(state: AlbumUiState) {
  *   un-confirmable tap for them that a silent screen is for everyone else.
  */
 @Composable
-private fun NoticeCard(notice: AlbumNotice, detail: String?, onDismiss: () -> Unit) {
+internal fun NoticeCard(notice: AlbumNotice, detail: String?, onDismiss: () -> Unit) {
     val colors = NeedlerTheme.colors
     val shape = NeedlerTheme.shapes.medium
-    val tint = if (notice.isProblem) colors.destructive else colors.positive
+    val tint = when (notice.tone) {
+        AlbumNoticeTone.Problem -> colors.destructive
+        AlbumNoticeTone.Done -> colors.positive
+        AlbumNoticeTone.Pending -> colors.hairline
+    }
     val spoken: String = if (detail == null) {
         notice.message
     } else {
@@ -1193,6 +1383,23 @@ private fun NoticeCard(notice: AlbumNotice, detail: String?, onDismiss: () -> Un
     }
 }
 
+/**
+ * What is coming, drawn in the shape it will arrive in.
+ *
+ * ## What it used to mis-describe
+ *
+ * `album-loading-phone.png` drew the artwork, two text bars and six list rows, and **no action
+ * row** - although every loaded state of this screen has one: Play, Shuffle, the third slot and the
+ * overflow, or a full-width Pull, or a Retry. So the track list was drawn about 190px higher than it
+ * would be a moment later, and the content under the reader's thumb moved the instant the mirror
+ * answered. A skeleton that is the wrong shape is not a kindness; it is a layout prediction that is
+ * wrong, and it is paid for in mis-taps.
+ *
+ * The four pills are the `PLAY` row, which is the state this screen is in for everything a user
+ * already owns. A `PULL` album gets a single full-width button instead and will still move slightly;
+ * reserving for both is not possible before the mirror has said which it is, and the common case is
+ * the one to be right about.
+ */
 @Composable
 private fun AlbumSkeleton(gutter: Dp) {
     val colors = NeedlerTheme.colors
@@ -1228,6 +1435,19 @@ private fun AlbumSkeleton(gutter: Dp) {
                 )
             }
         }
+        // The action row, at the height `NeedlerButtonSize.Medium` draws, so the track list below
+        // starts where it will stay.
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.step4)) {
+            listOf(78.dp, 96.dp, 128.dp, 44.dp).forEach { width ->
+                Box(
+                    modifier = Modifier
+                        .width(width)
+                        .height(MEDIUM_BUTTON_HEIGHT)
+                        .clip(NeedlerTheme.shapes.pill)
+                        .background(colors.surface),
+                )
+            }
+        }
         repeat(6) {
             Box(
                 modifier = Modifier
@@ -1240,8 +1460,34 @@ private fun AlbumSkeleton(gutter: Dp) {
     }
 }
 
+/**
+ * The mirror has no row for this release group.
+ *
+ * ## It is no longer a dead end, and it no longer leaks
+ *
+ * `album-not-found-phone.png` was a heading, two grey lines and about 1,500px of black. No retry, no
+ * search, nothing in the body that went anywhere; the only control was the chevron in the top bar.
+ * It also said *"It is not in the mirror on this device"* - "the mirror" is this project's internal
+ * name for the local database, it appears in REQUIREMENTS.md and in no part of the product a user
+ * sees, and a reader who does not know the word is told nothing by the sentence that contains it.
+ *
+ * Both controls earn their place. **Try again** re-runs [AlbumViewModel.reload], which is the same
+ * `refreshAlbum` the screen runs on open - the honest answer when the likely cause is a sync that
+ * has not landed. **Go back** is the chevron said in words, in the place the reader is already
+ * looking.
+ *
+ * Rejected: a Pull. Pulling needs an `Album` to build the request from and this screen has none -
+ * that is what being not-found means - so the button would be disabled or would fail after the tap.
+ *
+ * @param onReload asks the mirror for this album again.
+ */
 @Composable
-private fun AlbumNotFound(gutter: Dp) {
+private fun AlbumNotFound(
+    gutter: Dp,
+    busy: Boolean,
+    onReload: () -> Unit,
+    onBack: () -> Unit,
+) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     Column(
@@ -1258,16 +1504,74 @@ private fun AlbumNotFound(gutter: Dp) {
             modifier = Modifier.semantics { heading() },
         )
         Text(
-            text = "It is not in the mirror on this device. A sync may have dropped it, or it " +
-                "was removed from the server.",
+            text = ALBUM_NOT_FOUND_REASON,
             style = typography.body,
             color = colors.textSecondary,
         )
+        Spacer(modifier = Modifier.height(NeedlerTheme.spacing.step5))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step4),
+            verticalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step4),
+        ) {
+            NeedlerPrimaryButton(
+                text = "Try again",
+                onClick = onReload,
+                size = NeedlerButtonSize.Medium,
+                enabled = !busy,
+                contentDescription = "Ask your server for this album again",
+            )
+            NeedlerSecondaryButton(
+                text = "Go back",
+                onClick = onBack,
+                size = NeedlerButtonSize.Medium,
+                contentDescription = "Go back to where you came from",
+            )
+        }
     }
 }
 
-/** The width of the artwork-and-actions column on a tablet, from screen 11. */
-private val HERO_COLUMN_WIDTH: Dp = 280.dp
+/**
+ * Why an album the app navigated to is not there.
+ *
+ * It says what happened in words a listener owns. "The mirror" was the project's word for the local
+ * database; "your library on this device" is the same fact in the vocabulary the rest of the app
+ * uses, and the two causes - a sync that has not caught up, a removal on the server - are the two
+ * the retry beside it does and does not help with, in that order.
+ */
+internal const val ALBUM_NOT_FOUND_REASON: String =
+    "It is not in your library on this device. A sync may not have caught up with it yet, or it " +
+        "was removed from the server."
+
+/**
+ * What `NeedlerButtonSize.Medium` draws, for the skeleton to reserve.
+ *
+ * Transcribed rather than read from the theme because the figure is on the enum and not in
+ * `NeedlerSizes`. The pack's own number, from `:core:design`'s `NeedlerButtonSize.Medium`: "52dp
+ * minimum, 14dp radius". A skeleton that reserved a guess would be the defect it exists to fix.
+ */
+internal val MEDIUM_BUTTON_HEIGHT: Dp = 52.dp
+
+/**
+ * The artwork-and-actions column's share of a tablet pane.
+ *
+ * Screen 11 draws it at 280dp and that is what it was, fixed. See [TabletAlbum] for the action row
+ * that wrapped inside it with a thousand pixels going spare beside it. 0.42 against 0.58 keeps the
+ * list the larger half while giving the controls a line they fit on.
+ */
+private const val HERO_COLUMN_FRACTION: Float = 0.42f
+
+/** The track list's share. The two are written out rather than `1f - the other`, so they are read. */
+private const val TRACK_COLUMN_FRACTION: Float = 0.58f
+
+/**
+ * The artwork's ceiling: screen 11's own 280dp.
+ *
+ * The column is wider than this now and the artwork deliberately is not. A cover scaled to a
+ * 530dp column pushes the title, the quality tags and Play below the fold, which is the thing the
+ * left column's own scroll exists to prevent.
+ */
+private val HERO_ARTWORK_MAX: Dp = 280.dp
 
 /**
  * What the server will do, under the Pull button.
@@ -1284,8 +1588,41 @@ internal const val WAITING_EXPLANATION: String =
     "Waiting for an administrator to approve this pull. Nothing is downloading yet, and there " +
         "is nothing more to do here."
 
+/**
+ * The verb, for everything the **server** is asked to acquire.
+ *
+ * ## Five labels, one verb
+ *
+ * The audit counted "Pull to device", "Pull all", "Pull this album", "Pull" and "Pull 3" across the
+ * two screens for what are only ever two actions: fetch a record onto the server, and copy a record
+ * the server has onto this phone. Five words for two things is five things to learn.
+ *
+ * So there are two labels, and this is the first. It is what the row pills in search and on the
+ * artist screen have always said - `NeedlerPullButton` draws exactly "Pull" - so the detail screens
+ * now agree with the rows they were reached from rather than each phrasing it afresh.
+ *
+ * The specifics have not been lost; they have moved to where they can be exact. "Pull this album"
+ * sat under the album's own artwork and title, and its spoken description still names the record.
+ * "Pull all" became "Pull" with a description that counts the release groups it will ask for.
+ *
+ * `"Pull 3"` is the request sheet's confirm button, in `:feature:library`'s `common` package, and is
+ * not this agent's to change; it is reported instead.
+ */
+internal const val PULL_LABEL: String = "Pull"
+
+/** The second label: for copying a record the server already has onto **this device**. */
+internal const val PULL_TO_DEVICE_LABEL: String = "Pull to device"
+
+/**
+ * Why the third action slot is missing.
+ *
+ * The verb is **Pull**, here as everywhere else. It read "Downloading to this device is turned off",
+ * which is a sixth word for the one action whose button two lines above says
+ * [PULL_TO_DEVICE_LABEL] - and the one place a user needs the two to match is the sentence
+ * explaining why the button is not there.
+ */
 internal const val DOWNLOAD_DISABLED: String =
-    "Downloading to this device is turned off for your account on this server. Streaming and " +
+    "Pulling to this device is turned off for your account on this server. Streaming and " +
         "playback are unaffected."
 
 

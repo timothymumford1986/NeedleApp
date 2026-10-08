@@ -89,10 +89,22 @@ const val PathHeart: String =
  * @param contentDescription what TalkBack says. Required and not nullable, as on [NeedlerIconButton]:
  *   this control has no visible label. The caller owns the wording because only the caller knows what
  *   is being starred.
- * @param visualSize the drawn control. The touch target is [NeedlerIconButton]'s 48dp minimum
- *   whatever this is, which is what lets a 36dp control sit on a 52dp track row without breaking
- *   REQUIREMENTS.md "Accessibility".
- * @param glyphSize the heart drawn inside it.
+ * ## Both sizes scale with the text
+ *
+ * A device reviewer found the heart and the `...` "stay at default size while everything around
+ * them doubles, so the only small targets left are the ones a large-text user must hit". The two
+ * defaults are [NeedlerRowLayout.controlSize] of the pack's values rather than the pack's values,
+ * so the control keeps its proportion to the title beside it. The 48dp floor REQUIREMENTS.md
+ * "Accessibility" asks for is untouched: [NeedlerIconButton] applies it as a floor, and scaling
+ * only ever moves a control up from a floor.
+ *
+ * A caller that passes either size explicitly opts out, which is correct - the two player call
+ * sites sit in fixed chrome - and is why this is a default rather than something applied inside.
+ *
+ * @param visualSize the drawn control, 44dp at normal text scale. The touch target is
+ *   [NeedlerIconButton]'s 48dp minimum whatever this is, which is what lets a 36dp control sit on a
+ *   52dp track row without breaking REQUIREMENTS.md "Accessibility".
+ * @param glyphSize the heart drawn inside it, 22dp at normal text scale.
  */
 @Composable
 fun NeedlerFavouriteButton(
@@ -101,8 +113,8 @@ fun NeedlerFavouriteButton(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    visualSize: Dp = 44.dp,
-    glyphSize: Dp = 22.dp,
+    visualSize: Dp = NeedlerRowLayout.controlSize(44.dp),
+    glyphSize: Dp = NeedlerRowLayout.controlSize(22.dp),
 ) {
     val colors = NeedlerTheme.colors
     NeedlerIconButton(
@@ -115,14 +127,15 @@ fun NeedlerFavouriteButton(
         NeedlerStrokeIcon(
             pathData = PathHeart,
             tint = when {
-                // `textMuted` means disabled, and only disabled. It measures 4.21:1 on the canvas
-                // and REQUIREMENTS.md "Accessibility" keeps it as drawn for "placeholders,
-                // timecodes, disabled text, inactive nav items"; using it for an *available*
+                // `disabled` means disabled, and only disabled: using it for an *available*
                 // control would have said "you cannot press this" in the one colour the palette
-                // reserves for that. An un-starred heart is off, not unavailable, so it wears
-                // `textSecondary` at 7.0:1 - which is also the pair Shuffle and Repeat use two rows
-                // below it in the player, so "this is on" looks the same everywhere.
-                !enabled -> colors.textMuted
+                // reserves for that. It was `textMuted` when that token still carried the role;
+                // `textMuted` has since moved to `#828f7a` to clear AA as the third tier of prose,
+                // and the dim value stayed behind under its own name. An un-starred heart is off,
+                // not unavailable, so it wears `textSecondary` at 7.0:1 - which is also the pair
+                // Shuffle and Repeat use two rows below it in the player, so "this is on" looks the
+                // same everywhere.
+                !enabled -> colors.disabled
                 isFavourite -> colors.accent
                 else -> colors.textSecondary
             },

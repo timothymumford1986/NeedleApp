@@ -6,9 +6,12 @@ import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Track
+import app.needler.core.design.component.NeedlerAlbumSource
+import app.needler.core.design.component.label
 import app.needler.feature.library.album.AlbumNotice
 import app.needler.feature.library.common.LibraryFormat
 import app.needler.feature.library.common.RequestSheetState
+import app.needler.feature.library.common.showsOnDeviceCheck
 
 /**
  * Everything the artist screen renders.
@@ -271,12 +274,15 @@ data class ArtistUiState(
                 label = MORE_RELEASES_FAILED,
                 isProblem = true,
             )
-            discographyHasMore -> DiscographyMoreRow(label = showMoreLabel())
+            discographyHasMore -> DiscographyMoreRow(
+                label = SHOW_MORE_RELEASES,
+                detail = lookedUpSoFar(),
+            )
             else -> null
         }
 
     /**
-     * `Show more · 50 of 212 releases looked up`, or just `Show more from the catalogue`.
+     * `50 of 212 releases looked up`, or null when the server named no total.
      *
      * The figures are the server's own: [discographyFetched] is what the pages returned and
      * [discographyTotal] is `source_total_count`. It is a running count and deliberately not a page
@@ -287,11 +293,25 @@ data class ArtistUiState(
      * The total is dropped when it does not exceed what has been fetched. A server that answers
      * `has_more` with a total already reached is contradicting itself, and "50 of 50 releases looked
      * up" next to an offer of more would make the screen look broken rather than the response.
+     *
+     * ## Why this is no longer part of the label
+     *
+     * It used to be, as `Show more · 50 of 212 releases looked up`, and the whole string was drawn in
+     * the accent blue - the colour this app uses for nothing but controls. So the counter read as
+     * tappable, and a reader scanning for the control found a sentence. The offer is the two words
+     * that are an instruction; the figures are a report, and REQUIREMENTS.md "Design system" gives
+     * reports the muted metadata colour. Separating them lets each take the treatment it has earned.
+     *
+     * ## Rejected
+     *
+     * **Leave the whole string accent and accept it.** The same screen's failure row is the counter-
+     * example: it was drawn in the primary text colour precisely so that it would not look like the
+     * counter, and the result was a retry that did not look tappable at all. Two rows in one place
+     * were each wearing the other's treatment.
      */
-    private fun showMoreLabel(): String {
-        val total: Int = discographyTotal?.takeIf { it > discographyFetched }
-            ?: return SHOW_MORE_RELEASES
-        return "Show more · " + discographyFetched + " of " + total + " releases looked up"
+    private fun lookedUpSoFar(): String? {
+        val total: Int = discographyTotal?.takeIf { it > discographyFetched } ?: return null
+        return discographyFetched.toString() + " of " + total + " releases looked up"
     }
 
     /**
@@ -454,15 +474,41 @@ data class ArtistUiState(
         }
 
     companion object {
-        /** The words catalogue search itself uses for an artist the library does not have. */
-        const val NOT_IN_LIBRARY_YET: String = "Not in your library yet"
+        /**
+         * The header subtitle for an artist with nothing owned and nothing in the catalogue.
+         *
+         * REQUIREMENTS.md "Vocabulary" fixes three words for where a record is, and this is the
+         * first of them: [NeedlerAlbumSource.NotRetrieved]. It read "Not in your library yet",
+         * which is a fourth word for a state that has three - and the one the goldens showed
+         * most often, because catalogue search passes its own copy of the same sentence down the
+         * route. A listener who has learnt that a record is Not retrieved, on the Server or on the
+         * Device should not have to learn a second phrase for the first of those.
+         *
+         * ## Rejected
+         *
+         * **Leave it, to match `:feature:search`.** The two would then agree on a word neither
+         * should be using. The canonical set is the thing to agree with; search passing its own
+         * string through [knownSubtitle] still wins here, and that divergence is reported rather
+         * than papered over from this side.
+         */
+        val NOT_IN_LIBRARY_YET: String = NeedlerAlbumSource.NotRetrieved.label()
     }
 }
 
 /**
- * `Dido · 1999`, or `1999` alone — the subtitle of one row in an artist's discography.
+ * `1999`, or `1999 · Faithless` — the subtitle of one row in an artist's discography.
  *
- * ## What was wrong
+ * ## Why the year leads, and the artist is usually absent
+ *
+ * It used to read `Dido · 1999`, and on Dido's own page every row then opened with the word "Dido".
+ * At 200% text that cost the whole subtitle: `artist-catalogue-only-large-text-phone.png` wraps
+ * "My Friend the Chocolate C…" over two lines and pushes the **year** - the only thing that tells
+ * one row from the next - off the row entirely. The screen spent its narrowest column repeating its
+ * own heading.
+ *
+ * So the year leads. It is the fact that distinguishes the rows, and it is four characters.
+ *
+ * ## What was wrong before that
  *
  * The real Dido's page listed forty releases and all but one read **"Unknown artist · 1999"**. The
  * exception was the one record that also existed in the mirror from an earlier search. The chain:
@@ -478,29 +524,95 @@ data class ArtistUiState(
  * about what this screen is - "Artist detail is where the two lanes meet visibly. It shows the albums
  * the server has from the mirror and the artist's full discography" - and both lanes are one artist's.
  * The header above these rows names them, from the mirror or from the name the tap carried. So the
- * row needs no placeholder and no second opinion: [credit] is the page's
- * [ArtistUiState.creditedName], and a row the catalogue gave no credit for takes the one the page is
- * about.
+ * row needs no placeholder, no second opinion and - now - no repetition: [credit] is the page's
+ * [ArtistUiState.creditedName], and a row credited to exactly that artist says nothing about it,
+ * because the heading above already has.
  *
- * With neither — an un-named artist reached by MBID alone — the artist is dropped and the row reads
- * as the year. Rejected: `LibraryFormat.albumRowSubtitle`, which is the right answer on the Library
- * and Search screens and the wrong one here. There a row's artist is information the reader does not
- * otherwise have, so a placeholder marks a real gap; here it would be the screen claiming not to know
- * the name printed at the top of it. Showing nothing is better than asserting ignorance when the
- * surrounding context already supplies the answer.
+ * Rejected: `LibraryFormat.albumRowSubtitle`, which is the right answer on the Library and Search
+ * screens and the wrong one here. There a row's artist is information the reader does not otherwise
+ * have, so a placeholder marks a real gap; here it would be the screen claiming not to know the name
+ * printed at the top of it. Showing nothing is better than asserting ignorance when the surrounding
+ * context already supplies the answer.
  *
- * The row's own credit still wins where it has one, because a discography contains collaborations
- * and various-artists records, and overwriting "Faithless" with "Dido" on her page would be
- * inventing a fact rather than filling a gap.
+ * A **different** credit still shows, because a discography contains collaborations and
+ * various-artists records: `1999 · Faithless` on Dido's page is the one case where the row's artist
+ * is news. The comparison ignores case, because the catalogue and the mirror capitalise
+ * independently and `dido` beside `Dido` is not a collaboration.
  *
  * Returns an empty string when there is neither a credit nor a year. The caller draws that as a
  * blank line rather than a placeholder, and leaves it out of the spoken label — a content
  * description that ends in ", " is the shape of bug the device audit reads out loud.
  */
 fun discographyRowSubtitle(album: Album, credit: String?): String {
-    val name: String? = album.artistName.trim().takeIf { it.isNotEmpty() }
-        ?: credit?.trim()?.takeIf { it.isNotEmpty() }
-    val parts: List<String> = listOfNotNull(name, album.year?.toString())
+    val page: String? = credit?.trim()?.takeIf { it.isNotEmpty() }
+    val own: String? = album.artistName.trim().takeIf { it.isNotEmpty() }
+    val collaborator: String? = own?.takeUnless { it.equals(page, ignoreCase = true) }
+    val parts: List<String> = listOfNotNull(album.year?.toString(), collaborator)
+    return parts.joinToString(separator = " · ")
+}
+
+/**
+ * The same, with the record's **state and format in words**: `2024 · Device · FLAC`.
+ *
+ * ## The failure this closes
+ *
+ * `artist-phone.png` drew `Submarine` with a green-outlined `FLAC` chip and `Cinema` with a
+ * grey-outlined one, and that was the entire difference between a record that plays with no network
+ * and one that needs the server. Four identical characters, two hues, a 12px glyph on one of them.
+ *
+ * `accent` and `positive` measure **1.01:1 against each other** - the same lightness in two hues -
+ * so to a red-green colour-blind reader those two rows are identical. [NeedlerAlbumSource]'s own
+ * KDoc says what makes that pair safe to use at all: *"each state's word is drawn or spoken in every
+ * place the hue appears, and the hue only makes the distinction quicker for the readers who can see
+ * it."* On these rows the word was nowhere. It was a WCAG 1.4.1 failure of exactly the kind
+ * `AlbumFormatLabel` had already been rewritten to fix one column to the left.
+ *
+ * ## Why the subtitle, and why the chip went with it
+ *
+ * The album screen says this as `Device: FLAC` - `NeedlerQualityTag` in the header - and copying
+ * that component into the trailing slot was the obvious move. **Rejected on width**, twice over.
+ *
+ * `NeedlerRowLayout.TRAILING_WEIGHT` caps a row's trailing block at 0.38 of the width the row has
+ * to divide, which on a 390dp phone is about 109dp. The owned row's trailing slot already holds a
+ * play control and a crate menu - 32dp each with 14dp between them - so there is room for one more
+ * short thing, not for a tag twice the width of the one that was there. Measured: the `FLAC` chip
+ * beside both controls came to about 140dp and `NeedlerAlbumRow` clipped the crate menu off the
+ * end of the row entirely. Paying for the word in trailing width costs a control; paying for it in
+ * title width is what breaks "Submarine" into "Sub / m…".
+ *
+ * So the format moves to the subtitle with the state word and the trailing slot keeps its two
+ * controls. The subtitle is a full-width line that was holding four characters of year, and
+ * `2024 · Device · FLAC` is the same three facts the album header draws, in the same order, in the
+ * `LibraryFormat.albumMetaLine` style the rest of the module uses.
+ *
+ * ## What this gives up, and why that is an improvement
+ *
+ * `AlbumFormatLabel` carried two channels the plain text does not: the hue, which is the thing this
+ * whole function exists to stop relying on, and a hairline chip marking lossless. The chip existed
+ * because the pack had green meaning *both* lossless and on-device, leaving lossless with no channel
+ * but hue. With the format as text beside the state word there is **no colour on the row at all**:
+ * `FLAC` against `MP3 320` is the format distinction spelled out, and `Device` against `Server` is
+ * the location distinction spelled out. Two words, two facts, nothing encoded in a colour or a
+ * border. That is a stronger answer to WCAG 1.4.1 than redundancy was.
+ *
+ * Only the three location words appear here, never the pull lifecycle's. A row mid-download is
+ * [NeedlerAlbumSource.Server] - the bytes are on the server and not yet here - and "Pulling to
+ * device, 37%" in a subtitle would be a progress report that only updates when the mirror emits.
+ */
+internal fun ownedRowSubtitle(album: Album, credit: String?): String {
+    val source: NeedlerAlbumSource = if (album.showsOnDeviceCheck) {
+        NeedlerAlbumSource.Device
+    } else {
+        NeedlerAlbumSource.Server
+    }
+    val parts: List<String> = listOfNotNull(
+        discographyRowSubtitle(album, credit).takeIf { it.isNotEmpty() },
+        source.label(),
+        // Null for a record whose format the mirror does not know, which is the state
+        // `AlbumFormatLabel` drew nothing at all for. A row that said "FLAC" on a guess would be
+        // worse than one that says where the record is and stops there.
+        LibraryFormat.quality(album.quality),
+    )
     return parts.joinToString(separator = " · ")
 }
 
@@ -513,8 +625,27 @@ fun discographyRowSubtitle(album: Album, credit: String?): String {
  */
 data class DiscographyMoreRow(
     val label: String,
+    /**
+     * The server's running count under the offer: `50 of 212 releases looked up`, or null.
+     *
+     * Separate from [label] because it is a different kind of thing and takes a different
+     * treatment. The label is the control and is drawn in the accent colour; this is a report and is
+     * drawn muted. Joined into one accent string, as it used to be, the figures read as tappable -
+     * see `ArtistUiState.lookedUpSoFar`.
+     */
+    val detail: String? = null,
     /** False while a page is in flight: there is nothing a second tap could do. */
     val enabled: Boolean = true,
-    /** True when the label is bad news, which the screen tints differently. */
+    /**
+     * True when the label is bad news.
+     *
+     * It no longer changes the colour. The failure row was drawn in the primary text colour so that
+     * it could not be mistaken for the offer, and the result was a retry that did not look like a
+     * control at all - plain white body text with no affordance of any kind, in a palette whose one
+     * signal for "you may tap this" is the accent blue. Both rows are tappable and both are now
+     * accent; what tells them apart is that one says "Show more" and the other says a page did not
+     * arrive. The flag is kept because `ArtistViewModel` asserts on it and because it is the honest
+     * name for the state.
+     */
     val isProblem: Boolean = false,
 )

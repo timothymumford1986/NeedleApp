@@ -86,9 +86,9 @@ class PlayerViewModelTest {
             val state: PlayerUiState = awaitItem()
             assertFalse(state.hasTrack)
             assertEquals("Nothing playing", state.title)
-            assertEquals("Play an album and it lands in the crate", state.subtitle)
+            assertEquals("Play an album and it lands in the crate.", state.subtitle)
             // REQUIREMENTS.md: the output is always named, whether or not anything is playing.
-            assertEquals("This device", state.outputName)
+            assertEquals("This phone", state.outputName)
             assertNull(state.formatBadge)
         }
     }

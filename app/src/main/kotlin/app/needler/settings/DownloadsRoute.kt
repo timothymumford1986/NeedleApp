@@ -34,6 +34,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  *
  * and `SettingsRoute` needs `onOpenDownloads = { navController.navigate(ROUTE_DOWNLOADS) { launchSingleTop = true } }`.
  *
+ * The nested graph matters at expanded width as well as for the back stack: a destination registered
+ * there is drawn in `NeedlerNavigationScaffold`'s content pane, so the nav rail and the player
+ * sidebar stay either side of it. `DownloadsScreenshotTest` renders the tablet image inside that same
+ * scaffold, which is what the committed `downloads-tablet.png` is now of.
+ *
  * Until that lands, `SettingsScreen` keeps drawing the whole list inline, which is the pre-existing
  * behaviour rather than a gap - see `SettingsCallbacks.onOpenDownloads`. The list is the only way the
  * user can reclaim space (REQUIREMENTS.md "Storage, and why there is no budget" leaves no storage
@@ -56,6 +61,8 @@ fun DownloadsRoute(
     DownloadsScreen(
         state = state,
         onRemove = viewModel::onRemove,
+        onUndo = viewModel::onUndo,
+        onDismissNotice = viewModel::onDismissNotice,
         onBack = onBack,
         widthSizeClass = widthSizeClass,
         modifier = modifier,

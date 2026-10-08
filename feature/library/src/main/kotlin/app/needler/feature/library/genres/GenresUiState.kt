@@ -45,21 +45,37 @@ data class GenresUiState(
 }
 
 /**
- * `12 albums`, the figure beside a genre.
+ * `12 albums`, the figure beside a genre. Never blank.
  *
  * Albums and not tracks, because that is the number the mirror actually knows: a
  * genre is denormalised onto the album row, so counting albums is exact while
  * counting tracks would mean a second query per genre. `Genre.trackCount` is part
  * of the model and is used when the server has filled it in, which today it does
- * not — nothing is invented in its place, and an unknown count draws nothing
- * rather than a zero. "Unknown is not zero", as `LibraryFormat` puts it.
+ * not.
+ *
+ * ## Zero is a count; unknown is a sentence
+ *
+ * This lumped the two together under "Unknown is not zero" and returned null for both, which
+ * `screenshots/genres-phone.png` shows as a bare gap where Shoegaze's figure should be — against
+ * `screenshots/genre-empty-phone.png`, which says `0 tracks` for the very same genre. One
+ * emptiness, drawn twice, and one of the two drawings looks like a rendering fault rather than a
+ * fact. `LibraryFormat`'s rule is about not *inventing* a zero, and a counted zero is not invented:
+ * `DefaultLibraryRepository.observeGenres` builds every count by folding the album mirror's genre
+ * column, so a genre it returns has a real number behind it.
+ *
+ * So a known count is drawn whatever it is, and the unknown case — which that query cannot
+ * actually produce, and which a hand-built `Genre` can — says so in words rather than drawing
+ * nothing. A row with an empty trailing column is the one outcome this function must not have.
  */
-internal fun genreRowValue(genre: Genre): String? {
+internal fun genreRowValue(genre: Genre): String {
     val albums: Int? = genre.albumCount
     val tracks: Int? = genre.trackCount
     return when {
-        albums != null && albums > 0 -> LibraryFormat.plural(albums.toLong(), "album")
-        tracks != null && tracks > 0 -> LibraryFormat.plural(tracks.toLong(), "track")
-        else -> null
+        albums != null -> LibraryFormat.plural(albums.toLong(), "album")
+        tracks != null -> LibraryFormat.plural(tracks.toLong(), "track")
+        else -> COUNT_UNKNOWN
     }
 }
+
+/** What a genre whose count nothing supplied says instead of nothing at all. */
+internal const val COUNT_UNKNOWN: String = "Count unknown"

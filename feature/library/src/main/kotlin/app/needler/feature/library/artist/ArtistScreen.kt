@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.Text
@@ -32,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -40,14 +42,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.NeedlerAlbumRow
+import app.needler.core.design.component.NeedlerAlbumSource
 import app.needler.core.design.component.NeedlerArtwork
 import app.needler.core.design.component.NeedlerButtonSize
-import app.needler.core.design.component.NeedlerButtonTone
 import app.needler.core.design.component.NeedlerCrateControl
 import app.needler.core.design.component.NeedlerFavouriteButton
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerPullButton
+import app.needler.core.design.component.NeedlerRowLayout
 import app.needler.core.design.component.NeedlerSecondaryButton
 import app.needler.core.design.component.NeedlerSectionHeader
 import app.needler.core.design.component.NeedlerStateBadge
@@ -56,6 +59,7 @@ import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.PathChevronLeft
 import app.needler.core.design.component.PathPlay
 import app.needler.core.design.component.PathPull
+import app.needler.core.design.component.label
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
@@ -63,15 +67,14 @@ import app.needler.core.domain.model.Artist
 import app.needler.core.domain.model.ArtistMbid
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.feature.library.album.AlbumNotice
+import app.needler.feature.library.album.MEDIUM_BUTTON_HEIGHT
+import app.needler.feature.library.album.NoticeCard
 import app.needler.feature.library.common.AlbumArtwork
-import app.needler.feature.library.common.AlbumFormatLabel
 import app.needler.feature.library.common.LibraryFormat
 import app.needler.feature.library.common.RequestSheet
 import app.needler.feature.library.common.RequestSheetState
 import app.needler.feature.library.common.albumBadge
-import app.needler.feature.library.common.albumFormatSpokenLabel
 import app.needler.feature.library.common.favouriteContentDescription
-import app.needler.feature.library.common.showsOnDeviceCheck
 
 /**
  * The artist screen: owned albums first, then the rest of the discography.
@@ -152,6 +155,9 @@ fun ArtistScreen(
     onConfirmRequest: () -> Unit,
     onDismissRequestSheet: () -> Unit,
     modifier: Modifier = Modifier,
+    // Defaulted so a bounds test or a preview still compiles with the notice undismissable, which
+    // is what it was everywhere until now. `ArtistRoute` passes the real one.
+    onDismissNotice: () -> Unit = {},
 ) {
     val colors = NeedlerTheme.colors
     val spacing = NeedlerTheme.spacing
@@ -190,8 +196,11 @@ fun ArtistScreen(
                             name = state.spokenName,
                         ),
                         onToggle = onToggleFavourite,
-                        visualSize = 44.dp,
-                        glyphSize = 22.dp,
+                        // No size overrides. 44dp and 22dp were the component's own defaults
+                        // written out, and the defaults are now
+                        // `NeedlerRowLayout.controlSize` of those figures - so passing the raw
+                        // numbers was the one thing that could stop this control growing with the
+                        // text beside it.
                     )
                 }
             }
@@ -205,10 +214,17 @@ fun ArtistScreen(
                             error = state.discographyError,
                             offline = state.offline,
                             notInCatalogue = state.artistNotInCatalogue,
+                            // `notFound` requires `hasNothing`, so there is never an owned list
+                            // for this sentence to point at.
+                            hasOwned = false,
                         )
                     } else {
                         null
                     },
+                    canRetry = !state.artistNotInCatalogue,
+                    busy = state.busy,
+                    onRetry = onRetryDiscography,
+                    onBack = onBack,
                 )
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -238,8 +254,21 @@ fun ArtistScreen(
                     val notice: AlbumNotice? = state.notice
                     if (notice != null) {
                         item(key = "notice") {
-                            NoticeLine(
-                                message = notice.message,
+                            // The album screen's own card, not a second component for the same
+                            // job. The two screens drew the same crate confirmation two different
+                            // ways - outlined with a dismiss on the album, a grey hairline with no
+                            // dismiss here - so the one piece of feedback in the app that fires
+                            // from both screens looked like two different features, and on this one
+                            // it could not be got rid of. `ArtistViewModel.onDismissNotice` has
+                            // existed the whole time and `ArtistRoute` never wired it up.
+                            // 22dp, which is what the album screen's header column puts between
+                            // the action row and this same card. The artist screen gave it 10dp -
+                            // about 11px clear of a 40dp control on the render - so the one
+                            // component both screens draw sat at two different distances from the
+                            // button that produced it.
+                            Spacer(modifier = Modifier.height(NeedlerTheme.spacing.step11))
+                            NoticeCard(
+                                notice = notice,
                                 // The crate's count and total duration under the sentence
                                 // that says something went into it.
                                 detail = if (notice is AlbumNotice.AddedToCrate) {
@@ -247,6 +276,7 @@ fun ArtistScreen(
                                 } else {
                                     null
                                 },
+                                onDismiss = onDismissNotice,
                             )
                         }
                     }
@@ -312,6 +342,9 @@ fun ArtistScreen(
                                     error = state.discographyError,
                                     offline = state.offline,
                                     notInCatalogue = state.artistNotInCatalogue,
+                                    // The clause that says "what you own is listed above" is only
+                                    // true when something is. See [OWNED_PLAYS_AS_USUAL].
+                                    hasOwned = state.ownedAlbums.isNotEmpty(),
                                 ),
                             )
                         }
@@ -440,14 +473,28 @@ private fun ArtistActions(
                 contentDescription = "Shuffle everything by " + name + " in your library",
             )
         }
-        // The pack's one filled green button is the pull, and it is green because acquiring
-        // music is not playback. On an artist nobody owns this is the only primary action
-        // there is, which is the point: the route used to end here with a Back button.
+        // On an artist nobody owns this is the only primary action there is, which is the point:
+        // the route used to end here with a Back button.
+        //
+        // ## Why it is no longer green
+        //
+        // It was `NeedlerButtonTone.Positive`, and the per-row Pull pills beside it are accent -
+        // so `artist-phone.png` drew one verb in both of the palette's signal colours, on one
+        // screen, a thumb's width apart. Worse, green is the on-device colour: the album screen's
+        // own full-width "Pull this album" was a green button for a record that is **not** on the
+        // device, which is the one thing green is supposed to mean. One verb, one hue, and the hue
+        // that means "a control" rather than the hue that means "it is here".
+        //
+        // Rejected: keep green and recolour the row pills to match. That spreads the wrong colour
+        // instead of removing it, and leaves the Pulls screen's Ready badge sharing a hue with
+        // every un-started pull in the app.
         if (state.canPullArtist) {
             NeedlerPrimaryButton(
-                text = "Pull all",
+                // One of the two labels this verb now has - see [PULL_TO_DEVICE_LABEL]. "Pull all"
+                // was a third, and the count it was standing in for is in the spoken description
+                // below, where it can be exact.
+                text = "Pull",
                 onClick = onPullArtist,
-                tone = NeedlerButtonTone.Positive,
                 size = NeedlerButtonSize.Medium,
                 enabled = !state.busy,
                 leadingIcon = { tint ->
@@ -499,7 +546,10 @@ private fun ArtistActions(
                 onPlayNext = { onAddToCrate(true) },
                 enabled = !state.busy,
                 emphasised = true,
-                visualSize = 44.dp,
+                // Scaled, like every other control in a row that grows with its text. A fixed 44dp
+                // among labels that double is the defect a device reviewer reported as "the only
+                // small targets left are the ones a large-text user must hit".
+                visualSize = NeedlerRowLayout.controlSize(44.dp),
             )
         }
     }
@@ -590,9 +640,12 @@ private fun ArtistHeader(state: ArtistUiState) {
  *
  * The play button is here for the same reason the library's list rows gained one -
  * "same content, different capability" was the device audit's phrase - and these
- * rows draw exactly the content the library's list view draws. Both now use
- * [AlbumFormatLabel] and both put a 48dp-target play control in the trailing slot,
- * so an album row behaves the same way whichever screen it is on.
+ * rows draw exactly the content the library's list view draws, with a 48dp-target play control in
+ * the trailing slot, so an album row behaves the same way whichever screen it is on.
+ *
+ * The format no longer sits in that slot as a chip. It is in the subtitle with the state word, for
+ * the width and the colour-alone reasons [ownedRowSubtitle] records; the library's list view still
+ * draws `AlbumFormatLabel`, and reconciling the two is `common`'s call rather than this screen's.
  *
  * [credit] is the artist this page is about, for the rows the catalogue gave no credit for. See
  * [discographyRowSubtitle].
@@ -610,9 +663,11 @@ private fun LazyListScope.ownedRows(
         key = { index -> "owned-" + albums[index].releaseGroupMbid.value },
     ) { index ->
         val album: Album = albums[index]
-        val onDevice: Boolean = album.showsOnDeviceCheck
         val title: String = LibraryFormat.albumTitle(album.title)
-        val subtitle: String = discographyRowSubtitle(album, credit)
+        // The record's state and format **in words**: `2024 · Device · FLAC`. See
+        // [ownedRowSubtitle] for the colour-alone failure this closes, and for why the format left
+        // the trailing column rather than the word joining it there.
+        val subtitle: String = ownedRowSubtitle(album, credit)
         var crateMenuOpen: Boolean by remember(album.releaseGroupMbid.value) {
             mutableStateOf(false)
         }
@@ -629,23 +684,31 @@ private fun LazyListScope.ownedRows(
                     append(", ")
                     append(subtitle)
                 }
-                albumFormatSpokenLabel(album.quality, onDevice)?.let {
-                    append(", ")
-                    append(it)
-                }
+                // The one fact the drawn subtitle cannot carry in the width it has. The format,
+                // the state and the year are all in it now, read out as drawn; whether the format
+                // is lossless was the chip's own channel, and a border is nothing at all to a
+                // screen reader. `albumFormatSpokenLabel` is not used here any more because it
+                // would repeat the format and the state word the subtitle has already said.
+                if (album.quality?.isLossless == true) append(", lossless")
             },
             artwork = { AlbumRowArtwork(album) },
             trailing = {
-                AlbumFormatLabel(quality = album.quality, onDevice = onDevice)
+                // Two controls and no chip. `NeedlerRowLayout.TRAILING_WEIGHT` caps this slot at
+                // about 109dp on a phone, the chip and the two controls measured about 140dp, and
+                // the row clipped the crate menu off the end. See [ownedRowSubtitle].
                 NeedlerIconButton(
                     contentDescription = "Play " + title,
                     onClick = { onPlayAlbum(album.releaseGroupMbid) },
-                    visualSize = 32.dp,
+                    // Scaled with the text, as `NeedlerRowLayout.controlSize` requires of anything
+                    // in a row's trailing block. The crate control beside it already does by
+                    // default; this one was the hard-coded exception that made the pair diverge at
+                    // large text.
+                    visualSize = NeedlerRowLayout.controlSize(32.dp),
                 ) {
                     NeedlerStrokeIcon(
                         pathData = PathPlay,
                         tint = NeedlerTheme.colors.accent,
-                        size = 16.dp,
+                        size = NeedlerRowLayout.controlSize(16.dp),
                         filled = true,
                     )
                 }
@@ -830,17 +893,42 @@ private fun LazyListScope.moreRowItem(
     if (row == null) return
     item(key = "discography-more") {
         val colors = NeedlerTheme.colors
-        NeedlerTextButton(
-            text = row.label,
-            onClick = onClick,
-            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            enabled = row.enabled,
-            // The palette has one emphasis colour and no error colour, so a problem is drawn in the
-            // primary text colour rather than in a red this design system does not have. The same
-            // decision NoticeLine and the search lane's more-row make.
-            color = if (row.isProblem) colors.textPrimary else colors.accent,
-            contentDescription = row.label + ", more of " + name + "'s releases from the catalogue",
-        )
+        val detail: String? = row.detail
+        Column(modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) {
+            NeedlerTextButton(
+                text = row.label,
+                onClick = onClick,
+                enabled = row.enabled,
+                // Accent whatever the news is. The failure row used to be drawn in the primary text
+                // colour so that it could not be mistaken for the offer, and that made it the one
+                // tappable thing on the screen with no affordance at all - plain white body text in
+                // a palette whose only "you may tap this" signal is this colour. Both rows are
+                // controls; the words are what tell them apart, and a disabled one already draws
+                // muted, which is right for the state that is a statement rather than an offer.
+                color = colors.accent,
+                contentDescription = buildString {
+                    append(row.label)
+                    if (detail != null) {
+                        append(", ")
+                        append(detail)
+                    }
+                    append(", more of ")
+                    append(name)
+                    append("'s releases from the catalogue")
+                },
+            )
+            // The server's running count, muted. Part of the button's own spoken description above
+            // rather than a node of its own: a figure a screen reader has to swipe to is a figure
+            // that is read after the decision it informs. See [DiscographyMoreRow.detail].
+            if (detail != null) {
+                Text(
+                    text = detail,
+                    style = NeedlerTheme.typography.caption,
+                    color = colors.textMuted,
+                    modifier = Modifier.clearAndSetSemantics {},
+                )
+            }
+        }
     }
 }
 
@@ -895,6 +983,23 @@ private fun NoticeLine(message: String, detail: String? = null) {
     }
 }
 
+/**
+ * What is coming, drawn in the shape it will arrive in.
+ *
+ * ## What it used to mis-describe
+ *
+ * `artist-loading-phone.png` drew one text bar and six rows: no circular avatar, although this
+ * screen's header is a 120dp circle, and no action-row placeholder, although the header is followed
+ * by Play, Shuffle, Pull and the crate menu. So the skeleton promised a list and delivered a header,
+ * a picture and four buttons, and the content under the reader's thumb jumped about 190px the moment
+ * the mirror answered - at which point whatever they were about to tap was no longer there.
+ *
+ * A skeleton that is not the shape of the screen is worse than no skeleton: it is a layout
+ * prediction that is wrong, and the cost is a mis-tap rather than a moment's blankness.
+ *
+ * Every box here is one real element at its real size - `artworkDetail` for the avatar, the theme's
+ * own button height for the pills - so nothing has to be kept in step by hand.
+ */
 @Composable
 private fun ArtistSkeleton(gutter: Dp) {
     val colors = NeedlerTheme.colors
@@ -905,13 +1010,50 @@ private fun ArtistSkeleton(gutter: Dp) {
             .semantics(mergeDescendants = true) { contentDescription = "Loading this artist" },
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.6f)
-                .height(26.dp)
-                .clip(NeedlerTheme.shapes.progress)
-                .background(colors.surface),
-        )
+        // The header: a circle and two lines, as [ArtistHeader] draws them. The pack draws an
+        // artist as a circle wherever one appears, and a square placeholder followed by a round
+        // avatar is the one substitution a reader cannot help noticing.
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step7),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(NeedlerTheme.sizes.artworkDetail)
+                    .clip(NeedlerTheme.shapes.circle)
+                    .background(colors.surface),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .width(180.dp)
+                        .height(26.dp)
+                        .clip(NeedlerTheme.shapes.progress)
+                        .background(colors.surface),
+                )
+                Box(
+                    modifier = Modifier
+                        .width(120.dp)
+                        .height(14.dp)
+                        .clip(NeedlerTheme.shapes.progress)
+                        .background(colors.surface),
+                )
+            }
+        }
+        // The action row. Three named controls and the overflow, at the height
+        // [NeedlerButtonSize.Medium] actually draws, so the list below does not move when they
+        // arrive.
+        Row(horizontalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step4)) {
+            listOf(78.dp, 96.dp, 72.dp, 44.dp).forEach { width ->
+                Box(
+                    modifier = Modifier
+                        .width(width)
+                        .height(MEDIUM_BUTTON_HEIGHT)
+                        .clip(NeedlerTheme.shapes.pill)
+                        .background(colors.surface),
+                )
+            }
+        }
         repeat(6) {
             Row(
                 modifier = Modifier
@@ -951,11 +1093,35 @@ private fun ArtistSkeleton(gutter: Dp) {
  * screen was blaming a network failure for a lookup that had in fact succeeded. Only [reason] can say
  * the catalogue was unreachable, and it is only non-null when it actually was.
  *
+ * ## It is no longer a dead end
+ *
+ * `artist-not-found-phone.png` was a heading, two grey lines and about 1,500px of black: no retry,
+ * no way forward and nothing in the body that went anywhere. The screen reader's only control was
+ * the 44dp chevron in the top bar. A screen that cannot do anything has to at least offer the two
+ * things that can - ask again, or leave - as named controls where the reader is looking, which is
+ * under the sentence that just told them the bad news.
+ *
+ * **Try again** is suppressed for a name-derived artist, on the same rule
+ * [ArtistUiState.canRetryDiscography] applies in the loaded state: retrying that is retrying a
+ * `400`. Back is always there, because leaving always works.
+ *
+ * Rejected: a search field here. This screen has no search lane - the catalogue search it can run is
+ * `onFindInCatalogue`, which needs a name, and the one thing a `notFound` artist has not got is a
+ * name. Offering a box that cannot be filled in would be worse than the chevron.
+ *
  * @param reason the catalogue's own explanation when there is one, from [catalogueNoticeMessage].
  *   Null means the catalogue answered and simply had nothing, which is a different sentence.
+ * @param canRetry false for an artist whose id can never reach the catalogue.
  */
 @Composable
-private fun ArtistNotFound(gutter: Dp, reason: String?) {
+private fun ArtistNotFound(
+    gutter: Dp,
+    reason: String?,
+    canRetry: Boolean,
+    busy: Boolean,
+    onRetry: () -> Unit,
+    onBack: () -> Unit,
+) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     Column(
@@ -975,6 +1141,28 @@ private fun ArtistNotFound(gutter: Dp, reason: String?) {
             style = typography.body,
             color = colors.textSecondary,
         )
+        Spacer(modifier = Modifier.height(NeedlerTheme.spacing.step5))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step4),
+            verticalArrangement = Arrangement.spacedBy(NeedlerTheme.spacing.step4),
+        ) {
+            if (canRetry) {
+                NeedlerPrimaryButton(
+                    text = "Try again",
+                    onClick = onRetry,
+                    size = NeedlerButtonSize.Medium,
+                    enabled = !busy,
+                    contentDescription = "Look this artist up again",
+                )
+            }
+            NeedlerSecondaryButton(
+                text = "Go back",
+                onClick = onBack,
+                size = NeedlerButtonSize.Medium,
+                contentDescription = "Go back to where you came from",
+            )
+        }
     }
 }
 
@@ -998,8 +1186,33 @@ internal const val ARTIST_NOT_LISTED: String =
     "Nothing on this device is by them, and no discography came back for them either."
 
 internal const val CATALOGUE_OFFLINE: String =
-    "The rest of this artist's discography needs a connection. What you own is listed above " +
-        "and plays as usual."
+    "The rest of this artist's discography needs a connection."
+
+/**
+ * The clause that points at the owned list, which is only true when there is one.
+ *
+ * ## The screen this was wrong on
+ *
+ * `artist-catalogue-only-offline-phone.png`. The header says **0 albums**, nothing is listed, and
+ * the body says *"What you own is listed above and plays as usual"* - a sentence directing the
+ * reader to a list that is not on the screen. Four of the five catalogue sentences ended this way
+ * and every one of them can be drawn for an artist with nothing owned: the catalogue-only artist is
+ * reached from search, has no mirror rows by definition, and is exactly the artist whose discography
+ * fetch is most likely to be the thing that failed.
+ *
+ * So the clause is a tail appended by [catalogueNoticeMessage] when, and only when, the owned half
+ * has rows in it. The head of each sentence stays unconditional, because *why the catalogue half is
+ * missing* is true either way.
+ *
+ * ## Rejected
+ *
+ * **Five more constants, one per sentence, for the no-owned case.** Ten strings for five facts, and
+ * the next reword touches whichever of the pair the author happens to open.
+ */
+private const val OWNED_PLAYS_AS_USUAL: String = " What you own is listed above and plays as usual."
+
+/** The shorter form, for the sentences that only pointed at the list. */
+private const val OWNED_LISTED_ABOVE: String = " What you own is listed above."
 
 /**
  * Which sentence the catalogue notice shows.
@@ -1012,21 +1225,30 @@ internal const val CATALOGUE_OFFLINE: String =
  * The error's own `diagnostic` is deliberately absent. It carries status codes and header names and
  * its KDoc says it is never shown raw to the user; it belongs in the log, which is where
  * [ArtistViewModel] now writes it.
+ *
+ * @param hasOwned whether the owned half has any rows. False drops the clause that points at them -
+ *   see [OWNED_PLAYS_AS_USUAL]. Defaulted true so that a caller which has not thought about it gets
+ *   the sentence that was there before rather than a silently shortened one.
  */
 internal fun catalogueNoticeMessage(
     error: NeedlerError?,
     offline: Boolean,
     notInCatalogue: Boolean = false,
-): String = when {
-    // First, and ahead of `offline`, because this one does not change when the
-    // connection comes back. Telling someone to try again later about a discography
-    // that will never be fetchable is the failure this sentence replaces.
-    notInCatalogue -> CATALOGUE_NO_MBID
-    offline || error is NeedlerError.Offline -> CATALOGUE_OFFLINE
-    error is NeedlerError.NotFound -> CATALOGUE_NOT_IN_CATALOGUE
-    error is NeedlerError.ServerError -> CATALOGUE_SERVER_ERROR
-    error is NeedlerError.RateLimited -> CATALOGUE_RATE_LIMITED
-    else -> CATALOGUE_UNAVAILABLE
+    hasOwned: Boolean = true,
+): String {
+    val playsAsUsual: String = if (hasOwned) OWNED_PLAYS_AS_USUAL else ""
+    val listedAbove: String = if (hasOwned) OWNED_LISTED_ABOVE else ""
+    return when {
+        // First, and ahead of `offline`, because this one does not change when the
+        // connection comes back. Telling someone to try again later about a discography
+        // that will never be fetchable is the failure this sentence replaces.
+        notInCatalogue -> CATALOGUE_NO_MBID
+        offline || error is NeedlerError.Offline -> CATALOGUE_OFFLINE + playsAsUsual
+        error is NeedlerError.NotFound -> CATALOGUE_NOT_IN_CATALOGUE + listedAbove
+        error is NeedlerError.ServerError -> CATALOGUE_SERVER_ERROR + listedAbove
+        error is NeedlerError.RateLimited -> CATALOGUE_RATE_LIMITED + listedAbove
+        else -> CATALOGUE_UNAVAILABLE + listedAbove
+    }
 }
 
 /**
@@ -1057,7 +1279,7 @@ internal const val CATALOGUE_NO_MBID: String =
         "discography to look up under this entry. Search the catalogue by name to find them there."
 
 internal const val CATALOGUE_NOT_IN_CATALOGUE: String =
-    "The catalogue has nothing else for this artist. What you own is listed above."
+    "The catalogue has nothing else for this artist."
 
 /**
  * The row that asks for the next page, when the server has not said how many releases there are.
@@ -1080,8 +1302,18 @@ internal const val LOOKING_UP_MORE_RELEASES: String = "Looking up more releases�
 internal const val MORE_RELEASES_FAILED: String =
     "That page of the discography did not arrive. Tap to try it again."
 
-/** A namesake row's subtitle when the catalogue offered no disambiguation and no album count. */
-internal const val NOT_IN_LIBRARY: String = "Not in your library"
+/**
+ * A namesake row's subtitle when the catalogue offered no disambiguation and no album count.
+ *
+ * REQUIREMENTS.md "Vocabulary" fixes three words for where a record is, and nothing of this
+ * artist's is anywhere: [NeedlerAlbumSource.NotRetrieved]. It read "Not in your library", which is a
+ * fourth word for the first of the three - and it was the phrase the audit found in seven of the
+ * goldens.
+ *
+ * Read from the enum rather than written out, so a row and a badge cannot come to name the same
+ * state differently; that is the whole reason `NeedlerAlbumSource.label` exists.
+ */
+internal val NOT_IN_LIBRARY: String = NeedlerAlbumSource.NotRetrieved.label()
 
 /**
  * The answer when the catalogue has nobody of this name either.
@@ -1125,13 +1357,10 @@ internal const val CATALOGUE_INCOMPLETE: String =
     "This list is the last one your server sent, so it may be short. Try again to refresh it."
 
 internal const val CATALOGUE_SERVER_ERROR: String =
-    "Your server had a problem fetching the rest of this artist's discography. What you own is " +
-        "listed above."
+    "Your server had a problem fetching the rest of this artist's discography."
 
 internal const val CATALOGUE_RATE_LIMITED: String =
-    "The catalogue is busy. The rest of this artist's discography will be there shortly; what " +
-        "you own is listed above."
+    "The catalogue is busy. The rest of this artist's discography will be there shortly."
 
 internal const val CATALOGUE_UNAVAILABLE: String =
-    "The rest of this artist's discography could not be fetched from the catalogue. What you " +
-        "own is listed above."
+    "The rest of this artist's discography could not be fetched from the catalogue."

@@ -5,6 +5,7 @@ package app.needler.feature.pulls.pulls
 import app.needler.core.domain.model.Pull
 import app.needler.core.domain.model.PullBucket
 import app.needler.feature.pulls.common.PullsFormat
+import app.needler.feature.pulls.common.waitsForAPerson
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -134,6 +135,17 @@ data class PullsUiState(
 
     val activeCount: Int get() = active.size
 
+    /**
+     * Active pulls the **server** is working on, which is fewer than [activeCount].
+     *
+     * See `PullState.waitsForAPerson` and `PullsFormat.headerLine` for why the two are counted
+     * apart: an approval nobody has granted and a source nobody has picked are not progress.
+     */
+    val movingCount: Int get() = active.count { !it.state.waitsForAPerson }
+
+    /** Active pulls parked on a person in DroppedNeedle's web interface. */
+    val waitingCount: Int get() = active.count { it.state.waitsForAPerson }
+
     val isEmpty: Boolean get() = pulls.isEmpty()
 
     /** The empty state is only honest once the mirror has actually answered. */
@@ -149,7 +161,12 @@ data class PullsUiState(
     val canClearDone: Boolean get() = completed.isNotEmpty()
 
     /** `2 in progress`, the line under the title on screen 06. */
-    val headerLine: String get() = PullsFormat.headerLine(activeCount, pulls.size)
+    val headerLine: String
+        get() = PullsFormat.headerLine(
+            movingCount = movingCount,
+            waitingCount = waitingCount,
+            totalCount = pulls.size,
+        )
 
     /**
      * The line under the title, for whichever lane is showing.
@@ -184,7 +201,23 @@ data class PullsUiState(
      * have no way to be asked again. Disabled while a fetch is in flight so a second tap cannot
      * start a second one.
      */
-    val showRefresh: Boolean get() = lane.isReadThrough
+    val showRefresh: Boolean get() = lane.isReadThrough && !laneUnavailable
+
+    /**
+     * True when the showing lane has no rows and is saying why.
+     *
+     * It gates [showRefresh] because the pane in that state already draws **Try again**, and the two
+     * controls do the same thing from the same `onRefreshLane` callback. A reviewer found both live
+     * on one screen - "Try again" in the body, "Refresh" in the header - which is two names and two
+     * places for one act, and the one in the body is the one next to the sentence explaining why it
+     * is needed.
+     */
+    val laneUnavailable: Boolean
+        get() = when (lane) {
+            PullsLane.QUEUE -> false
+            PullsLane.HISTORY -> history.status == LaneStatus.UNAVAILABLE
+            PullsLane.WANTED -> wanted.status == LaneStatus.UNAVAILABLE
+        }
 
     /** True while the showing lane is fetching for the first time and has nothing to draw yet. */
     val laneLoading: Boolean
@@ -212,20 +245,18 @@ data class PullsUiState(
         }
 
     /**
-     * True when the showing lane is drawing rows the server can no longer be asked about.
+     * Whether the header states the offline fact.
      *
-     * Only ever true on a read-through lane that was fetched while connected and is now being looked
-     * at offline. REQUIREMENTS.md: "Offline is a first-class state, not an error" — so the rows stay
-     * and the screen says how old they are, rather than blanking a list the user was reading. The
-     * queue has its own, different offline line: its rows come from the mirror, which is the last
-     * thing the server said rather than a page this session happened to fetch.
+     * Whenever there are rows on screen that the server can no longer be asked about — the queue's
+     * mirror, or a read-through lane's last fetched page. REQUIREMENTS.md: "Offline is a first-class
+     * state, not an error", so the rows stay and the screen says how old they are rather than
+     * blanking a list the user was reading.
+     *
+     * Not when the lane has nothing to draw: the pane below then says it instead, in the same words
+     * and with room to add **Try again**. One fact, one wording, and never twice at once — which is
+     * what the three separate offline treatments on this screen used to manage between them.
      */
-    val laneIsStale: Boolean
-        get() = offline && lane.isReadThrough && when (lane) {
-            PullsLane.QUEUE -> false
-            PullsLane.HISTORY -> history.entries.isNotEmpty()
-            PullsLane.WANTED -> !wanted.isEmpty
-        }
+    val showOfflineBanner: Boolean get() = offline && !laneLoading && !laneUnavailable
 }
 
 /**

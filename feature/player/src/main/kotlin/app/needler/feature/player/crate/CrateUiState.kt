@@ -1,7 +1,9 @@
 package app.needler.feature.player.crate
 
+import app.needler.core.design.component.NeedlerAlbumBadge
 import app.needler.core.domain.model.PlayQueue
 import app.needler.core.domain.model.QueueItem
+import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.feature.player.ui.PlayerFormat
 
 /**
@@ -16,6 +18,27 @@ data class CrateUiState(
     val queue: PlayQueue = PlayQueue.Empty,
     /** Whether the Playing row is actually playing, which changes only its glyph. */
     val isPlaying: Boolean = false,
+    /**
+     * The records this device holds its own copy of, by release group.
+     *
+     * ## Why the crate of all screens carries this
+     *
+     * It carried nothing. No marker, no quality tag, no state word on any queued row - so the one
+     * screen that answers "what will still play on the train" answered it nowhere. REQUIREMENTS.md
+     * "Vocabulary" fixes three words for where a record is and says they are "the words every surface
+     * draws"; the crate drew none of them, while the player two hand-widths above it drew `Device:`
+     * and `Server:` for the current track alone.
+     *
+     * Album-level and not per track, because **Device** is an album-level fact: REQUIREMENTS.md
+     * "Vocabulary" derives the state from `AlbumState.Pinned`, which is written only from the pin
+     * table, and explicitly excludes the temporary tier from every on-device signal in the app. A
+     * row's record is pinned or it is not, and a part-downloaded pin is still **Device** - the same
+     * rule `NeedlerAlbumBadge.OnDevice` already states.
+     *
+     * Empty by default, which is what every screenshot and every caller that has no pin reader gets:
+     * an unknown state draws **Server**, the state a streamed track is actually in.
+     */
+    val onDeviceAlbums: Set<ReleaseGroupMbid> = emptySet(),
 ) {
     /** The Playing row, or null when nothing is loaded. */
     val playing: QueueItem? get() = queue.currentItem
@@ -110,6 +133,38 @@ data class CrateUiState(
      * them also gives the title the width back, which is the half of the row that differs.
      */
     val showsRowArtwork: Boolean get() = !isOneRecord
+
+    /**
+     * Which of the three state words one row wears.
+     *
+     * Two of the three only: `Not retrieved` cannot reach a crate, because a record the server does
+     * not have cannot be queued. So every row is **Device** or **Server**, and both are drawn - a
+     * marker on one and nothing on the other would make "no badge" mean two different things, which
+     * is what the library grid's `NotOwned` row already uses absence for.
+     */
+    fun retrievalOf(item: QueueItem): NeedlerAlbumBadge =
+        if (item.track.releaseGroupMbid in onDeviceAlbums) {
+            NeedlerAlbumBadge.OnDevice
+        } else {
+            NeedlerAlbumBadge.InLibrary
+        }
+
+    /**
+     * Which record the whole crate is, or null when it is more than one.
+     *
+     * [isOneRecord] moved the artist and the album off every row, correctly - eleven identical second
+     * lines carry no information - and then the two words appeared nowhere at all: the rows read
+     * "Sienna / Track 1" under the generic heading "IN THE CRATE", so a crate of one album never said
+     * which album. De-duplicating a repeated line means hoisting it, not dropping it, and this is
+     * where it goes.
+     */
+    val recordLabel: String?
+        get() {
+            if (!isOneRecord) return null
+            val track = queue.items.first().track
+            val album: String? = track.albumTitle?.takeIf { it.isNotBlank() }
+            return if (album == null) track.artistName else track.artistName + PlayerFormat.DOT + album
+        }
 
     /**
      * Where a row of Up next sits in [PlayQueue.items].

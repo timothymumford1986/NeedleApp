@@ -67,7 +67,7 @@ fun NeedlerCrateControl(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     emphasised: Boolean = false,
-    visualSize: Dp = 32.dp,
+    visualSize: Dp = NeedlerRowLayout.controlSize(32.dp),
 ) {
     val colors = NeedlerTheme.colors
     Box(modifier = modifier) {
@@ -85,7 +85,9 @@ fun NeedlerCrateControl(
         ) {
             NeedlerMoreIcon(
                 tint = if (emphasised) colors.textSecondary else colors.textMuted,
-                size = if (emphasised) 20.dp else 18.dp,
+                // Scaled with the text, like the heart and the track row's own overflow glyph: a
+                // row that doubles in height must not keep a 32dp target. See `NeedlerRowLayout`.
+                size = NeedlerRowLayout.controlSize(if (emphasised) 20.dp else 18.dp),
             )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
@@ -146,7 +148,7 @@ private fun CrateMenuItem(
             Text(
                 text = label,
                 style = NeedlerTheme.typography.body,
-                color = if (enabled) colors.textPrimary else colors.textMuted,
+                color = if (enabled) colors.textPrimary else colors.disabled,
             )
         },
         onClick = onTap,

@@ -74,6 +74,27 @@ class GenreScreenshotTest {
         capture("genre-large-text", NeedlerDevice.Phone, LOADED, fontScale = 2f)
     }
 
+    /**
+     * One genre whose name does not fit the header.
+     *
+     * The shelf's version of this is `GenresScreenshotTest`'s `genres-long-names`; this is the other
+     * half, because the name arrives here as a *title* rather than as a row - the screen takes it
+     * from the route and sets it in `displayCompact` across the top. A row can wrap or ellipsise
+     * quietly; a screen title that wraps to four lines moves Play, Shuffle and every track under it.
+     *
+     * The value is the composite string a server sent unsplit, which is the longest name this screen
+     * can really be handed. `GenreCodec` stops it being written now, and a row written before that
+     * fix still opens.
+     */
+    @Test
+    fun `a name too long for the header`() {
+        capture(
+            "genre-long-name",
+            NeedlerDevice.Phone,
+            LOADED.copy(genre = "Acoustic Rock;Alternative Rock;Folk Rock;Indie Rock;Pop Rock"),
+        )
+    }
+
     // ---- plumbing -----------------------------------------------------------
 
     private fun capture(
@@ -102,6 +123,8 @@ class GenreScreenshotTest {
             onPlayAll = {},
             onShuffleAll = {},
             onPlayTrack = {},
+            onShowMore = {},
+            onSyncNow = {},
         )
     }
 

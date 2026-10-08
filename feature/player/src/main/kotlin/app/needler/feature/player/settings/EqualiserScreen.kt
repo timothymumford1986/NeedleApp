@@ -17,9 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import app.needler.core.design.component.NeedlerHairline
 import app.needler.core.design.component.NeedlerPillButton
-import app.needler.core.design.component.NeedlerTextButton
 import app.needler.core.design.component.NeedlerToggleRow
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.EqBand
@@ -45,6 +43,19 @@ import app.needler.core.domain.model.EqSettings
  * The sliders stay on screen, greyed, rather than disappearing: they are the record of what the
  * listener set up, and hiding them makes the toggle feel like it deleted something. Nothing in the
  * card responds until the equaliser is on again.
+ *
+ * ## Why there is no "Reset to flat"
+ *
+ * There was, at the foot of the screen, and it was the **Flat** preset chip at the top of the same
+ * screen written out a second time: `EqualiserViewModel.resetToFlat` was
+ * `EqPresets.apply(EqPreset.FLAT, state)` and `selectPreset(EqPreset.FLAT)` is the same expression,
+ * so the two controls were the same call under two names at opposite ends of one scroll. The chip is
+ * the one that stays: it is where the other four presets are, it lights up to show that flat is the
+ * curve in force, and a text button cannot do either.
+ *
+ * The rejected alternative was to keep the button and drop **Flat** from the preset row. It reads as
+ * the same trade and is not: the row would then have four chips and no way to show that the curve is
+ * flat, which is the state a listener resetting it is trying to reach.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -54,7 +65,6 @@ fun EqualiserScreen(
     onPresetSelected: (EqPreset) -> Unit,
     onBandChange: (EqBand, Float) -> Unit,
     onPreampChange: (Float) -> Unit,
-    onResetToFlat: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -120,20 +130,11 @@ fun EqualiserScreen(
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                PreampSlider(
-                    preampDb = settings.preampDb,
-                    onPreampChange = onPreampChange,
-                    enabled = enabled,
-                )
-                NeedlerHairline()
-                NeedlerTextButton(
-                    text = "Reset to flat",
-                    onClick = onResetToFlat,
-                    enabled = enabled,
-                    contentDescription = "Reset every band to flat",
-                )
-            }
+            PreampSlider(
+                preampDb = settings.preampDb,
+                onPreampChange = onPreampChange,
+                enabled = enabled,
+            )
 
             Text(
                 text = "Same 10 bands as Dropped Needle's player, saved on this device.",

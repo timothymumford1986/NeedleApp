@@ -77,7 +77,8 @@ The palette is a single dark theme built on a near-black olive canvas, with one 
 | Surface raised | `#1f271b` | Pressed and selected rows |
 | Text primary | `#f2f5ee` | Titles, track names |
 | Text secondary | `#a8b3a0` | Artists, metadata |
-| Text muted | `#6f7a68` | Placeholders, disabled |
+| Text muted | `#828f7a` | Placeholders, timecodes, tertiary copy |
+| Disabled | `#6f7a68` | Inactive controls, and only those |
 | Accent | `#aed5f2` | Primary buttons, links, transport, **the server state** |
 | On accent | `#071520` | Text on accent fills |
 | Positive | `#bbdb9b` | Progress, Ready, **the device state** and its check |
@@ -86,7 +87,7 @@ The palette is a single dark theme built on a near-black olive canvas, with one 
 | Destructive | `#e8908a` | Remove all, unpin, sign out, delete confirmations |
 | On destructive | `#200c0a` | Text on destructive fills |
 
-The destructive pair is an addition, not a value from the pack; `#6f7a68` is kept as drawn despite failing AA. Both are decisions with reasoning, recorded under Accessibility.
+The destructive pair is an addition, not a value from the pack. `#6f7a68` was kept as drawn despite failing AA, and that decision has since been **reversed for prose and kept for controls**: the tertiary text tier moved to `#828f7a`, and the drawn value stayed on its own `Disabled` token. All three are decisions with reasoning, recorded under Accessibility.
 
 **Accent and positive are the state pair.** "Vocabulary" gives each of the two drawn record states one of them, permanently: accent is *server*, positive is *device*, and they do not trade places when emphasis moves. They are the only complementary pair in the palette, `positive` was already the on-device colour in the row above, and that is the whole reason no token was added for this — a tenth value was considered and would have been a worse answer than a pair the design already had.
 
@@ -1056,7 +1057,11 @@ Every control carries a content description and transport controls are at least 
 
 Contrast on the specified palette has been measured, and it produced one decision, one addition and one open issue.
 
-**The muted grey is kept as drawn.** `#6f7a68` measures 4.21:1 on the canvas, 3.82:1 on surface and 3.42:1 on raised surface, so it fails the 4.5:1 AA threshold for normal text everywhere the pack uses it — placeholders, timecodes, disabled text, inactive nav items. A lighter same-hue alternative was identified and costed: `#828f7a`, which measures 5.56:1 on the canvas and clears AA on every background in use. The drawn value is nevertheless kept. This is a recorded product decision, not an outstanding risk, and the alternative is written down here so that reversing the decision later is a one-line change rather than a re-investigation.
+**The muted grey was kept as drawn, and that decision has been reversed — for three of its four jobs.** `#6f7a68` measures 4.21:1 on the canvas, 3.82:1 on surface and 3.42:1 on raised surface, so it fails the 4.5:1 AA threshold for normal text everywhere the pack used it — placeholders, timecodes, disabled text, inactive nav items. The costed alternative recorded here, `#828f7a` at 5.56:1 on the canvas, 5.05:1 on surface and 4.51:1 on raised, is now the value of `Text muted`. What moved the call was the breadth of the role rather than any one screen: this colour is the whole third tier of body copy, and a tier of prose that fails AA is not a styling choice.
+
+The fourth job did not come with it. **A disabled control has the opposite requirement to prose** — it must read as inoperable, and the way it does that is by being dimmer than the live state beside it. Raising the one token served the prose and broke the control: on the transport, where shuffle has three appearances (`Accent` on, `Text secondary` off, the dim value unavailable), off against unavailable went from **2.06:1 to 1.56:1**, giving back a quarter of the separation a shipped fix had won. The same narrowing applied to every disabled button label in the product.
+
+So `#6f7a68` is kept, under its own `Disabled` token, for inactive controls and nothing else. WCAG 2.2 exempts those by name: 1.4.3 does not apply to "text or images of text that are part of an inactive user interface component", and 1.4.11 carves out the same for non-text contrast. The value clears 1.4.11's 3:1 anyway at 4.03:1 on the canvas, and the state reaches a screen reader through the component's `enabled` flag rather than through the colour. One token had been doing two jobs with incompatible rules; `StateBadgeLabelTest` now asserts both the 2.06:1 separation and the 1.56:1 that made the split necessary.
 
 **A destructive colour was added.** The pack draws none, which meant "Remove all from device" rendered in the same accent blue as "Connect" and "Play" — permanent data loss styled exactly like the primary action. `#e8908a` fills the gap: a pale, desaturated red in the same family as the pack's other two signal colours, rather than a saturated warning red that would be louder than anything else in the design. It measures 7.93:1 on the canvas, 7.21:1 on surface and 6.44:1 on raised surface.
 
@@ -1234,7 +1239,7 @@ Recorded so the reasoning is not re-litigated. Each is now specified in the sect
 | What happens to a part-delivered album? | It reads as **server**, plays what arrived, and greys the rest with a retry | Partial content is a normal state |
 | Does a revoked app-password force re-onboarding? | No. With a live bearer a replacement is minted silently; only two dead credentials re-onboard | Expiry, and why playback survives it |
 | What is the storage budget, and its default? | There is none. Downloads are unlimited; the listening cache is bounded by device free space | Storage, and why there is no budget |
-| Should the muted grey be lightened? | No. `#6f7a68` is kept as drawn, with the alternative documented | Accessibility |
+| Should the muted grey be lightened? | Yes, for prose. `#828f7a` carries the tertiary text tier; `#6f7a68` stays on a `Disabled` token, which WCAG exempts | Accessibility |
 | Does the palette need a destructive colour? | Yes. `#e8908a` was added | Accessibility |
 | Is "Prefer FLAC" a read-only display or an admin-only control? | Read-only, and not in Settings at all. The policy applied to a request is shown on the album it was requested for, from `quality_snapshot_summary` | Design pack discrepancies |
 | Does a per-item quality override survive the album being downloaded? | Yes, dormant. A local copy always wins, so the override changes nothing while the download exists, and it is kept rather than cleared | Streaming |

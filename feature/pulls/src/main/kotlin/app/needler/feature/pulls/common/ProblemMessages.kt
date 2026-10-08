@@ -100,10 +100,16 @@ internal fun problemMessage(error: NeedlerError): String = when (error) {
 internal fun laneProblemMessage(error: NeedlerError, lane: String): String = when (error) {
     // Not an error. The server's record is intact, the server is still working, and the one thing
     // that is missing is the connection to read it over.
+    //
+    // Opens on the same word as `PullsScreen.OFFLINE_NOTE` and says the same thing in the same
+    // register, because this pane and that banner are the screen's two ways of reporting one fact
+    // and a reviewer found them reading as two different ones. The pane says more only because it
+    // has to: here there are no rows at all, so it has to say where the list lives and what still
+    // works without a connection.
     is NeedlerError.Offline ->
-        "Offline, so " + lane + " cannot be read. It is kept on the server, not on this device, " +
-            "and nothing has been lost — the server carries on whether or not this app can reach " +
-            "it. Pulls already in progress are on the Pulls tab, which works offline."
+        "Offline. " + lane.replaceFirstChar { it.uppercase() } + " is kept on the server, not on " +
+            "this device, so there is nothing to show until you are back online. Nothing has been " +
+            "lost, and pulls already in progress are on the Pulls tab, which works offline."
 
     NeedlerError.SessionExpired ->
         "Your sign-in has expired, so " + lane + " cannot be read until you sign in again. Your " +

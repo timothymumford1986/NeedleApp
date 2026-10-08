@@ -102,7 +102,7 @@ data class PlayerUiState(
 
     /** The small line: `The Marias - Submarine`, or what to do about it. */
     val subtitle: String
-        get() = if (item == null) "Play an album and it lands in the crate" else PlayerFormat.artistAndAlbum(item)
+        get() = if (item == null) PlayerFormat.EMPTY_CRATE else PlayerFormat.artistAndAlbum(item)
 
     /** The quality badge beside the title, or null when the server reported no format. */
     val formatBadge: String? get() = PlayerFormat.formatBadge(quality)

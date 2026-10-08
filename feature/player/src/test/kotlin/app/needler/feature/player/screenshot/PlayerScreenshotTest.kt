@@ -4,11 +4,8 @@ import android.app.Application
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.NeedlerError
 import app.needler.core.domain.model.OfflineCause
@@ -23,8 +20,6 @@ import app.needler.feature.player.fake.PlayerFixtures
 import app.needler.feature.player.nowplaying.MiniPlayer
 import app.needler.feature.player.nowplaying.NowPlayingScreen
 import app.needler.feature.player.sidebar.PlayerSidebarContent
-import app.needler.feature.player.ui.SleepTimerChoice
-import app.needler.feature.player.ui.SleepTimerChoices
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -296,7 +291,7 @@ class PlayerScreenshotTest {
         capture("player-sidebar", PlayerDevice.Sidebar) {
             PlayerSidebarContent(
                 state = PLAYING.copy(
-                    output = PlayerFixtures.thisTablet,
+                    output = PlayerFixtures.thisPhone,
                     upNextCount = 4,
                 ),
                 crate = CrateUiState(queue = PlayerFixtures.crate, isPlaying = true),
@@ -451,20 +446,12 @@ class PlayerScreenshotTest {
         }
     }
 
-    @Test
-    fun `the sleep timer's choices`() {
-        capture("player-sleep-timer-choices", PlayerDevice.Phone) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(NeedlerTheme.colors.canvas)
-                    .padding(horizontal = 20.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                SleepTimerChoices(selected = SleepTimerChoice.MINUTES_30, onChoose = {})
-            }
-        }
-    }
+    // `player-sleep-timer-choices-phone.png` is recorded by `SleepTimerScreenshotTest`, not here.
+    // It used to be this file's: `SleepTimerChoices` centred on its own in an empty frame, six pills
+    // on blank canvas with 764 of the image's 1688 rows below them. That image could not show the
+    // one thing the panel's recent fix was about - where the panel comes to rest on a real screen -
+    // so it is now the screen with the chip pressed, which needs a compose rule and therefore a file
+    // of its own. That file's KDoc has the rest of the reasoning.
 
     private fun capture(
         name: String,

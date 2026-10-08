@@ -297,6 +297,56 @@ class LibraryControlsTest {
         compose.onNodeWithContentDescription(SORT_RECENT).assertExists()
     }
 
+    // ---- the browse destinations --------------------------------------------
+
+    /**
+     * Playlists and Genres are reachable, and announced as destinations.
+     *
+     * The entry point is the thing worth asserting: `NeedlerNavHost` registered both routes and
+     * nothing navigated to either, so four finished screens shipped unreachable and every test
+     * exercised the screens rather than the way in. The spoken label is the action rather than the
+     * noun, so a TalkBack user hears that this opens something instead of hearing the same word
+     * the tabs use.
+     */
+    @Test
+    fun `the browse destinations are reachable from the library`() {
+        showLibrary()
+
+        compose.onNodeWithContentDescription(PLAYLISTS).assertExists()
+        compose.onNodeWithContentDescription(GENRES).assertExists()
+    }
+
+    /** Both are 48dp targets, like every other control on this screen. */
+    @Test
+    fun `the browse destinations are 48dp targets`() {
+        showLibrary()
+
+        assertAtLeast48dp(PLAYLISTS)
+        assertAtLeast48dp(GENRES)
+    }
+
+    // ---- nothing live over nothing ------------------------------------------
+
+    /**
+     * An empty tab keeps its tabs and loses the five controls that could not act on it.
+     *
+     * `screenshots/library-empty-phone.png` drew seven live controls over a library with nothing
+     * in it. The tabs are the exception and the reason is `LibraryViewModel`: it fills only the
+     * selected tab's list, so an empty Songs tab says nothing about whether there are albums, and
+     * a screen that hid the tabs would strand the user on the empty one.
+     */
+    @Test
+    fun `an empty tab drops the sort, the toggle and the browse destinations`() {
+        showLibrary()
+
+        show(LibraryUiState(loading = false))
+        compose.onNodeWithContentDescription(TABS).assertExists()
+        compose.onNodeWithContentDescription(SORT_RECENT).assertDoesNotExist()
+        compose.onNodeWithContentDescription(TOGGLE_TO_LIST).assertDoesNotExist()
+        compose.onNodeWithContentDescription(PLAYLISTS).assertDoesNotExist()
+        compose.onNodeWithContentDescription(GENRES).assertDoesNotExist()
+    }
+
     // ---- plumbing -----------------------------------------------------------
 
     private fun assertAtLeast48dp(description: String) {
@@ -366,11 +416,23 @@ class LibraryControlsTest {
         const val SORT_RECENT: String = "Sort: recently added"
         const val TOGGLE_TO_LIST: String = "Switch to list view"
 
+        const val PLAYLISTS: String = "Open playlists"
+        const val GENRES: String = "Open genres"
+
+        /**
+         * A library with something in every tab.
+         *
+         * The songs were missing, which mattered once the row started hiding the controls that
+         * cannot act on an empty tab: "the sort control stays on the songs tab" was passing
+         * against a Songs tab that had no songs in it, so it was asserting the control survives a
+         * state the control is now deliberately absent from.
+         */
         val LOADED = LibraryUiState(
             loading = false,
             stats = SampleLibrary.stats,
             albums = SampleLibrary.albums,
             artists = SampleLibrary.artists,
+            songs = SampleLibrary.submarineTracks,
             renderedAt = SampleLibrary.renderedAt,
         )
     }

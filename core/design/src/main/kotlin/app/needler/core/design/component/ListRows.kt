@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -31,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.theme.NeedlerTheme
+import app.needler.core.design.theme.wrapsAtWords
 
 /**
  * The 1dp hairline that separates rows: `rgba(242,245,238,0.08)`.
@@ -46,6 +49,122 @@ fun NeedlerHairline(modifier: Modifier = Modifier) {
             .height(NeedlerTheme.sizes.hairlineThickness)
             .background(NeedlerTheme.colors.hairline),
     )
+}
+
+/**
+ * How a row divides its width, when it stops dividing it, and how big its controls are.
+ *
+ * ## The defect this exists for
+ *
+ * Four reviewers found the same mechanism on four surfaces: a fixed-width trailing element wins the
+ * width fight against the title, and the title then breaks mid-word. `Death's Dateless Night` drew
+ * as `Deat` / `h's ...`, `Mordechai` as `M` / `...`, `Submarine` as `Sub` / `m...`.
+ *
+ * It is a property of `Row` rather than a mistake at any one call site. A `Row` measures its
+ * **unweighted** children first, at the full width available, and gives the weighted ones whatever
+ * is left. Every row in this file put its text in a `Modifier.weight(1f)` column and its badge,
+ * chip, duration or glyph in no weight at all - so the trailing element took the width it asked
+ * for, however much that was, and the title received the remainder. With
+ * `NeedlerAlbumBadge.NeedsAttention` at its old 196dp that remainder was 74dp of the 266dp a 390dp
+ * phone row has to share, which is about ten characters of `rowTitle`. Shortening the badge, which
+ * `StateBadgeLabelTest` records, fixed the worst instance; it did not change the rule that produces
+ * the next one.
+ *
+ * ## The rule
+ *
+ * The title column is weighted and the trailing block is weighted too, with
+ * `Modifier.weight(..., fill = false)`. Two weighted children split the space in a fixed ratio
+ * regardless of what either asks for, and `fill = false` lets the trailing block still be narrower
+ * than its share when its content is small - which is the usual case, so most rows are drawn
+ * exactly as before. What changes is the worst case: the title can no longer be squeezed below
+ * [TITLE_WEIGHT] of the row whatever the trailing block holds.
+ *
+ * Word-level wrapping is the other half, and it lives in
+ * [app.needler.core.design.theme.wrapsAtWords].
+ *
+ * ## Why it stacks instead past [STACK_ABOVE_FONT_SCALE]
+ *
+ * Because a ratio cannot save two text blocks side by side at 200%. REQUIREMENTS.md
+ * "Accessibility" requires text to "scale to 200% without clipping"; at that scale a 390dp phone
+ * row has roughly 266dp to share and the title alone wants more than all of it, so dividing that
+ * width 62/38 only decides which of the two columns is unreadable. Past the threshold the trailing
+ * block is drawn **below** the title instead and takes the row's full width, which trades row
+ * height - of which a scrolling list has an unlimited supply - for row width, of which it has
+ * 266dp.
+ *
+ * The threshold is 1.3 rather than 2.0 because the damage starts long before 200%: Android's
+ * largest ordinary font setting is 1.3, and the accessibility sizes above it go to 2.0. So the
+ * stack begins at the first setting a user has to go looking for, not at the last one.
+ *
+ * Only the two rows with a *status block* beside a two-line text column stack: [NeedlerAlbumRow]
+ * and [NeedlerQueueRow]. A settings value, a duration and a selected check are short, single runs
+ * and the ratio is enough for them; moving a chevron below the label it belongs to would be a
+ * different row rather than the same row at a bigger size.
+ *
+ * ## Why the controls scale and the touch floor does not
+ *
+ * A device reviewer found that the `...` and the heart "stay at default size while everything
+ * around them doubles, so the only small targets left are the ones a large-text user must hit".
+ * They were fixed `Dp`, which is correct for the pack and wrong under scaling: a row grows with its
+ * text and its controls then shrink relative to everything beside them. [controlSize] scales them
+ * on the same signal the text uses. The 48dp floor REQUIREMENTS.md "Accessibility" requires is
+ * unaffected - it is a floor, applied by [NeedlerIconButton], and scaling only ever moves a control
+ * up from it.
+ *
+ * ## The rejected alternative
+ *
+ * `BoxWithConstraints` in each row, measuring the trailing slot and deciding from the real width.
+ * It is more accurate and it costs a subcomposition on every row of every list, which is the one
+ * place in a Compose application where that bill is paid per item per scroll. The two weights and
+ * the one threshold are arithmetic.
+ */
+object NeedlerRowLayout {
+
+    /**
+     * The share of a row's divisible width the title column is guaranteed. 0.62.
+     *
+     * Of the 266dp a 390dp phone row shares, that is 165dp - about 22 characters of `rowTitle` at
+     * the 7.4dp-per-character average `StateBadgeLabelTest` calibrated off the committed renders,
+     * over two lines. `Death's Dateless Night` is 22 characters.
+     */
+    const val TITLE_WEIGHT: Float = 0.62f
+
+    /**
+     * The most of a row's divisible width a trailing block may take. 0.38.
+     *
+     * A ceiling, not an allocation: with `fill = false` a trailing block narrower than this is
+     * drawn at its own width and the title keeps the difference.
+     */
+    const val TRAILING_WEIGHT: Float = 1f - TITLE_WEIGHT
+
+    /** Past this text scale a trailing status block is drawn below the title rather than beside it. */
+    const val STACK_ABOVE_FONT_SCALE: Float = 1.3f
+
+    /**
+     * The most [controlSize] will grow a control, whatever the system reports. 2.0.
+     *
+     * Android's own accessibility sizes stop at 2.0, but `fontScale` is a `Float` an OEM skin or a
+     * display-size setting can push past it, and a 36dp glyph at 3x is a 108dp target in a row that
+     * holds two lines of text.
+     */
+    const val MAX_CONTROL_SCALE: Float = 2f
+
+    /** Whether a trailing status block should be drawn below the title at the current text scale. */
+    val stacksTrailing: Boolean
+        @Composable @ReadOnlyComposable
+        get() = LocalDensity.current.fontScale >= STACK_ABOVE_FONT_SCALE
+
+    /**
+     * [base] grown by the current text scale, so a row control keeps its proportion to the text
+     * beside it.
+     *
+     * Never smaller than [base]: the pack's sizes are the floor, and a `fontScale` below 1 is a
+     * user asking for more text on screen rather than for smaller buttons.
+     */
+    @Composable
+    @ReadOnlyComposable
+    fun controlSize(base: Dp): Dp =
+        base * LocalDensity.current.fontScale.coerceIn(1f, MAX_CONTROL_SCALE)
 }
 
 /**
@@ -120,24 +239,38 @@ fun NeedlerTrackRow(
         }
         Text(
             text = title,
-            style = if (isPlaying) typography.rowTitle else typography.rowTitleRegular,
+            style = (if (isPlaying) typography.rowTitle else typography.rowTitleRegular)
+                .wrapsAtWords(),
             color = titleColor,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(NeedlerRowLayout.TITLE_WEIGHT),
         )
-        Text(
-            text = duration,
-            style = typography.duration,
-            color = colors.textMuted,
-        )
-        if (onMoreClick != null) {
-            NeedlerIconButton(
-                contentDescription = "More actions for $title",
-                onClick = onMoreClick,
-                visualSize = 36.dp,
-            ) {
-                NeedlerMoreIcon(tint = colors.textMuted)
+        // The duration and the overflow glyph together, capped at
+        // `NeedlerRowLayout.TRAILING_WEIGHT`: "11:48" at 200% is 26sp of tabular figures, and
+        // unweighted it took that width off the title.
+        Row(
+            modifier = Modifier.weight(NeedlerRowLayout.TRAILING_WEIGHT, fill = false),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = duration,
+                style = typography.duration,
+                color = colors.textMuted,
+                maxLines = 1,
+            )
+            if (onMoreClick != null) {
+                NeedlerIconButton(
+                    contentDescription = "More actions for $title",
+                    onClick = onMoreClick,
+                    visualSize = NeedlerRowLayout.controlSize(36.dp),
+                ) {
+                    NeedlerMoreIcon(
+                        tint = colors.textMuted,
+                        size = NeedlerRowLayout.controlSize(18.dp),
+                    )
+                }
             }
         }
     }
@@ -186,15 +319,33 @@ fun NeedlerSettingsRow(
         ) {
             Text(
                 text = label,
-                style = typography.body,
-                color = if (enabled) colors.textPrimary else colors.textMuted,
-                modifier = Modifier.weight(1f),
+                style = typography.body.wrapsAtWords(),
+                color = if (enabled) colors.textPrimary else colors.disabled,
+                modifier = Modifier.weight(NeedlerRowLayout.TITLE_WEIGHT),
             )
-            if (value != null) {
-                Text(text = value, style = typography.bodySmall, color = colors.textSecondary)
-            }
-            if (showChevron) {
-                NeedlerChevronRightIcon(tint = colors.textMuted)
+            // The value and the chevron share the trailing cap. A settings value is one short run
+            // and not a status block, so it narrows with the ratio rather than dropping below the
+            // label; see `NeedlerRowLayout`.
+            Row(
+                modifier = Modifier.weight(NeedlerRowLayout.TRAILING_WEIGHT, fill = false),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (value != null) {
+                    Text(
+                        text = value,
+                        style = typography.bodySmall.wrapsAtWords(),
+                        color = colors.textSecondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (showChevron) {
+                    NeedlerChevronRightIcon(
+                        tint = colors.textMuted,
+                        size = NeedlerRowLayout.controlSize(16.dp),
+                    )
+                }
             }
         }
         if (showDivider) NeedlerHairline()
@@ -246,17 +397,19 @@ fun NeedlerToggleRow(
             ) {
                 Text(
                     text = label,
-                    style = typography.body,
-                    color = if (enabled) colors.textPrimary else colors.textMuted,
+                    style = typography.body.wrapsAtWords(),
+                    color = if (enabled) colors.textPrimary else colors.disabled,
                 )
                 if (subtitle != null) {
                     Text(
                         text = subtitle,
-                        style = typography.caption,
+                        style = typography.caption.wrapsAtWords(),
                         color = colors.textMuted,
                     )
                 }
             }
+            // The switch keeps the pack's 48x28dp: it is the one row control that is already a
+            // whole-row target, so growing it would only take width off the label it labels.
             NeedlerSwitch(checked = checked, enabled = enabled)
         }
         if (showDivider) NeedlerHairline()
@@ -283,7 +436,7 @@ fun NeedlerSwitch(
     val sizes = NeedlerTheme.sizes
     val trackColor = if (checked) colors.accent else colors.surfaceRaised
     val thumbColor = when {
-        !enabled -> colors.textMuted
+        !enabled -> colors.disabled
         checked -> colors.onAccent
         else -> colors.textSecondary
     }
@@ -317,6 +470,15 @@ fun NeedlerSwitch(
  * The [trailing] slot is where a [NeedlerStateBadge], a [NeedlerPullButton] or a Retry pill goes.
  * Anything interactive placed there stays a separate accessibility target.
  *
+ * ## What the trailing slot may and may not take
+ *
+ * It is capped at [NeedlerRowLayout.TRAILING_WEIGHT] of the row's divisible width and, past
+ * [NeedlerRowLayout.STACK_ABOVE_FONT_SCALE], drawn below the title instead of beside it.
+ * `NeedlerRowLayout` has the whole reasoning and the measurements; what matters at this signature is
+ * that the slot's content is laid out in a `Row` of its own, so a `Modifier.weight` written inside
+ * it divides that inner row rather than this one. No caller did that, which is why the slot could be
+ * wrapped without a signature change.
+ *
  * ## The playing row
  *
  * [isPlaying] draws this row the way the pack draws a playing track everywhere else it appears: the
@@ -328,8 +490,9 @@ fun NeedlerSwitch(
  * draws the glyph *and* [trailing], the glyph first so the trailing column still lines up down the
  * list. The crate has nothing in that slot, so there the two can never collide; the Songs tab puts
  * the track's duration there, and a row that dropped its duration only while playing would lose
- * information and make the list twitch as playback moves. The glyph is 18dp and the title column
- * carries the weight, so both fit at 200% text.
+ * information and make the list twitch as playback moves. The glyph scales with the text through
+ * [NeedlerRowLayout.controlSize] and the title column holds [NeedlerRowLayout.TITLE_WEIGHT], so
+ * both still fit at 200%, where the trailing block has moved under the title anyway.
  *
  * Drawing it is the point, not decoration. The accent title alone would make colour the only visual
  * channel for this state, which is no signal at all to a reader who cannot separate the accent blue
@@ -364,6 +527,10 @@ fun NeedlerAlbumRow(
         append(contentDescription ?: "$title, $subtitle")
         if (isPlaying) append(", playing")
     }
+    // The trailing block moves below the title past `NeedlerRowLayout.STACK_ABOVE_FONT_SCALE`. The
+    // reading does not change with it: the row is one merged semantics node either way, so a
+    // screen-reader user hears the same sentence at every text scale.
+    val stacked: Boolean = NeedlerRowLayout.stacksTrailing
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -383,28 +550,49 @@ fun NeedlerAlbumRow(
         ) {
             artwork?.invoke()
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(NeedlerRowLayout.TITLE_WEIGHT),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     text = title,
-                    style = typography.rowTitle,
+                    style = typography.rowTitle.wrapsAtWords(),
                     color = if (isPlaying) colors.accent else colors.textPrimary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
                     text = subtitle,
-                    style = typography.meta,
+                    style = typography.meta.wrapsAtWords(),
                     color = colors.textSecondary,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // Past the threshold the trailing block is drawn here, under the title, at the
+                // row's full width. See `NeedlerRowLayout`: at 200% a 390dp row cannot hold two
+                // text columns side by side, and a list has height to spend where it has no width.
+                if (stacked && trailing != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        content = trailing,
+                    )
+                }
             }
             if (isPlaying) {
-                NeedlerNowPlayingIcon(tint = colors.accent)
+                NeedlerNowPlayingIcon(
+                    tint = colors.accent,
+                    size = NeedlerRowLayout.controlSize(18.dp),
+                )
             }
-            trailing?.invoke(this)
+            if (!stacked && trailing != null) {
+                Row(
+                    modifier = Modifier.weight(NeedlerRowLayout.TRAILING_WEIGHT, fill = false),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    content = trailing,
+                )
+            }
         }
         if (showDivider) NeedlerHairline()
     }
@@ -444,6 +632,7 @@ fun NeedlerQueueRow(
             add(CustomAccessibilityAction("Move down in the crate") { onMoveDown(); true })
         }
     }
+    val stacked: Boolean = NeedlerRowLayout.stacksTrailing
 
     Row(
         modifier = modifier
@@ -468,32 +657,54 @@ fun NeedlerQueueRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (showHandle) {
+            // Not scaled, and it is the one row control that is not. The handle is a marking rather
+            // than a target - the drag gesture belongs to the feature module and covers the row -
+            // so growing it would take width off the title without giving anyone a bigger thing to
+            // hit.
             NeedlerDragHandleIcon(tint = colors.textMuted)
         }
         artwork?.invoke()
         Column(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(NeedlerRowLayout.TITLE_WEIGHT),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
                 text = title,
-                style = typography.rowTitle,
+                style = typography.rowTitle.wrapsAtWords(),
                 color = if (isPlaying) colors.accent else colors.textPrimary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = subtitle,
-                style = typography.meta,
+                style = typography.meta.wrapsAtWords(),
                 color = colors.textSecondary,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (stacked && trailing != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    content = trailing,
+                )
+            }
         }
         if (isPlaying && trailing == null) {
-            NeedlerNowPlayingIcon(tint = colors.accent)
+            NeedlerNowPlayingIcon(
+                tint = colors.accent,
+                size = NeedlerRowLayout.controlSize(18.dp),
+            )
         }
-        trailing?.invoke(this)
+        if (!stacked && trailing != null) {
+            Row(
+                modifier = Modifier.weight(NeedlerRowLayout.TRAILING_WEIGHT, fill = false),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = trailing,
+            )
+        }
     }
 }
 
@@ -521,7 +732,7 @@ fun NeedlerOutputRow(
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     val tint = when {
-        !enabled -> colors.textMuted
+        !enabled -> colors.disabled
         selected -> colors.accent
         else -> colors.textPrimary
     }
@@ -544,18 +755,30 @@ fun NeedlerOutputRow(
         ) {
             leadingIcon?.invoke(if (selected) colors.accent else colors.textSecondary)
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(NeedlerRowLayout.TITLE_WEIGHT),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Text(text = name, style = typography.rowTitle, color = tint, maxLines = 2)
+                Text(
+                    text = name,
+                    style = typography.rowTitle.wrapsAtWords(),
+                    color = tint,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 Text(
                     text = unavailableReason ?: detail,
-                    style = typography.caption,
+                    style = typography.caption.wrapsAtWords(),
                     color = colors.textMuted,
                     maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (selected) NeedlerCheckIcon(tint = colors.accent, size = 20.dp)
+            if (selected) {
+                NeedlerCheckIcon(
+                    tint = colors.accent,
+                    size = NeedlerRowLayout.controlSize(20.dp),
+                )
+            }
         }
         NeedlerHairline()
     }

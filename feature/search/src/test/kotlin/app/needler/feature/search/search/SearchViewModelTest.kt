@@ -330,7 +330,11 @@ class SearchViewModelTest {
             val online = expectMostRecentItem()
 
             assertEquals(PULL_LABEL, online.pullConfirmLabel)
-            assertNull("nothing extra to say with a connection", online.pullSheetNote)
+            assertEquals(
+                "with a connection, where it lands and nothing about queueing",
+                PULL_DESTINATION,
+                online.pullSheetNote,
+            )
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -363,6 +367,153 @@ class SearchViewModelTest {
 
         model.state.test {
             assertEquals("dido", awaitItem().query)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    // ---- the window between the receipt and the sync ------------------------
+
+    /**
+     * The duplicate pull, through the real flow.
+     *
+     * The album's state comes from the mirror, which has not heard about the
+     * request yet, so without the receipt the row would still offer a **Pull**
+     * under a banner saying the pull had started - and the second tap would send
+     * a second request. Both halves are asserted: the row stops offering, and
+     * only one request reaches the repository.
+     */
+    @Test
+    fun `a pull the server accepted stops the row offering another`() = runTest {
+        search.localResults.value = LocalSearchResults(
+            query = "niki",
+            albums = listOf(SampleSearch.buzz),
+        )
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onQueryChange("niki")
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().offersPull(SampleSearch.buzz))
+
+            model.onPull(SampleSearch.buzz)
+            advanceUntilIdle()
+            model.onConfirmPull()
+            advanceUntilIdle()
+
+            val placed = expectMostRecentItem()
+            assertFalse("the mirror has not caught up, the receipt has", placed.offersPull(SampleSearch.buzz))
+            assertEquals(1, pulls.albumRequests.size)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /** A receipt for one search says nothing about the next. */
+    @Test
+    fun `a new query forgets the receipts of the old one`() = runTest {
+        search.localResults.value = LocalSearchResults(
+            query = "niki",
+            albums = listOf(SampleSearch.buzz),
+        )
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onQueryChange("niki")
+            advanceUntilIdle()
+            model.onPull(SampleSearch.buzz)
+            advanceUntilIdle()
+            model.onConfirmPull()
+            advanceUntilIdle()
+            assertFalse(expectMostRecentItem().offersPull(SampleSearch.buzz))
+
+            model.onQueryChange("buzz")
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().offersPull(SampleSearch.buzz))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The `⋯` on a row that is pulling: the action the row did not have.
+     *
+     * `cancelRequest` and not `cancelTask` - the user is cancelling the request
+     * they placed, and the server owns however many downloads it split that into.
+     */
+    @Test
+    fun `stopping a pull cancels the request and says so`() = runTest {
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onStopPull(SampleSearch.blackClassicalMusic)
+            advanceUntilIdle()
+
+            val stopped = expectMostRecentItem()
+            assertEquals(
+                listOf(SampleSearch.blackClassicalMusic.releaseGroupMbid),
+                pulls.cancelled,
+            )
+            assertTrue(stopped.notice?.message.orEmpty().contains("Stopped pulling"))
+            assertFalse("a pull that never landed cost nothing", stopped.notice?.isProblem ?: true)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /** A cancel that silently did nothing is indistinguishable from one that worked. */
+    @Test
+    fun `a stop the server refused is reported`() = runTest {
+        pulls.cancelOutcome = app.needler.core.domain.model.Outcome.Failure(NeedlerError.ServerError(502))
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onStopPull(SampleSearch.blackClassicalMusic)
+            advanceUntilIdle()
+
+            val failed = expectMostRecentItem()
+            assertTrue(failed.notice?.isProblem ?: false)
+            assertTrue(failed.notice?.message.orEmpty().contains("502"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * The retry on the offline no-results screen actually re-runs the search.
+     *
+     * `committedQuery` is `distinctUntilChanged`, so setting the query to the text
+     * it already holds does nothing at all - which is what a retry would have
+     * done without a tick of its own. The lane is made to succeed between the two
+     * attempts, so the assertion is on the screen changing rather than on a call
+     * count.
+     */
+    @Test
+    fun `a retry runs both lanes again without touching the query`() = runTest {
+        search.catalogueOutcome =
+            app.needler.core.domain.model.Outcome.Failure(NeedlerError.Offline())
+
+        val model = viewModel()
+        model.state.test {
+            awaitItem()
+            model.onQueryChange("dido")
+            advanceUntilIdle()
+            val first = expectMostRecentItem()
+            assertTrue(first.catalogue is CatalogueLaneState.Unavailable)
+            assertTrue(first.showRetry)
+
+            search.catalogueOutcome = app.needler.core.domain.model.Outcome.Success(
+                app.needler.core.domain.model.CatalogueSearchResults(
+                    query = "dido",
+                    artists = emptyList(),
+                    albums = emptyList(),
+                ),
+            )
+            model.onRetrySearch()
+            advanceUntilIdle()
+
+            val second = expectMostRecentItem()
+            assertEquals("the field is untouched", "dido", second.query)
+            assertTrue(second.catalogue is CatalogueLaneState.Ready)
+            assertFalse("nothing left to try again", second.showRetry)
             cancelAndIgnoreRemainingEvents()
         }
     }

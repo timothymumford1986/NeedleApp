@@ -17,7 +17,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.needler.core.design.theme.NeedlerColors
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.design.theme.tabularNumerals
 
@@ -100,7 +102,7 @@ fun NeedlerAlbumSource.tagLabel(): String = label() + ":"
  * | (pull, searching) | Searching | secondary |
  * | (pull, parked) | Needs attention | secondary |
  * | (pull, complete) | Ready | positive |
- * | (pull, failed) | Failed | secondary |
+ * | (pull, failed) | Failed | destructive |
  * | (pull, part-delivered) | Partly delivered | secondary |
  * | (pull, cancelled) | Cancelled | secondary |
  *
@@ -260,9 +262,14 @@ sealed interface NeedlerAlbumBadge {
      * removing both would leave the one state that needs a human the only unnamed state on the
      * list.
      *
-     * **Let the label wrap** - it already may, at [NeedlerStateBadge]'s `maxLines = 2`. That spends
-     * row height instead of row width and does not give the title back a single dp, because the
-     * trailing column still measures itself first.
+     * **Let the label wrap** - it already may, at [NeedlerStateBadge]'s `maxLines = 2`. At the time
+     * this was written that spent row height and gave the title back nothing, because the trailing
+     * column measured itself first and took the width it asked for. [NeedlerRowLayout] has since
+     * changed that: a trailing block is now capped at
+     * [NeedlerRowLayout.TRAILING_WEIGHT] of the row, so wrapping *does* return width to the title.
+     * The shortened label is still the better answer, because 266dp divided 62/38 is 101dp and a
+     * sentence wrapped into 101dp is three lines; but the reasoning above no longer holds on its
+     * own and the record says so rather than reading as though it did.
      */
     data object NeedsAttention : NeedlerAlbumBadge
 
@@ -272,7 +279,14 @@ sealed interface NeedlerAlbumBadge {
     /** No usable source was found. Muted, and the pack gives it no icon (06). */
     data object NoSource : NeedlerAlbumBadge
 
-    /** The pull ended without the album. The reason stays in the row's subtitle. */
+    /**
+     * The pull ended without the album. The reason stays in the row's subtitle.
+     *
+     * The one badge drawn in [app.needler.core.design.theme.NeedlerColors.destructive], and drawn
+     * at `Bold` as well, because an end state has no glyph. REQUIREMENTS.md "Design system" records
+     * exactly one colour outside the [NeedlerAlbumSource] pair and this is the state it is for; see
+     * that property for why the refusal written here before was reversed.
+     */
     data object Failed : NeedlerAlbumBadge
 
     /**
@@ -305,30 +319,7 @@ fun NeedlerStateBadge(
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
 
-    val tint: Color = when (badge) {
-        // The device's own hue, for the state and for the journey into it.
-        NeedlerAlbumBadge.OnDevice,
-        is NeedlerAlbumBadge.PullingToDevice,
-        NeedlerAlbumBadge.Ready -> colors.positive
-
-        // The server's hue, for the state and for the journey into it.
-        NeedlerAlbumBadge.InLibrary,
-        is NeedlerAlbumBadge.Pulling -> colors.accent
-
-        NeedlerAlbumBadge.Waiting,
-        NeedlerAlbumBadge.WaitingForWifi,
-        NeedlerAlbumBadge.Searching,
-        NeedlerAlbumBadge.NeedsAttention,
-        // Not the destructive colour. `#e8908a` is reserved for data the user is
-        // about to lose; a pull that did not land has cost them nothing but time.
-        NeedlerAlbumBadge.Failed,
-        NeedlerAlbumBadge.PartlyDelivered,
-        NeedlerAlbumBadge.Cancelled -> colors.textSecondary
-
-        // The pack renders this one as muted metadata rather than as a coloured badge. It uses the
-        // AA-compliant muted value because "no source found" is the only explanation the user gets.
-        NeedlerAlbumBadge.NoSource -> colors.textMuted
-    }
+    val tint: Color = badge.tint(colors)
 
     val label = badge.label()
     val percent = when (badge) {
@@ -363,15 +354,32 @@ fun NeedlerStateBadge(
 
             // The pack gives its one end-state badge no glyph, and the three
             // added beside it follow: nothing in the icon set says "stopped"
-            // without also saying "error", which this palette has no colour for.
-            // The label is the whole signal, and each label is a different word,
-            // so nothing here is encoded in colour alone.
+            // without also saying "error". `Failed` now has the error *colour*,
+            // which is a different claim from having a shape for it - a glyph
+            // would have to be invented, and the pack owns the icon set. Each
+            // label is a different word, so nothing here is in colour alone.
             NeedlerAlbumBadge.NoSource,
             NeedlerAlbumBadge.Failed,
             NeedlerAlbumBadge.PartlyDelivered,
             NeedlerAlbumBadge.Cancelled -> Unit
         }
-        Text(text = label, style = typography.metaStrong, color = tint, maxLines = 2)
+        Text(
+            text = label,
+            // `Failed` draws at Bold, everything else at the pack's 600. The hue is the first
+            // channel and the word is the second; this is the third, and it is here because
+            // `destructive` measures 1.09:1 against `textSecondary` by luminance - two different
+            // hues at one lightness, the same shape of weakness `accent` and `positive` have at
+            // 1.01:1. An end state has no glyph to carry the difference, so the weight does.
+            style = typography.metaStrong.let {
+                if (badge == NeedlerAlbumBadge.Failed) {
+                    it.copy(fontWeight = FontWeight.Bold)
+                } else {
+                    it
+                }
+            },
+            color = tint,
+            maxLines = 2,
+        )
         if (percent != null) {
             Text(
                 text = "$percent%",
@@ -381,6 +389,72 @@ fun NeedlerStateBadge(
             )
         }
     }
+}
+
+/**
+ * The hue this state is drawn in.
+ *
+ * ## Why this is not inside [NeedlerStateBadge]
+ *
+ * It was, as a `when` in the middle of the composable, and `StateBadgeLabelTest` kept a second copy
+ * of the same `when` in its companion object - because a `@Composable`'s local `val` cannot be
+ * reached without rendering, and what matters about these assignments is the rule rather than the
+ * pixels. That test said so out loud: "the rule is written twice and the two copies are kept honest
+ * by sitting in one file each other's reasoning cites. If they diverge, the badge is the one that is
+ * right and this is the one to correct."
+ *
+ * Two copies kept honest by a comment is not a guarantee, and reverting the badge's colour to check
+ * that the test would catch it proved the point: the test passed, because it was asserting its own
+ * copy. So the rule is a plain function that both callers call, the duplicate is gone, and the
+ * assertions now fail when the badge changes.
+ *
+ * ## The rule
+ *
+ * | Badge | Hue | Because |
+ * | --- | --- | --- |
+ * | `OnDevice`, `PullingToDevice`, `Ready` | `positive` | on this device, or on its way here |
+ * | `InLibrary`, `Pulling` | `accent` | on the server, or on its way there |
+ * | `Failed` | `destructive` | the one state that needs the user |
+ * | `Waiting`, `WaitingForWifi`, `Searching`, `NeedsAttention`, `PartlyDelivered`, `Cancelled` | `textSecondary` | nothing moved, and nothing failed |
+ * | `NoSource` | `textMuted` | the pack draws it as metadata, not as a badge |
+ *
+ * A record heading for a store wears that store's colour for the whole journey, so an album changes
+ * hue exactly once - when it reaches the device. REQUIREMENTS.md "Design system" fixes that pairing
+ * and it never moves; [NeedlerAlbumSource] has the reasoning and the measurements.
+ *
+ * `Failed` taking the error colour is a reversal. A comment here used to refuse it - "`#e8908a` is
+ * reserved for data the user is about to lose; a pull that did not land has cost them nothing but
+ * time" - and drew the badge in `textSecondary`, which is the artist line under every title in the
+ * same list. So `Ready` was green, `Pulling` was blue, and the one state asking the user to act was
+ * the only one unmarked. Cost is the wrong axis: a badge reports a state, and the state is that the
+ * record did not arrive. See [app.needler.core.design.theme.NeedlerColors.destructive].
+ *
+ * `PartlyDelivered` and `Cancelled` are where that refusal was right, and they keep the grey.
+ * REQUIREMENTS.md "Partial content is a normal state" has a part-delivered album in the library and
+ * playing, and a cancellation is the user's own instruction carried out. Neither is an error.
+ */
+fun NeedlerAlbumBadge.tint(colors: NeedlerColors): Color = when (this) {
+    NeedlerAlbumBadge.OnDevice,
+    is NeedlerAlbumBadge.PullingToDevice,
+    NeedlerAlbumBadge.Ready -> colors.positive
+
+    NeedlerAlbumBadge.InLibrary,
+    is NeedlerAlbumBadge.Pulling -> colors.accent
+
+    NeedlerAlbumBadge.Failed -> colors.destructive
+
+    NeedlerAlbumBadge.Waiting,
+    NeedlerAlbumBadge.WaitingForWifi,
+    NeedlerAlbumBadge.Searching,
+    NeedlerAlbumBadge.NeedsAttention,
+    NeedlerAlbumBadge.PartlyDelivered,
+    NeedlerAlbumBadge.Cancelled -> colors.textSecondary
+
+    // The sentence this one draws is the only explanation the user gets, so the value it draws in
+    // has to be readable. `textMuted` now measures 5.56:1 on the canvas and 4.51:1 on the raised
+    // surface, which clears AA on every background a badge sits on; it did not before, and
+    // `NeedlerColors.textMuted` records the reversal.
+    NeedlerAlbumBadge.NoSource -> colors.textMuted
 }
 
 /**
@@ -581,9 +655,21 @@ fun NeedlerQualityTag(
 /**
  * The count badge on the Pulls nav item.
  *
- * An 18dp positive-green pill with the count in Space Grotesk 11sp/700, from every screen's nav.
- * REQUIREMENTS.md calls this "the reliable channel" for pull state, so it is a shared component
- * rather than something each nav host draws for itself.
+ * An 18dp pill with the count in Space Grotesk 11sp/700, from every screen's nav. REQUIREMENTS.md
+ * calls this "the reliable channel" for pull state, so it is a shared component rather than
+ * something each nav host draws for itself.
+ *
+ * ## It is accent now, and the pack drew it green
+ *
+ * REQUIREMENTS.md "Design system" fixes the two signal hues permanently: accent is *on the server*,
+ * positive is *on this device*. A count of pulls in flight is a count of records the server is
+ * still fetching, which is by definition not on the device, so green was the wrong one of the two.
+ *
+ * `NeedlerNavigationScaffold` in `:app` had already found this and written it down as something it
+ * could not fix - "the fill is chosen inside `NeedlerCounterBadge` in `:core:design` and there is no
+ * parameter for it, so it is not this module's to change". Correct, and this is the module. No
+ * parameter was added: a caller choosing the hue is how a state colour starts meaning "whatever this
+ * screen wanted", which is the defect `NeedlerQualityTagEmphasis` records at length.
  */
 @Composable
 fun NeedlerCounterBadge(
@@ -600,7 +686,7 @@ fun NeedlerCounterBadge(
                 minHeight = NeedlerTheme.sizes.counterBadge,
             )
             .clip(NeedlerTheme.shapes.pill)
-            .background(colors.positive)
+            .background(colors.accent)
             .padding(horizontal = 5.dp)
             .semantics {
                 if (contentDescription != null) this.contentDescription = contentDescription
@@ -610,7 +696,7 @@ fun NeedlerCounterBadge(
         Text(
             text = count.toString(),
             style = NeedlerTheme.typography.counter,
-            color = colors.onPositive,
+            color = colors.onAccent,
             maxLines = 1,
         )
     }

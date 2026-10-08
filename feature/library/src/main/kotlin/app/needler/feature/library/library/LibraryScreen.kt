@@ -4,6 +4,7 @@ package app.needler.feature.library.library
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,6 +47,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -56,7 +58,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.needler.core.design.component.CRATE_LONG_PRESS_LABEL
-import app.needler.core.design.component.NeedlerAlbumGridCell
 import app.needler.core.design.component.NeedlerAlbumRow
 import app.needler.core.design.component.NeedlerChevronDownIcon
 import app.needler.core.design.component.NeedlerChevronRightIcon
@@ -84,11 +85,14 @@ import app.needler.core.domain.model.Track
 import app.needler.core.domain.model.TrackKey
 import app.needler.feature.library.common.AlbumArtwork
 import app.needler.feature.library.common.AlbumFormatLabel
+import app.needler.feature.library.common.AlbumGridTile
+import app.needler.feature.library.common.AlbumStateLabel
 import app.needler.feature.library.common.LibraryFormat
 import app.needler.feature.library.common.albumFormatSpokenLabel
+import app.needler.feature.library.common.albumStateSpokenLabel
 import app.needler.feature.library.common.hasPlayableFile
-import app.needler.feature.library.common.showsOnDeviceCheck
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /**
@@ -153,6 +157,22 @@ fun LibraryScreen(
     val wide: Boolean = widthSizeClass != WindowWidthSizeClass.Compact
     val gutter: Dp = if (wide) spacing.tabletGutter else spacing.phoneGutter
 
+    // Keyed on the tab, so switching tabs starts the new list at the top with its chrome back.
+    // Not keyed on the view mode: the grid and the list open on the same record through
+    // [AlbumScrollAnchor], so a toggle made deep in the library must not spring the header open
+    // over the row the user was reading.
+    var scrolled: Boolean by remember(state.tab) { mutableStateOf(false) }
+    // There is nothing to scroll past until the list is there, and an empty library has no
+    // chrome to collapse in the first place.
+    val collapsed: Boolean = scrolled && !state.showEmptyState
+    // Seven controls over nothing was the fault: an empty tab has no albums to sort, no layout
+    // worth toggling and nothing the browse destinations lead to. The tabs stay whatever happens -
+    // a tab's list being empty is not the library being empty, the view model only ever fills the
+    // selected tab's list, and a screen that hid the tabs over an empty one would strand the user
+    // on it. The search field stays too, because searching is how music is found to pull, and so
+    // does Sync now inside the empty state itself.
+    val actions: Boolean = !state.showEmptyState
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -170,18 +190,22 @@ fun LibraryScreen(
             LibraryHeader(
                 state = state,
                 wide = wide,
+                showTitle = !collapsed,
                 onSearchClick = onSearchClick,
             )
             LibraryControls(
                 state = state,
+                showActions = actions,
                 onTabSelect = onTabSelect,
                 onSortSelect = onSortSelect,
                 onViewModeToggle = onViewModeToggle,
             )
-            LibraryBrowseRow(
-                onOpenPlaylists = onOpenPlaylists,
-                onOpenGenres = onOpenGenres,
-            )
+            if (actions && !collapsed) {
+                LibraryBrowseRow(
+                    onOpenPlaylists = onOpenPlaylists,
+                    onOpenGenres = onOpenGenres,
+                )
+            }
             if (state.offline) OfflineNote()
             // Under the controls rather than over the list: it is the answer to a tap that
             // happened in the list, and a card that pushed the rows down would move the row
@@ -195,7 +219,7 @@ fun LibraryScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(spacing.step9))
+        Spacer(modifier = Modifier.height(if (collapsed) spacing.step4 else spacing.step9))
 
         Box(modifier = Modifier.weight(1f)) {
             when {
@@ -220,6 +244,8 @@ fun LibraryScreen(
                         scrollAnchor = scrollAnchor,
                         onAlbumClick = onAlbumClick,
                         onAlbumPlay = onAlbumPlay,
+                        onAlbumAddToCrate = onAlbumAddToCrate,
+                        onScrolled = { scrolled = it },
                     )
 
                 state.tab == LibraryTab.ALBUMS -> AlbumList(
@@ -229,12 +255,14 @@ fun LibraryScreen(
                     onAlbumClick = onAlbumClick,
                     onAlbumPlay = onAlbumPlay,
                     onAlbumAddToCrate = onAlbumAddToCrate,
+                    onScrolled = { scrolled = it },
                 )
 
                 state.tab == LibraryTab.ARTISTS -> ArtistList(
                     artists = state.artists,
                     gutter = gutter,
                     onArtistClick = onArtistClick,
+                    onScrolled = { scrolled = it },
                 )
 
                 else -> SongList(
@@ -243,9 +271,47 @@ fun LibraryScreen(
                     gutter = gutter,
                     onSongPlay = onSongPlay,
                     onSongAddToCrate = onSongAddToCrate,
+                    onScrolled = { scrolled = it },
                 )
             }
         }
+    }
+}
+
+/**
+ * Tells the screen when its list has left the top, so the chrome can get out of the way.
+ *
+ * ## What this is for
+ *
+ * Albums spent **37%** of a 390x844 phone before the first row, Artists 43%, and 49% at 200% text,
+ * and none of it ever went away: `screenshots/library-deep-list-anchored-phone.png` is a render of
+ * the library scrolled twenty-eight records in, with all 302dp of title, stats line, search field,
+ * tab row and browse row still on screen. Search spends 14% on the same phone. The screen title
+ * and the two browse destinations are the parts that answer a question asked once - where am I,
+ * and where else can I go - so those are the parts that leave, and the search field and the tab
+ * row, which are used from inside the list, stay. That is 302dp down to about 182dp, and the list
+ * gains roughly a row and a half.
+ *
+ * ## Why it is reported rather than hoisted
+ *
+ * The obvious shape is for [LibraryScreen] to own the `LazyListState` and read it directly. It
+ * cannot: `AlbumGrid` and `AlbumList` build theirs from [AlbumScrollAnchor] at the moment they
+ * enter composition, which is what carries the user's place across the grid/list toggle, and a
+ * state created once in the parent would be created with whichever anchor happened to be current
+ * when the screen opened. So the layouts keep their own state and report one boolean.
+ *
+ * ## It cannot oscillate
+ *
+ * Collapsing grows the viewport rather than shrinking the content, so the only feedback path is a
+ * list that becomes short enough to fit: Compose then clamps its offset to zero, this reports
+ * false, the chrome comes back, and the list is already at the top with nowhere to return to. One
+ * settle, no loop.
+ */
+@Composable
+private fun ReportScrolled(scrolled: () -> Boolean, onScrolled: (Boolean) -> Unit) {
+    val current: (Boolean) -> Unit by rememberUpdatedState(onScrolled)
+    LaunchedEffect(Unit) {
+        snapshotFlow(scrolled).distinctUntilChanged().collect { current(it) }
     }
 }
 
@@ -267,10 +333,19 @@ private fun columnsFor(widthSizeClass: WindowWidthSizeClass): Int = when (widthS
 // Header
 // ---------------------------------------------------------------------------
 
+/**
+ * The screen title, the stats line and the search field.
+ *
+ * @param showTitle false once the list has scrolled. The title block is the first thing to go,
+ *   because "LIBRARY" and "176 albums, 42 GB, last scan 47m ago" answer a question asked on
+ *   arrival and never again, while the search field below them is reached for from inside the
+ *   list. See [ReportScrolled] for the measurements and for why the collapse cannot oscillate.
+ */
 @Composable
 private fun LibraryHeader(
     state: LibraryUiState,
     wide: Boolean,
+    showTitle: Boolean,
     onSearchClick: () -> Unit,
 ) {
     val colors = NeedlerTheme.colors
@@ -302,6 +377,16 @@ private fun LibraryHeader(
                 )
             }
         }
+    }
+
+    if (!showTitle) {
+        NeedlerSearchFieldButton(
+            onClick = onSearchClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (wide) Modifier.widthIn(max = 560.dp) else Modifier),
+        )
+        return
     }
 
     if (wide) {
@@ -357,6 +442,16 @@ private fun LibraryHeader(
  * Nothing is lost by hiding it - the selection is held in the view model and is still in force on
  * Albums and Songs when the user tabs back.
  *
+ * ## And both go over an empty tab
+ *
+ * `screenshots/library-empty-phone.png` drew seven live controls over a library with nothing in
+ * it: three tabs, a sort, a layout toggle and two browse destinations, none of which had anything
+ * to act on. The sort, the toggle and the browse row are the five that go, on the same argument
+ * that hides the sort on Artists - a control that cannot change anything is worse than a gap,
+ * because the user spends a tap finding that out. The tabs stay: `LibraryViewModel` fills only the
+ * selected tab's list, so an empty Songs tab says nothing about whether there are albums, and
+ * hiding the tabs would leave the user on the empty one with no way off it.
+ *
  * **The alternative, rejected:** make `observeArtists` take an ordering, so the control means
  * something. It is a change to `:core:domain` and `:core:data` to add orders REQUIREMENTS.md does
  * not ask for, in service of a control that happens to be drawn nearby. The index strip above the
@@ -366,6 +461,7 @@ private fun LibraryHeader(
 @Composable
 private fun LibraryControls(
     state: LibraryUiState,
+    showActions: Boolean,
     onTabSelect: (LibraryTab) -> Unit,
     onSortSelect: (LibrarySort) -> Unit,
     onViewModeToggle: () -> Unit,
@@ -405,11 +501,11 @@ private fun LibraryControls(
                 label = "Browse by",
                 modifier = Modifier.horizontalScroll(rememberScrollState()),
             )
-            if (state.tab != LibraryTab.ARTISTS) {
+            if (showActions && state.tab != LibraryTab.ARTISTS) {
                 SortControl(sort = state.sort, onSortSelect = onSortSelect)
             }
         }
-        if (state.tab == LibraryTab.ALBUMS) {
+        if (showActions && state.tab == LibraryTab.ALBUMS) {
             ViewModeToggle(viewMode = state.viewMode, onToggle = onViewModeToggle)
         }
     }
@@ -438,24 +534,34 @@ private fun LibraryControls(
  * on that row, not six — and a five-segment control is also the one that stops
  * fitting a 390dp phone first, which is the pressure the row was already under.
  *
- * ## Why a pill with a right chevron
+ * ## Why they no longer look like the pills above them
  *
- * The pack draws no playlists or genres screen on any of its 21 artboards, so
- * there is no drawn entry point to transcribe and the idiom was chosen. It is
- * [NeedlerToolbarPill], the same control the sort wears, because a third pill
- * shape on one screen is the defect this screen was just fixed for. What
- * separates it from its neighbours is the chevron, and the pack has exactly the
- * two glyphs needed: the sort carries `PathChevronDown`, which the design
- * system calls "the disclosure chevron on a sort or output control" — a menu
- * drops here — and these carry `PathChevronRight`, "the row chevron" — a screen
- * opens there. The tabs carry neither, because they change this screen.
+ * They were [NeedlerToolbarPill]s, chosen so that the screen would not grow a
+ * third pill shape — and that made three rows of near-identical grey chips doing
+ * three unrelated jobs. The tabs filter this screen, the sort opens a menu, these
+ * open another screen, and the only thing telling them apart was a chevron
+ * pointing a different way at the same size in the same colour. A user cannot be
+ * expected to read a 90-degree rotation as "this is navigation".
+ *
+ * So the two destinations keep the chevron and change everything else that is
+ * cheap to change: [app.needler.core.design.theme.NeedlerColors.surfaceRaised]
+ * rather than the pills' `surface` fill, a leading glyph, the label at the row
+ * weight in the primary text colour rather than 13sp secondary, and half the row
+ * each rather than sizing to their text. Four channels, none of them colour alone
+ * and none of them a new shape in the design — `surfaceRaised` is the pack's own
+ * pressed-row value and the chevron is its row chevron.
+ *
+ * They are also the first thing to leave on scroll. REQUIREMENTS.md does not put
+ * them in the toolbar; this screen did, because they had no entry point at all,
+ * and a destination reached once per visit does not need a phone's first screen
+ * for the whole of it. See [ReportScrolled].
  *
  * **The alternatives, rejected.** A fifth and sixth segment, for the reason
  * above. A nav-rail or bottom-bar entry, because screen 09 fixes the rail at
  * Library, Search, Pulls and Settings, and a phone-only tab that vanishes on a
  * tablet is worse than none — this row is inside the content pane, so it is
- * identical at both widths. Full-width rows in the pack's list style, because
- * two of them cost 96dp of a phone's first screen where two pills cost 48dp.
+ * identical at both widths. Two full-width rows in the pack's list style, which
+ * say "navigation" best of all and cost 96dp where this costs 44dp.
  *
  * The spoken label says the action rather than the noun: "Open playlists"
  * rather than "Playlists", so a TalkBack user hears that this opens something
@@ -469,24 +575,62 @@ private fun LibraryBrowseRow(
     onOpenGenres: () -> Unit,
 ) {
     val spacing = NeedlerTheme.spacing
-    FlowRow(
+    Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(spacing.step4),
-        verticalArrangement = Arrangement.spacedBy(spacing.step4),
-        itemVerticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        NeedlerToolbarPill(
+        LibraryDestination(
             text = "Playlists",
             contentDescription = "Open playlists",
+            glyph = PATH_PLAYLISTS,
             onClick = onOpenPlaylists,
-            trailingIcon = { tint -> NeedlerChevronRightIcon(tint = tint) },
+            modifier = Modifier.weight(1f),
         )
-        NeedlerToolbarPill(
+        LibraryDestination(
             text = "Genres",
             contentDescription = "Open genres",
+            glyph = PATH_GENRES,
             onClick = onOpenGenres,
-            trailingIcon = { tint -> NeedlerChevronRightIcon(tint = tint) },
+            modifier = Modifier.weight(1f),
         )
+    }
+}
+
+/** One browse destination. See [LibraryBrowseRow] for why it is shaped the way it is. */
+@Composable
+private fun LibraryDestination(
+    text: String,
+    contentDescription: String,
+    glyph: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = NeedlerTheme.colors
+    val shape = NeedlerTheme.shapes.medium
+    Row(
+        modifier = modifier
+            .defaultMinSize(minHeight = NeedlerTheme.sizes.minTouchTarget)
+            .clip(shape)
+            .background(colors.surfaceRaised)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                this.contentDescription = contentDescription
+            }
+            .padding(start = 12.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        NeedlerStrokeIcon(pathData = glyph, tint = colors.accent, size = 18.dp)
+        Text(
+            text = text,
+            style = NeedlerTheme.typography.rowTitle,
+            color = colors.textPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        NeedlerChevronRightIcon(tint = colors.accent)
     }
 }
 
@@ -636,6 +780,8 @@ private fun AlbumGrid(
     scrollAnchor: AlbumScrollAnchor,
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onAlbumPlay: (ReleaseGroupMbid) -> Unit,
+    onAlbumAddToCrate: (ReleaseGroupMbid, Boolean) -> Unit,
+    onScrolled: (Boolean) -> Unit,
 ) {
     val spacing = NeedlerTheme.spacing
     val wide: Boolean = columns > 2
@@ -651,6 +797,7 @@ private fun AlbumGrid(
         scrollAnchor = scrollAnchor,
         albums = albums,
     ) { gridState.firstVisibleItemIndex }
+    ReportScrolled(scrolled = { gridState.canScrollBackward }, onScrolled = onScrolled)
     LazyVerticalGrid(
         columns = GridCells.Fixed(columns),
         state = gridState,
@@ -668,16 +815,15 @@ private fun AlbumGrid(
             key = { index -> albums[index].releaseGroupMbid.value },
         ) { index ->
             val album: Album = albums[index]
-            NeedlerAlbumGridCell(
-                // Guarded: `Album.title` can be blank, because `ReleaseItemDto.title`
-                // is nullable and the catalogue mapper maps it with `.orEmpty()`. The
-                // cell builds its own spoken description and its "Play <title>" label
-                // from these two strings, so guarding here fixes all three at once.
-                title = LibraryFormat.albumTitle(album.title),
-                artistName = LibraryFormat.artistName(album.artistName),
+            // The tile guards the blank title and builds its own spoken reading; see
+            // [AlbumGridTile] for why the grid no longer draws the pack's cell.
+            AlbumGridTile(
+                album = album,
                 onClick = { onAlbumClick(album.releaseGroupMbid) },
-                onDevice = album.showsOnDeviceCheck,
-                onPlayClick = { onAlbumPlay(album.releaseGroupMbid) },
+                onPlay = { onAlbumPlay(album.releaseGroupMbid) },
+                onAddToCrate = { playNext ->
+                    onAlbumAddToCrate(album.releaseGroupMbid, playNext)
+                },
                 artwork = {
                     AlbumArtwork(
                         album = album,
@@ -715,10 +861,8 @@ private fun AlbumGrid(
  * satisfies it — `NeedlerIconButton` expands any visual size to a 48dp target — so
  * the button is drawn at the pack's 32dp weight and still reaches the minimum.
  *
- * The format label is [AlbumFormatLabel], which is also what the artist screen
- * uses, so "what quality is this, and do I have it with me" is answered the same
- * way on both. It no longer leans on hue alone; see that function for why that
- * mattered.
+ * The row itself is [AlbumListRow], which carries the state word, the format and both controls;
+ * that function records why it is no longer the pack's `NeedlerAlbumRow`.
  */
 @Composable
 private fun AlbumList(
@@ -728,8 +872,8 @@ private fun AlbumList(
     onAlbumClick: (ReleaseGroupMbid) -> Unit,
     onAlbumPlay: (ReleaseGroupMbid) -> Unit,
     onAlbumAddToCrate: (ReleaseGroupMbid, Boolean) -> Unit,
+    onScrolled: (Boolean) -> Unit,
 ) {
-    val colors = NeedlerTheme.colors
     val sizes = NeedlerTheme.sizes
     // See [AlbumGrid]: the same anchor, read the same way, so the two layouts open
     // on the same record.
@@ -740,6 +884,7 @@ private fun AlbumList(
         scrollAnchor = scrollAnchor,
         albums = albums,
     ) { listState.firstVisibleItemIndex }
+    ReportScrolled(scrolled = { listState.canScrollBackward }, onScrolled = onScrolled)
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -750,65 +895,148 @@ private fun AlbumList(
         ),
     ) {
         items(items = albums, key = { it.releaseGroupMbid.value }) { album ->
-            val onDevice: Boolean = album.showsOnDeviceCheck
-            val title: String = LibraryFormat.albumTitle(album.title)
-            var crateMenuOpen: Boolean by remember(album.releaseGroupMbid.value) {
-                mutableStateOf(false)
-            }
-            NeedlerAlbumRow(
-                title = title,
-                subtitle = LibraryFormat.artistName(album.artistName),
+            AlbumListRow(
+                album = album,
                 minHeight = sizes.albumListRowMinHeight,
                 onClick = { onAlbumClick(album.releaseGroupMbid) },
-                showDivider = true,
-                contentDescription = buildString {
-                    append(title)
-                    append(", ")
-                    append(LibraryFormat.artistName(album.artistName))
-                    // The chip border that marks a lossless format on screen is nothing
-                    // at all to a screen reader, so the words go here instead.
-                    albumFormatSpokenLabel(album.quality, onDevice)?.let {
-                        append(", ")
-                        append(it)
-                    }
-                },
-                artwork = {
-                    AlbumArtwork(
-                        album = album,
-                        modifier = Modifier.size(sizes.artworkThumbLarge),
-                        shape = NeedlerTheme.shapes.artworkThumb,
-                        decorative = true,
-                    )
-                },
-                trailing = {
-                    AlbumFormatLabel(quality = album.quality, onDevice = onDevice)
-                    NeedlerIconButton(
-                        contentDescription = "Play " + title,
-                        onClick = { onAlbumPlay(album.releaseGroupMbid) },
-                        visualSize = 32.dp,
-                    ) {
-                        NeedlerStrokeIcon(
-                            pathData = PathPlay,
-                            tint = colors.accent,
-                            size = 16.dp,
-                            filled = true,
-                        )
-                    }
-                    // Beside the Play that replaces the crate: the same record, queued
-                    // instead of started. In the trailing slot and not behind a long press,
-                    // because `NeedlerAlbumRow` keeps interactive trailing content reachable
-                    // as its own target, and a tap here opens the album rather than playing
-                    // it - there is nothing destructive for a long press to intercept.
-                    NeedlerCrateControl(
-                        subject = title,
-                        expanded = crateMenuOpen,
-                        onExpandedChange = { crateMenuOpen = it },
-                        onAddToCrate = { onAlbumAddToCrate(album.releaseGroupMbid, false) },
-                        onPlayNext = { onAlbumAddToCrate(album.releaseGroupMbid, true) },
-                    )
+                onPlay = { onAlbumPlay(album.releaseGroupMbid) },
+                onAddToCrate = { playNext ->
+                    onAlbumAddToCrate(album.releaseGroupMbid, playNext)
                 },
             )
         }
+    }
+}
+
+/**
+ * One album row: artwork, the title, the artist, and a third line saying where the record is.
+ *
+ * ## Why this is not `NeedlerAlbumRow`
+ *
+ * It was, and the state word is what moved it. The row has to say one of
+ * [app.needler.core.design.component.NeedlerAlbumSource]'s three words -
+ * see [AlbumStateLabel] for why that is not optional - and the only slot the pack's row offers is
+ * the trailing one, which already holds the format, a Play and the crate control. Measured on a
+ * 390dp phone, a `Not retrieved` badge in there takes about 107dp of the 358dp the row has to
+ * divide, which with the two 48dp controls beside it leaves the title roughly 70dp: about eight
+ * characters a line, against the ~178dp it has here. The trailing column measures itself first, so
+ * the title is what pays.
+ *
+ * Under the artist instead, the state line costs the row about 18dp of height and the title column
+ * nothing at all. The alternative - dropping the crate control from the row to make room - was
+ * rejected for the reason the row gained Play in the first place: the grid and the list must offer
+ * the same things, and the fix for an inconsistency is not to remove the feature from both.
+ *
+ * The format is [AlbumFormatLabel] with no `onDevice` tint. Hue said "on device" there and the word
+ * beside it says it now, so tinting the format as well would be the same fact in two places and
+ * would put it back on the channel REQUIREMENTS.md "Accessibility" says it must not be alone on.
+ */
+@Composable
+private fun AlbumListRow(
+    album: Album,
+    minHeight: Dp,
+    onClick: () -> Unit,
+    onPlay: () -> Unit,
+    onAddToCrate: (Boolean) -> Unit,
+) {
+    val colors = NeedlerTheme.colors
+    val typography = NeedlerTheme.typography
+    val sizes = NeedlerTheme.sizes
+    val title: String = LibraryFormat.albumTitle(album.title)
+    val artistName: String = LibraryFormat.artistName(album.artistName)
+    val playable: Boolean = album.isOwned
+    var crateMenuOpen: Boolean by remember(album.releaseGroupMbid.value) { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = minHeight)
+                .clickable(role = Role.Button, onClick = onClick)
+                .semantics(mergeDescendants = true) {
+                    contentDescription = buildString {
+                        append(title)
+                        append(", ")
+                        append(artistName)
+                        append(", ")
+                        append(albumStateSpokenLabel(album.state))
+                        // The chip border that marks a lossless format on screen is nothing
+                        // at all to a screen reader, so the words go here instead.
+                        albumFormatSpokenLabel(album.quality, onDevice = false)?.let {
+                            append(", ")
+                            append(it)
+                        }
+                    }
+                }
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AlbumArtwork(
+                album = album,
+                modifier = Modifier.size(sizes.artworkThumbLarge),
+                shape = NeedlerTheme.shapes.artworkThumb,
+                decorative = true,
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = typography.rowTitle,
+                    color = colors.textPrimary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = artistName,
+                    style = typography.meta,
+                    color = colors.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AlbumStateLabel(state = album.state)
+                    AlbumFormatLabel(quality = album.quality)
+                }
+            }
+            // Only where there is audio to act on. An album the server does not hold has
+            // nothing to play and nothing to queue, and `library-empty-offline-phone.png`
+            // already sets the pattern of disabling rather than drawing a control live over
+            // something it cannot do.
+            if (playable) {
+                NeedlerIconButton(
+                    contentDescription = "Play " + title,
+                    onClick = onPlay,
+                    visualSize = 32.dp,
+                ) {
+                    NeedlerStrokeIcon(
+                        pathData = PathPlay,
+                        tint = colors.accent,
+                        size = 16.dp,
+                        filled = true,
+                    )
+                }
+                // Beside the Play that replaces the crate: the same record, queued
+                // instead of started. In the trailing column and not behind a long press,
+                // because the row keeps interactive trailing content reachable as its own
+                // target, and a tap here opens the album rather than playing it - there is
+                // nothing destructive for a long press to intercept.
+                NeedlerCrateControl(
+                    subject = title,
+                    expanded = crateMenuOpen,
+                    onExpandedChange = { crateMenuOpen = it },
+                    onAddToCrate = { onAddToCrate(false) },
+                    onPlayNext = { onAddToCrate(true) },
+                )
+            }
+        }
+        NeedlerHairline()
     }
 }
 
@@ -845,11 +1073,13 @@ private fun ArtistList(
     artists: List<Artist>,
     gutter: Dp,
     onArtistClick: (ArtistMbid) -> Unit,
+    onScrolled: (Boolean) -> Unit,
 ) {
     val listState: LazyListState = rememberLazyListState()
     val scope: CoroutineScope = rememberCoroutineScope()
     val reducedMotion: Boolean = NeedlerTheme.reducedMotion
     val entries: List<ArtistIndexEntry> = remember(artists) { ArtistIndex.entriesFor(artists) }
+    ReportScrolled(scrolled = { listState.canScrollBackward }, onScrolled = onScrolled)
 
     Column(modifier = Modifier.fillMaxSize()) {
         ArtistIndexStrip(
@@ -963,8 +1193,12 @@ private fun SongList(
     gutter: Dp,
     onSongPlay: (Track) -> Unit,
     onSongAddToCrate: (Track, Boolean) -> Unit,
+    onScrolled: (Boolean) -> Unit,
 ) {
+    val listState: LazyListState = rememberLazyListState()
+    ReportScrolled(scrolled = { listState.canScrollBackward }, onScrolled = onScrolled)
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = gutter,
@@ -1311,6 +1545,15 @@ private const val PATH_LIST_VIEW: String = "M4 7h16M4 12h16M4 17h16"
 /** The pack's grid-view glyph: four rounded squares. */
 private const val PATH_GRID_VIEW: String =
     "M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z"
+
+/**
+ * The playlists destination's glyph: three rules and a play mark, drawn to the pack's 24x24,
+ * 1.8-stroke rule. The pack has no playlist icon because it draws no playlist screen.
+ */
+private const val PATH_PLAYLISTS: String = "M4 7h11M4 12h11M4 17h7M17 12v7l5-3.5z"
+
+/** The genres destination's glyph: a tag, to the same rule. */
+private const val PATH_GENRES: String = "M4 4h7l9 9-7 7-9-9zM8 8h0.01"
 
 /**
  * A track row, used by the album and artist screens rather than by this one.

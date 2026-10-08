@@ -5,6 +5,7 @@ import app.cash.turbine.test
 import app.needler.core.domain.model.Track
 import app.needler.feature.library.FakePlaybackController
 import app.needler.feature.library.FakeSessions
+import app.needler.feature.library.FakeSyncRepository
 import app.needler.feature.library.MainDispatcherRule
 import app.needler.feature.library.SampleLibrary
 import java.util.Optional
@@ -25,6 +26,7 @@ class GenreViewModelTest {
 
     private val library = FakeGenreLibrary(SampleGenres.all)
     private val sessions = FakeSessions()
+    private val sync = FakeSyncRepository()
     private val playback = FakePlaybackController()
 
     private val genre = "Dream pop"
@@ -33,6 +35,7 @@ class GenreViewModelTest {
         savedStateHandle = SavedStateHandle(mapOf(GenreViewModel.GENRE_ARG to name)),
         library = library,
         sessions = sessions,
+        sync = sync,
         playback = Optional.of(playback),
     )
 

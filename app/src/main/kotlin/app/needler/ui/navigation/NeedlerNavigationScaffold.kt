@@ -13,7 +13,11 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import app.needler.core.design.component.NeedlerBottomNavBar
 import app.needler.core.design.component.NeedlerNavItem
 import app.needler.core.design.component.NeedlerNavigationRail
@@ -146,7 +150,7 @@ fun NeedlerNavigationScaffold(
 
     if (widthSizeClass == WindowWidthSizeClass.Expanded) {
         Row(modifier = root) {
-            NeedlerNavigationRail(items = items)
+            NavChrome { NeedlerNavigationRail(items = items) }
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -210,7 +214,75 @@ fun NeedlerNavigationScaffold(
             // player and the bar it belongs to.
             updateBanner()
             miniPlayer()
-            NeedlerBottomNavBar(items = items)
+            NavChrome { NeedlerBottomNavBar(items = items) }
         }
     }
 }
+
+/**
+ * The bar and the rail, with their type scale capped.
+ *
+ * ## What this fixes
+ *
+ * **The Pulls badge covered the glyph it counts.** The count scales with the user's text setting -
+ * `NeedlerCounterBadge` draws it in an 11sp style inside an 18dp minimum pill - while the nav glyph
+ * next to it is a fixed 24dp drawing. At 200% the pill is wider than the glyph it hangs off, and
+ * since it is aligned to the glyph's top-right corner and offset 10dp further right, a two-digit
+ * count lands on top of the download arrow and runs into the item beside it. Observed on the device
+ * on every screen with the bottom bar.
+ *
+ * ## Why a cap rather than the other two options
+ *
+ * Three were available. **Dropping to a dot past a threshold** loses the number, and REQUIREMENTS.md
+ * calls this badge "the reliable channel" for pull state precisely because notifications are not -
+ * so "some pulls" instead of "36" is the one thing it may not degrade to. **Moving it clear** means
+ * reserving space for a pill whose size this module cannot measure; the badge is drawn inside
+ * `NeedlerBottomNavBar` from a count, and there is no slot here to position it from.
+ *
+ * So the chrome is scaled instead. [NAV_TYPE_SCALE_CAP] is the ceiling, and it applies to the four
+ * labels as well as the badge - which is the cost, stated plainly: at a 200% system setting the nav
+ * labels render at 130% while every screen *inside* the chrome still scales to 200%. That is the
+ * trade WCAG 1.4.4 permits for fixed chrome and does not permit for content, and this composable is
+ * only ever chrome. The four labels are single words the user learns once; the badge is a number
+ * they have to read.
+ *
+ * ## The two faults beside it that are not this module's
+ *
+ * Recorded here because this is where they were found, and both are fixed in `:core:design`:
+ *
+ *  * **The badge was `positive` green**, the hue REQUIREMENTS.md "Design system" reserves for *on
+ *    this device*. A pull in flight is a record the server is still fetching and is by definition not
+ *    on the device, and green and accent measure 1.01:1 against each other, so the two signal hues
+ *    carry meaning only through where they are spent. The fill is chosen inside
+ *    `NeedlerCounterBadge` and has no parameter, which is correct - a caller picking the hue is how a
+ *    state colour starts meaning "whatever this screen wanted".
+ *  * **The phone bar had no selection container**, while the rail passes `surfaceRaised` behind its
+ *    selected item, so the phone marked the current tab by hue alone. `NeedlerBottomNavBar` passes
+ *    the same container now and the two widths agree.
+ */
+@Composable
+private fun NavChrome(content: @Composable () -> Unit) {
+    val density: Density = LocalDensity.current
+    val capped: Density = remember(density) {
+        if (density.fontScale <= NAV_TYPE_SCALE_CAP) {
+            density
+        } else {
+            Density(density.density, NAV_TYPE_SCALE_CAP)
+        }
+    }
+    CompositionLocalProvider(LocalDensity provides capped, content = content)
+}
+
+/**
+ * The largest text scale the navigation chrome follows.
+ *
+ * 1.3, which is where a two-digit badge still sits on the glyph's corner rather than over it: the
+ * pill is 18dp at 1.0 and grows roughly with the scale, and the pack hangs it 10dp off a 24dp glyph,
+ * so a pill past about 24dp has nowhere left to hang. 1.3 also keeps the 11sp labels above 14sp,
+ * which is larger than they have ever been drawn.
+ *
+ * Deliberately not applied anywhere else. Every destination inside the chrome scales to 200% and must
+ * keep doing so - REQUIREMENTS.md's accessibility bar is about the screens, and capping a screen to
+ * make a bar fit would be solving the wrong half.
+ */
+private const val NAV_TYPE_SCALE_CAP: Float = 1.3f

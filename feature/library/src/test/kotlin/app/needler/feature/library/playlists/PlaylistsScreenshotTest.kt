@@ -43,12 +43,21 @@ class PlaylistsScreenshotTest {
         capture("playlists-offline", NeedlerDevice.Phone, LOADED.copy(offline = true))
     }
 
+    /**
+     * The create form with a name part-typed.
+     *
+     * [NEW_NAME] and not "Jazz for rain", which is what this used to pre-fill: that playlist is
+     * three rows below the form in [LOADED], so the image showed a user apparently about to create
+     * a playlist they already have. Whether this screen warns about a duplicate name is a real
+     * question and not one these pixels were answering - `PlaylistsViewModelTest` owns it - so the
+     * draft is a name the list does not hold and the golden is about the form.
+     */
     @Test
     fun `the create form, mid-entry`() {
         capture(
             "playlists-create",
             NeedlerDevice.Phone,
-            LOADED.copy(draft = PlaylistDraft(name = "Jazz for rain")),
+            LOADED.copy(draft = PlaylistDraft(name = NEW_NAME)),
         )
     }
 
@@ -91,7 +100,7 @@ class PlaylistsScreenshotTest {
         capture(
             "playlists-large-text",
             NeedlerDevice.Phone,
-            LOADED.copy(draft = PlaylistDraft(name = "Jazz for rain")),
+            LOADED.copy(draft = PlaylistDraft(name = NEW_NAME)),
             fontScale = 2f,
         )
     }
@@ -140,6 +149,9 @@ class PlaylistsScreenshotTest {
     }
 
     private companion object {
+        /** A name no playlist in [LOADED] has, long enough to reach the field's trailing control. */
+        const val NEW_NAME: String = "Kitchen radio"
+
         val LOADED = PlaylistsUiState(
             loading = false,
             playlists = listOf(

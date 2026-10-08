@@ -9,11 +9,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import app.needler.core.design.component.NeedlerAlbumBadge
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerNowPlayingIcon
 import app.needler.core.design.component.NeedlerQueueRow
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.PathClose
+import app.needler.core.design.component.label
 import app.needler.core.design.theme.NeedlerTheme
 import app.needler.core.domain.model.QueueItem
 import app.needler.feature.player.ui.PlayerArtwork
@@ -56,6 +58,31 @@ import app.needler.feature.player.ui.PlayerFormat
  * @param showArtwork false for a one-record crate, where eleven copies of one sleeve say what the sleeve
  *   above the crate already says. `NeedlerQueueRow`'s artwork slot is nullable, so the row closes up
  *   around it rather than drawing a gap.
+ * @param retrieval where this row's record is - **Device** or **Server** - or null for a caller that
+ *   cannot tell.
+ *
+ *   REQUIREMENTS.md "Vocabulary" makes the three state words "the words every surface draws", and the
+ *   crate drew none of them: no marker and no quality tag on any queued row, on the one screen where a
+ *   listener is deciding what they will still be able to hear with no connection.
+ *
+ *   ## Why it is a word on the second line and not a `NeedlerStateBadge`
+ *
+ *   It was a badge in the trailing column, where every other list in the app puts a state, and that
+ *   column has no room for one here. `NeedlerQueueRow`'s trailing slot already holds the playing glyph
+ *   and a 48 dp remove button, and the badge is another 60-odd dp of glyph and label - measured, it
+ *   squeezed the remove button to **0 dp wide** in a 320 dp window, which `CrateRemoveTest` caught and
+ *   which 200% text would have made worse on any width. `NeedlerAlbumRow` caps and re-stacks its
+ *   trailing block for exactly this; `NeedlerQueueRow` does not, and this module does not own it.
+ *
+ *   So the word joins the line that is already there. It costs no width, it survives 200% text, and
+ *   `NeedlerQueueRow` builds its content description as `"$title, $subtitle"` - so the state is spoken
+ *   wherever it is drawn, with no second reading to keep in step.
+ *
+ *   What is given up is the hue, and REQUIREMENTS.md "Accessibility" is explicit that this is the
+ *   cheaper half: accent and positive measure **1.01:1 against each other**, so "the hue is never the
+ *   signal... it only makes the distinction quicker for the readers who can see it". The word carries
+ *   the information either way. A hued badge here needs a capped trailing slot on `NeedlerQueueRow`,
+ *   which is `:core:design`'s to add.
  */
 @Composable
 internal fun CrateRow(
@@ -69,14 +96,20 @@ internal fun CrateRow(
     onRemove: (() -> Unit)? = null,
     subtitle: String = PlayerFormat.artistAndAlbum(item),
     showArtwork: Boolean = true,
+    retrieval: NeedlerAlbumBadge? = null,
 ) {
     val key: String = ROW_KEY_PREFIX + item.id
     val dragging: Boolean = reorder.draggingKey == key
     val offset: Float = reorder.offsetFor(key)
+    val line: String = if (retrieval == null) {
+        subtitle
+    } else {
+        subtitle + PlayerFormat.DOT + retrieval.label()
+    }
 
     NeedlerQueueRow(
         title = item.track.title,
-        subtitle = subtitle,
+        subtitle = line,
         isPlaying = isPlaying,
         showHandle = canReorder,
         onClick = onClick,

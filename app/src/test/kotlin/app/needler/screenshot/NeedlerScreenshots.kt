@@ -1,6 +1,9 @@
 package app.needler.screenshot
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import app.needler.core.design.theme.NeedlerTheme
 import com.github.takahirom.roborazzi.RoborazziComposeOptions
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -130,11 +133,17 @@ enum class NeedlerDevice(
  *
  * @param name the screen's name, lower-case and hyphenated, e.g. `connect` or
  *   `nav-library`.
+ * @param fontScale the user's text size. 2f is the 200% REQUIREMENTS.md says
+ *   every screen must survive without clipping, and rendering it is the only way
+ *   to find out whether it does. Same signature as `:feature:library`'s copy of
+ *   this helper, which has carried the parameter since its large-text goldens
+ *   were added.
  * @return the file written, so a test can assert on it.
  */
 fun captureNeedlerScreen(
     name: String,
     device: NeedlerDevice,
+    fontScale: Float = 1f,
     content: @Composable () -> Unit,
 ): File {
     RuntimeEnvironment.setQualifiers(device.qualifiers)
@@ -148,7 +157,16 @@ fun captureNeedlerScreen(
         },
     ) {
         NeedlerTheme(reducedMotion = true) {
-            content()
+            if (fontScale == 1f) {
+                content()
+            } else {
+                val base = LocalDensity.current
+                CompositionLocalProvider(
+                    LocalDensity provides Density(base.density, fontScale),
+                ) {
+                    content()
+                }
+            }
         }
     }
 

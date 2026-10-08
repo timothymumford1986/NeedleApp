@@ -6,7 +6,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The guard on the one thing a screenshot cannot see: which shape a press is drawn in.
+ * Two source scans over the design system, for two things a screenshot cannot see.
+ *
+ * The first is which shape a press is drawn in, which is the file's original subject and everything
+ * below this paragraph. The second is
+ * [no control in the design system draws its boundary in the hairline], and it is here rather than
+ * in a file of its own because it is the same kind of check made the same way - a property of the
+ * source that no render, no baseline and no Compose UI test can report.
  *
  * ## Why this is a source scan and not a render
  *
@@ -74,6 +80,145 @@ class PressIndicationOrderTest {
             chains.any { it.clipsBeforePressing },
         )
     }
+
+    // ---- the boundary scan ---------------------------------------------------
+
+    /**
+     * No control in `:core:design` draws its own edge in
+     * `NeedlerColors.hairline`.
+     *
+     * ## Why this is worth a test
+     *
+     * `rgba(242,245,238,0.08)` composites to `rgb(31,36,28)` on the canvas and measures **1.20:1**,
+     * against the 3:1 WCAG 1.4.11 asks of "user interface components and their boundaries".
+     * REQUIREMENTS.md "Accessibility" records that and carries it "as an open question rather than
+     * quietly patched" - correctly, because the hairline is also what separates every surface in
+     * the pack from the one behind it, and lifting the token repaints the design.
+     *
+     * The repair was therefore to split the role, not the value: `hairline` keeps the dividers and
+     * `NeedlerColors.componentBorder` takes the control boundaries at 4.10:1. A split like that
+     * holds for exactly as long as nobody writes `.border(..., colors.hairline, ...)` again, and
+     * there is nothing in the type system to stop them - the two are both `Color`, both on the same
+     * object, four characters apart in an autocomplete list. `StateBadgeLabelTest` asserts the two
+     * ratios; this asserts that the right one is the one being used.
+     *
+     * ## Why only this module's sources
+     *
+     * Because this is the only tree this test can honestly fail a build over. `:feature:player` and
+     * `:app` each draw hairline-bordered pills of their own - `OutputChip`, `SleepTimerControls`,
+     * `PlaceholderScreen`, the Connect screen - and those are their modules' call sites to correct
+     * against the token, not this one's to break a build over from underneath them. Widen
+     * [BOUNDARY_TREES] when they have.
+     *
+     * ## What it does not claim
+     *
+     * It reads lines, so it can be fooled - a border colour routed through a local `val` two
+     * screens away is invisible to it. It catches the shape the defect actually had in all eight
+     * places it was found: the token named on the border call, or on one of the four lines above it.
+     */
+    @Test
+    fun `no control in the design system draws its boundary in the hairline`() {
+        val offenders: List<String> = hairlineBoundaries()
+
+        assertEquals(
+            "a control draws its own boundary in `colors.hairline`, which composites to 1.20:1 on " +
+                "the canvas and is not a visible edge. Use `colors.componentBorder`, which is the " +
+                "same role at 4.10:1; `colors.hairline` is for dividers and row separators only:\n" +
+                offenders.joinToString("\n"),
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
+    /**
+     * The same guard the ordering scan has: it must have found the hairline *somewhere*, or its
+     * regexes have gone stale and it is reporting no faults because it is reading no code.
+     *
+     * The dividers are what it should find - `NeedlerHairline`, `NeedlerVerticalHairline` and the
+     * `outlineVariant` mapping - and those are the uses that are correct, so finding them is the
+     * proof that a border use would have been found too.
+     */
+    @Test
+    fun `the boundary scan can see the hairline at all`() {
+        val uses: List<String> = hairlineUses()
+
+        assertTrue(
+            "found " + uses.size + " uses of `colors.hairline` in " +
+                BOUNDARY_TREES.joinToString(", ") + ", which is too few to be right - the regexes " +
+                "in this test have gone stale, not the code",
+            uses.size >= MINIMUM_PLAUSIBLE_HAIRLINE_USES,
+        )
+    }
+
+    /** Every `hairline` reference in the scanned trees, comments and KDoc excluded. */
+    private fun hairlineUses(): List<String> = boundarySources().flatMap { (root, file) ->
+        sourceLines(file).mapIndexedNotNull { index, line ->
+            if (!mentionsHairline(line)) {
+                null
+            } else {
+                file.relativeTo(root).invariantSeparatorsPath + ":" + (index + 1) + "  " + line.trim()
+            }
+        }
+    }
+
+    /**
+     * The subset of those that are a control's boundary rather than a divider.
+     *
+     * A border is written one of two ways in this codebase - `.border(width, colour, shape)` on one
+     * line, or `borderColor = ...` as a named argument, sometimes with the colour on a later line -
+     * so the window is the line itself plus the [BORDER_WINDOW] lines above it. A divider is always
+     * `.background(colors.hairline)` and never mentions a border, which is what separates the two.
+     */
+    private fun hairlineBoundaries(): List<String> = boundarySources().flatMap { (root, file) ->
+        val lines: List<String> = sourceLines(file)
+        lines.mapIndexedNotNull { index, line ->
+            if (!mentionsHairline(line)) return@mapIndexedNotNull null
+            val from: Int = (index - BORDER_WINDOW).coerceAtLeast(0)
+            val window: String = lines.subList(from, index + 1).joinToString("\n") { masked(it) }
+            if (BORDER_CALL.containsMatchIn(window)) {
+                "  " + file.relativeTo(root).invariantSeparatorsPath + ":" + (index + 1) +
+                    "  " + line.trim()
+            } else {
+                null
+            }
+        }
+    }
+
+    private fun boundarySources(): List<Pair<File, File>> {
+        val root: File = repositoryRoot()
+        return BOUNDARY_TREES
+            .map { File(root, it) }
+            .filter { it.isDirectory }
+            .flatMap { tree -> tree.walkTopDown().filter { it.isFile && it.extension == "kt" } }
+            .sortedBy { it.invariantSeparatorsPath }
+            .map { root to it }
+    }
+
+    private fun sourceLines(file: File): List<String> =
+        file.readText().replace("\r\n", "\n").split("\n")
+
+    /**
+     * Whether [line] names the token, in code rather than in prose.
+     *
+     * Every paragraph in this module that explains why the hairline is 1.20:1 mentions it by name,
+     * including the two in `NeedlerColors` that exist to say "do not use this as a border", so a
+     * scan that counted comments would report the documentation as the defect.
+     */
+    private fun mentionsHairline(line: String): Boolean {
+        val trimmed: String = line.trim()
+        val isProse: Boolean = trimmed.startsWith("*") ||
+            trimmed.startsWith("//") ||
+            trimmed.startsWith("/*")
+        return !isProse && HAIRLINE_TOKEN.containsMatchIn(masked(line))
+    }
+
+    /**
+     * [line] with `hairlineThickness` hidden.
+     *
+     * `.border(sizes.hairlineThickness, colors.componentBorder, shape)` is the *fixed* form of the
+     * defect and contains both "border" and "hairline", so without this the repair reports itself.
+     */
+    private fun masked(line: String): String = line.replace("hairlineThickness", "thickness")
 
     // ---- the scan ------------------------------------------------------------
 
@@ -192,6 +337,35 @@ class PressIndicationOrderTest {
             "Modifier",
             "Modifier,",
         )
+
+        /**
+         * The trees [no control in the design system draws its boundary in the hairline] reads.
+         *
+         * Narrower than [SCANNED_TREES] on purpose, and the test's own KDoc says why: the feature
+         * modules have hairline-bordered pills of their own to correct, and failing their build from
+         * here would be this module breaking theirs.
+         */
+        val BOUNDARY_TREES: List<String> = listOf("core/design/src/main")
+
+        /** `colors.hairline` or a bare `hairline`, but never `hairlineThickness`. */
+        val HAIRLINE_TOKEN = Regex("""\bhairline\b""")
+
+        /** The two ways a border is written here: positional on one line, or as a named argument. */
+        val BORDER_CALL = Regex("""\.border\s*\(|borderColor\s*=""")
+
+        /**
+         * How far above a `hairline` line to look for the border call it belongs to.
+         *
+         * Four, because the widest form in this codebase spreads `.border(` over `width =`,
+         * `color =` and `shape =` on separate lines with the closing paren after.
+         */
+        const val BORDER_WINDOW: Int = 4
+
+        /**
+         * The dividers the boundary scan must still be able to see: `NeedlerHairline`,
+         * `NeedlerVerticalHairline` and Material's `outlineVariant`.
+         */
+        const val MINIMUM_PLAUSIBLE_HAIRLINE_USES: Int = 3
 
         const val SETTINGS_FILE: String = "settings.gradle.kts"
         const val MAX_CLIMB: Int = 6

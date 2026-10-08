@@ -60,9 +60,6 @@ class EqualiserViewModel @Inject constructor(
     fun setPreamp(preampDb: Float) =
         write(state.value.copy(preampDb = preampDb.coerceIn(EqSettings.GAIN_RANGE_DB)))
 
-    /** Reset to flat: the curve and the preamp, with the equaliser left switched as it was. */
-    fun resetToFlat() = write(EqPresets.apply(EqPreset.FLAT, state.value))
-
     private fun write(next: EqSettings) {
         viewModelScope.launch { settings.setEqSettings(next) }
     }

@@ -7,10 +7,15 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -40,6 +45,7 @@ import app.needler.feature.player.crate.ROW_KEY_PREFIX
 import app.needler.feature.player.crate.rememberQueueReorderState
 import app.needler.feature.player.ui.ArtworkOnRecord
 import app.needler.feature.player.ui.ArtworkOnRecordMetrics
+import app.needler.feature.player.ui.PlayerFormat
 import app.needler.feature.player.ui.QualityTags
 import app.needler.feature.player.ui.Scrubber
 import app.needler.feature.player.ui.SessionControls
@@ -126,7 +132,22 @@ fun PlayerSidebarContent(
         ) {
             val full: Boolean = maxHeight >= SIDEBAR_FULL_HEIGHT
             val gap: Dp = if (full) spacing.step12 else spacing.step6
-            val topPadding: Dp = if (full) 36.dp else spacing.step8
+            // The cutout. At a landscape phone's height the panel drops the record and starts at the
+            // title, which `player-sidebar-short-landscape.png` puts about 15 dp from the top edge -
+            // where a front camera lives on the handsets this layout exists for. The panel reads the
+            // safe area itself because nothing above it had: it is a slot in
+            // `NeedlerNavigationScaffold`, which pads its own chrome and then calls
+            // `consumeWindowInsets`, so this contributes nothing when the scaffold has already taken
+            // the top inset and contributes the cutout when it has not.
+            //
+            // Added to the padding rather than applied as a modifier so the artwork budget below,
+            // which is arithmetic on `maxHeight` less the padding, still measures the space the
+            // content actually gets.
+            val safeTop: Dp = WindowInsets.safeDrawing
+                .only(WindowInsetsSides.Top)
+                .asPaddingValues()
+                .calculateTopPadding()
+            val topPadding: Dp = (if (full) 36.dp else spacing.step8) + safeTop
             val bottomPadding: Dp = if (full) spacing.tabletSidebarGutter else spacing.step8
             val artwork: ArtworkOnRecordMetrics? = sidebarArtwork(
                 available = maxHeight - topPadding - bottomPadding,
@@ -153,7 +174,8 @@ fun PlayerSidebarContent(
                             artistName = state.item?.track?.artistName,
                             playing = state.isPlaying,
                             metrics = artwork,
-                            emptyLabel = if (state.hasTrack) null else "Nothing playing",
+                            // Said by the title directly below it. See NowPlayingScreen.
+                            emptyLabel = null,
                         )
                     }
                 }
@@ -314,15 +336,26 @@ private fun SidebarCrate(
                 modifier = Modifier.semantics { heading() },
             )
             Text(
-                text = if (upNext.isEmpty()) "Nothing queued" else crate.upNextCountLabel,
+                text = if (upNext.isEmpty()) "Last track" else crate.upNextCountLabel,
                 style = typography.meta,
                 color = colors.textMuted,
             )
         }
 
+        // The record, where `CrateUiState.isOneRecord` took it off the rows. See CrateScreen.
+        val record: String? = crate.recordLabel
+        if (record != null) {
+            Text(
+                text = record,
+                style = typography.metaStrong,
+                color = colors.textPrimary,
+            )
+        }
+
         if (upNext.isEmpty()) {
             Text(
-                text = "Play an album and the rest of it lands here.",
+                // One wording of this sentence, from PlayerFormat. There were three.
+                text = PlayerFormat.EMPTY_CRATE,
                 style = typography.meta,
                 color = colors.textMuted,
                 modifier = Modifier.padding(top = 8.dp),
@@ -363,6 +396,7 @@ private fun SidebarCrate(
                     onRemove = { onRemove(item.id) },
                     subtitle = crate.rowSubtitle(item),
                     showArtwork = crate.showsRowArtwork,
+                    retrieval = crate.retrievalOf(item),
                 )
             }
         }

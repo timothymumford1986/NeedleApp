@@ -35,7 +35,6 @@ fun EqualiserRoute(
         onPresetSelected = viewModel::selectPreset,
         onBandChange = viewModel::setBandGain,
         onPreampChange = viewModel::setPreamp,
-        onResetToFlat = viewModel::resetToFlat,
         onBack = onBack,
         modifier = modifier,
     )

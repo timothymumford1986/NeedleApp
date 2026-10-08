@@ -1,5 +1,6 @@
 package app.needler.feature.library
 
+import app.needler.core.domain.NameKeys
 import app.needler.core.domain.model.Album
 import app.needler.core.domain.model.AlbumState
 import app.needler.core.domain.model.Artist
@@ -229,15 +230,47 @@ internal object SampleLibrary {
         theRecord,
     )
 
+    /**
+     * The Marías, who most of the artist-screen goldens are about.
+     *
+     * Named rather than reached through `artists.first()`, which is what every caller used to do.
+     * [artists] is in the mirror's own order now, and an index into a sorted list is an identity
+     * that moves the next time a name is added to the list in front of it.
+     */
+    val marias: Artist = Artist(
+        mbid = artistMbid("marias"),
+        name = "The Marías",
+        ownedAlbumCount = 3,
+        catalogueAlbumCount = 6,
+    )
+
+    /**
+     * The pack's seven artists, in the order the mirror serves them.
+     *
+     * Ordered by [NameKeys.sortKey], which is the fold `ArtistDao.observeArtists` orders
+     * `sort_name_normalised` by: the leading article goes, so "The Marías" files under M between
+     * Khruangbin and Mk.gee, which is where a device lists it and where the index strip's M chip
+     * jumps to.
+     *
+     * It used to be in the order the albums above are declared in, which is roughly recency, so
+     * `library-artists-phone.png` was an A-Z index strip drawn over a list that was not in A-Z
+     * order. The screen deliberately does not sort - the mirror sorts in SQL, and
+     * `GenresScreenshotTest` records the same split for genres - so an unsorted fixture here did not
+     * test the screen against a hostile input. It only made a working feature look broken in the one
+     * image anybody looks at.
+     *
+     * Sorted by the call rather than typed in sorted order, so the two cannot drift and so adding an
+     * artist cannot quietly put the fixture back where it was.
+     */
     val artists: List<Artist> = listOf(
-        Artist(mbid = artistMbid("marias"), name = "The Marías", ownedAlbumCount = 3, catalogueAlbumCount = 6),
+        marias,
         Artist(mbid = artistMbid("bigthief"), name = "Big Thief", ownedAlbumCount = 5),
         Artist(mbid = artistMbid("khruangbin"), name = "Khruangbin", ownedAlbumCount = 4, catalogueAlbumCount = 9),
         Artist(mbid = artistMbid("alvvays"), name = "Alvvays", ownedAlbumCount = 3),
         Artist(mbid = artistMbid("beachhouse"), name = "Beach House", ownedAlbumCount = 8),
         Artist(mbid = artistMbid("mkgee"), name = "Mk.gee", ownedAlbumCount = 2),
         Artist(mbid = artistMbid("cleosol"), name = "Cleo Sol", ownedAlbumCount = 4),
-    )
+    ).sortedBy { NameKeys.sortKey(it.sortName) }
 
     // ---- screen 04: Submarine's track list ----------------------------------
 
@@ -271,6 +304,9 @@ internal object SampleLibrary {
 
     // ---- screen 05: an album you do not own ---------------------------------
 
+    /** The album every [blackClassicalTracks] row belongs to, named once. */
+    private const val ALBUM: String = "Black Classical Music"
+
     val blackClassicalMusic: Album = album(
         slug = "blackclassical",
         title = "Black Classical Music",
@@ -282,15 +318,25 @@ internal object SampleLibrary {
         format = null,
     )
 
+    /**
+     * Screen 05's track list, and the add-tracks picker's search results.
+     *
+     * The album title is supplied on every row, which it was not. The picker draws
+     * `LibraryFormat.songRowSubtitle`, which is artist and album, so a fixture with no album
+     * rendered as the artist alone - and `screenshots/playlist-add-tracks-phone.png` was eight
+     * rows reading "Yussef Dayes" under eight titles, beside a button counting in tracks and a
+     * placeholder offering to search by album. The rows have to be told apart to be chosen
+     * between, and the fixture was hiding the one field that does it.
+     */
     val blackClassicalTracks: List<Track> = listOf(
-        track("blackclassical", 1, "Black Classical Music", "Yussef Dayes", 251_000L, format = null),
-        track("blackclassical", 2, "Afro Cubanism", "Yussef Dayes", 302_000L, format = null),
-        track("blackclassical", 3, "Raisins Under the Sun", "Yussef Dayes", 288_000L, format = null),
-        track("blackclassical", 4, "Rust", "Yussef Dayes", 237_000L, format = null),
-        track("blackclassical", 5, "Turquoise Galaxy", "Yussef Dayes", 270_000L, format = null),
-        track("blackclassical", 6, "Chasing the Drum", "Yussef Dayes", 315_000L, format = null),
-        track("blackclassical", 7, "Gelato", "Yussef Dayes", 226_000L, format = null),
-        track("blackclassical", 8, "Marching Band", "Yussef Dayes", 241_000L, format = null),
+        track("blackclassical", 1, "Black Classical Music", "Yussef Dayes", 251_000L, ALBUM, format = null),
+        track("blackclassical", 2, "Afro Cubanism", "Yussef Dayes", 302_000L, ALBUM, format = null),
+        track("blackclassical", 3, "Raisins Under the Sun", "Yussef Dayes", 288_000L, ALBUM, format = null),
+        track("blackclassical", 4, "Rust", "Yussef Dayes", 237_000L, ALBUM, format = null),
+        track("blackclassical", 5, "Turquoise Galaxy", "Yussef Dayes", 270_000L, ALBUM, format = null),
+        track("blackclassical", 6, "Chasing the Drum", "Yussef Dayes", 315_000L, ALBUM, format = null),
+        track("blackclassical", 7, "Gelato", "Yussef Dayes", 226_000L, ALBUM, format = null),
+        track("blackclassical", 8, "Marching Band", "Yussef Dayes", 241_000L, ALBUM, format = null),
     )
 
     // ---- what the server does not guarantee ---------------------------------
@@ -362,6 +408,39 @@ internal object SampleLibrary {
         mbid = ArtistMbid("8cfce742-445e-5e80-93a8-d8f924d56984"),
         name = "Some Local Band",
         ownedAlbumCount = 1,
+    )
+
+    /**
+     * The one album the mirror holds for [nameDerivedArtist], and the tracks on it.
+     *
+     * `artist-not-in-catalogue-phone.png` used to file "Submarine / The Marías · 2024" under the
+     * artist "Some Local Band", because the state borrowed the nearest owned album to hand. A golden
+     * whose header and whose only row name two different artists cannot be read for what it is
+     * about: the question is whether the screen says plainly that there is no discography to look
+     * up, and a reader has to get past the wrong album before reaching it.
+     *
+     * No year, because a folder DroppedNeedle scanned off a disk often carries none - and that scan
+     * is the whole reason this artist's id was derived from their name and the catalogue lookup can
+     * never succeed for them. The artist MBID is copied from [nameDerivedArtist] rather than derived
+     * from the slug, so the album and the header agree about who this is.
+     */
+    val localBandAlbum: Album = album(
+        slug = "somelocalband-demos",
+        title = "Basement Demos",
+        artistName = "Some Local Band",
+        artistSlug = "somelocalband",
+        trackCount = 4,
+        durationMs = 712_000L,
+        state = AlbumState.Owned,
+        format = AudioFormat.MP3,
+        bitrateKbps = 192,
+    ).copy(artistMbid = nameDerivedArtist.mbid)
+
+    val localBandTracks: List<Track> = listOf(
+        track("somelocalband-demos", 1, "Kitchen Light", "Some Local Band", 194_000L, "Basement Demos"),
+        track("somelocalband-demos", 2, "Four Streets Over", "Some Local Band", 171_000L, "Basement Demos"),
+        track("somelocalband-demos", 3, "Nothing on the Radio", "Some Local Band", 208_000L, "Basement Demos"),
+        track("somelocalband-demos", 4, "Last Bus", "Some Local Band", 139_000L, "Basement Demos"),
     )
 
     /**

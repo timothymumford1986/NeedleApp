@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -29,6 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -47,6 +49,7 @@ import app.needler.core.design.component.NeedlerButtonSize
 import app.needler.core.design.component.NeedlerIconButton
 import app.needler.core.design.component.NeedlerLinearProgress
 import app.needler.core.design.component.NeedlerPillButton
+import app.needler.core.design.component.NeedlerRowLayout
 import app.needler.core.design.component.NeedlerPlayIcon
 import app.needler.core.design.component.NeedlerPrimaryButton
 import app.needler.core.design.component.NeedlerProgressRing
@@ -56,14 +59,16 @@ import app.needler.core.design.component.NeedlerStateBadge
 import app.needler.core.design.component.NeedlerStrokeIcon
 import app.needler.core.design.component.PathClose
 import app.needler.core.design.theme.NeedlerTheme
-import app.needler.core.design.theme.tabularNumerals
 import app.needler.core.domain.model.ArtworkRef
 import app.needler.core.domain.model.Pull
 import app.needler.core.domain.model.PullBucket
 import app.needler.core.domain.model.PullState
 import app.needler.core.domain.model.ReleaseGroupMbid
 import app.needler.core.domain.model.RequestHistoryEntry
+import app.needler.feature.pulls.common.PullsChip
 import app.needler.feature.pulls.common.PullsFormat
+import app.needler.feature.pulls.common.canStop
+import app.needler.feature.pulls.common.chipFor
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -173,6 +178,7 @@ fun PullsScreen(
     onRefreshLane: () -> Unit,
     onLoadMoreHistory: () -> Unit,
     onRetryRequest: (RequestHistoryEntry) -> Unit,
+    onOpenSearch: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = NeedlerTheme.colors
@@ -201,25 +207,17 @@ fun PullsScreen(
             )
             LaneTabs(lane = state.lane, onSelectLane = onSelectLane)
 
-            // `held_count` is the download activity summary's, so it belongs to the queue. A
-            // history entry and a watch cannot be held: there is nothing on either lane for the
-            // server to be holding.
-            if (state.lane == PullsLane.QUEUE && state.heldCount > 0) {
-                HeldNotice(count = state.heldCount)
-            }
-
-            // Two different offline facts, told apart because the honest sentence differs. The
-            // queue's rows come from the mirror and are the last thing the *server* said; a
-            // read-through lane's rows are the page this *session* happened to fetch. A lane with
-            // no rows at all says so in the pane below instead, where there is room to explain.
-            when {
-                state.lane == PullsLane.QUEUE && state.offline -> OfflineNote()
-                state.laneIsStale -> StaleLaneNote()
-            }
-
+            // The result of the last action goes first and looks unlike anything else on the
+            // screen: it is the only thing here the user caused, and the only thing that can be
+            // dismissed. It used to be drawn *below* the standing notices and in the same bordered
+            // box, so `screenshots/pulls-problem-phone.png` reads as two paragraphs of grey
+            // telling the user that something they did failed - distinguished only by a thin
+            // coloured outline nobody is looking for.
             state.notice?.let { notice ->
                 NoticeCard(notice = notice, onDismiss = onDismissNotice)
             }
+
+            HeaderBanner(lines = bannerLines(state))
         }
 
         Spacer(modifier = Modifier.height(spacing.step6))
@@ -234,11 +232,11 @@ fun PullsScreen(
                     onPlayAlbum = onPlayAlbum,
                     onCancel = onCancel,
                     onRetry = onRetry,
+                    onOpenSearch = onOpenSearch,
                 )
 
                 PullsLane.HISTORY -> HistoryLane(
                     state = state.history,
-                    offline = state.offline,
                     busy = state.busy,
                     now = state.renderedAt,
                     gutter = gutter,
@@ -246,15 +244,16 @@ fun PullsScreen(
                     onRetryRequest = onRetryRequest,
                     onLoadMore = onLoadMoreHistory,
                     onTryAgain = onRefreshLane,
+                    onOpenSearch = onOpenSearch,
                 )
 
                 PullsLane.WANTED -> WantedLane(
                     state = state.wanted,
-                    offline = state.offline,
                     now = state.renderedAt,
                     gutter = gutter,
                     onOpenAlbum = onOpenAlbum,
                     onTryAgain = onRefreshLane,
+                    onOpenSearch = onOpenSearch,
                 )
             }
         }
@@ -276,11 +275,16 @@ private fun QueueLane(
     onPlayAlbum: (ReleaseGroupMbid) -> Unit,
     onCancel: (Pull) -> Unit,
     onRetry: (Pull) -> Unit,
+    onOpenSearch: () -> Unit,
 ) {
     when {
         state.loading -> PullsSkeleton(gutter = gutter)
 
-        state.showEmptyState -> PullsEmptyState(offline = state.offline, gutter = gutter)
+        state.showEmptyState -> PullsEmptyState(
+            offline = state.offline,
+            gutter = gutter,
+            onOpenSearch = onOpenSearch,
+        )
 
         // Expanded is the only width with room for two columns of
         // 56dp-artwork rows side by side. Medium — a foldable open, a
@@ -419,7 +423,15 @@ private fun refreshLabel(lane: PullsLane): String = when (lane) {
 // The queue
 // ---------------------------------------------------------------------------
 
-/** The phone and foldable layout: one scrolling list with the pack's two headings. */
+/**
+ * The phone and foldable layout: one scrolling list with the pack's two headings.
+ *
+ * An empty section keeps its heading and says it is empty, exactly as a tablet pane does. The two
+ * widths used to disagree — the tablet kept a half-width column holding one sentence and the phone
+ * dropped the whole section silently — so a user who turned their tablet found a section they had
+ * been reading simply gone. REQUIREMENTS.md, "Tablet layout": "This is one navigation model at two
+ * widths … Nothing is tablet-only, so no feature needs building twice."
+ */
 @Composable
 private fun PullsList(
     state: PullsUiState,
@@ -442,7 +454,7 @@ private fun PullsList(
             pulls = state.active,
             now = state.renderedAt,
             busy = state.busy,
-            emptyLine = null,
+            emptyLine = EMPTY_NOW,
             onOpenAlbum = onOpenAlbum,
             onPlayAlbum = onPlayAlbum,
             onCancel = onCancel,
@@ -453,7 +465,7 @@ private fun PullsList(
             pulls = state.earlier,
             now = state.renderedAt,
             busy = state.busy,
-            emptyLine = null,
+            emptyLine = EMPTY_EARLIER,
             onOpenAlbum = onOpenAlbum,
             onPlayAlbum = onPlayAlbum,
             onCancel = onCancel,
@@ -553,34 +565,29 @@ private fun PullsPane(
  * layouts build their lists from the same code — the phone puts two of these in
  * one column, the tablet puts one in each of two.
  *
- * @param emptyLine what to say when the section has nothing in it, or `null` to
- *   drop the whole section, heading included. The pack draws no empty block, so
- *   the single-column layout passes `null`.
+ * @param emptyLine what to say when the section has nothing in it. Both layouts now pass one: the
+ *   phone used to pass `null` and drop the heading with it, which is the disagreement with the
+ *   tablet that [PullsList] records.
  */
 private fun LazyListScope.pullSection(
     heading: String,
     pulls: List<Pull>,
     now: Instant,
     busy: Boolean,
-    emptyLine: String?,
+    emptyLine: String,
     onOpenAlbum: (ReleaseGroupMbid) -> Unit,
     onPlayAlbum: (ReleaseGroupMbid) -> Unit,
     onCancel: (Pull) -> Unit,
     onRetry: (Pull) -> Unit,
 ) {
-    if (pulls.isEmpty() && emptyLine == null) return
-
     item(key = "heading-" + heading) {
         NeedlerSectionHeader(title = heading)
     }
 
-    if (pulls.isEmpty() && emptyLine != null) {
-        // Bound to a non-null local so the lambda below captures a plain String
-        // rather than relying on a smart cast surviving into a closure.
-        val line: String = emptyLine
+    if (pulls.isEmpty()) {
         item(key = "empty-" + heading) {
             Text(
-                text = line,
+                text = emptyLine,
                 style = NeedlerTheme.typography.caption,
                 color = NeedlerTheme.colors.textMuted,
                 modifier = Modifier.padding(vertical = 10.dp),
@@ -642,13 +649,18 @@ private fun PullRow(
  * A pull the server is still working on: the pack's `NOW` rows.
  *
  * Two shapes, both drawn on screen 06 and both produced by the same code. A task
- * the server has reported progress for gets the filled ring, the bar and the
- * percentage; one it has not - searching, queued, parked for approval - gets
- * plain artwork and a [NeedlerStateBadge] where the percentage would be. The
+ * the server has reported progress for gets the filled ring and the bar; one it
+ * has not - searching, queued, parked for approval - gets plain artwork. The
  * difference is entirely whether
  * [app.needler.core.domain.model.PullProgress.fraction] has an answer, which is
  * the one place that decides between `progress_percent`, the byte counters and
  * the file counters.
+ *
+ * The chip is drawn either way. It used to be replaced by a bare `62%` whenever
+ * there was a percentage, which left the one row actually in flight as the only
+ * row on the list whose state the trailing column did not name - visible on the
+ * top row of `screenshots/pulls-queue-phone.png`. [NeedlerAlbumBadge.Pulling]
+ * carries the figure itself, so nothing is lost by keeping the word beside it.
  *
  * It is *plain* artwork rather than an empty ring, which is what this row drew
  * until a device showed 35 rings at zero over 35 pulls that were not
@@ -670,10 +682,27 @@ private fun ActivePullRow(
     val typography = NeedlerTheme.typography
     val sizes = NeedlerTheme.sizes
     val fraction: Float? = pull.progress.fraction
-    val percent: Int? = PullsFormat.percent(fraction)
     val spoken: String = PullsFormat.spokenRow(pull, now)
     val cancelLabel: String = "Stop the pull of " + PullsFormat.albumPhrase(pull)
-    val cancellable: Boolean = pull.canCancel
+    val cancellable: Boolean = pull.canStop
+    // The only pull row that is not `NeedlerAlbumRow`, because the progress bar belongs inside the
+    // text column and that component has no slot under its subtitle. It therefore has to apply
+    // `NeedlerRowLayout` itself, and `screenshots/pulls-large-text-phone.png` is what happens when
+    // it does not: `FinishedPullRow` next to it stacked and wrapped `Two Star & The Dream Police`
+    // in full, while this row still drew `Black Clas...` over `Yussef Daye...` beside an unweighted
+    // status block.
+    val stacked: Boolean = NeedlerRowLayout.stacksTrailing
+    val statusAction: @Composable () -> Unit = {
+        if (cancellable) {
+            RowAction(label = cancelLabel) {
+                NeedlerPillButton(
+                    text = "Stop",
+                    onClick = { onCancel(pull) },
+                    enabled = !busy,
+                )
+            }
+        }
+    }
 
     Row(
         modifier = Modifier
@@ -701,7 +730,9 @@ private fun ActivePullRow(
         // `fraction`, not `fraction ?: 0f`. See [PullArtwork].
         PullArtwork(pull = pull, ring = fraction)
         Column(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(
+                if (stacked) 1f else NeedlerRowLayout.TITLE_WEIGHT,
+            ),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
@@ -722,36 +753,27 @@ private fun ActivePullRow(
                 Spacer(modifier = Modifier.height(6.dp))
                 NeedlerLinearProgress(
                     progress = fraction,
+                    // The server's colour, not the device's. See [PullArtwork].
+                    color = colors.accent,
                     // No percentage in here: the value is announced from the
                     // bar's own range info, and the row already says it once.
                     contentDescription = "Pull progress",
                 )
             }
+            // Below the title, under the bar it refers to, and across the row's full width.
+            if (stacked) {
+                Spacer(modifier = Modifier.height(6.dp))
+                StatusColumn(chip = chipFor(pull), action = statusAction)
+            }
         }
-        Column(
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (percent != null) {
-                Text(
-                    text = percent.toString() + "%",
-                    // Tabular, so the row does not twitch as the figure counts up.
-                    style = typography.metaStrong.tabularNumerals(),
-                    color = colors.positive,
-                    maxLines = 1,
-                )
-            } else {
-                NeedlerStateBadge(badge = badgeFor(pull))
-            }
-            if (cancellable) {
-                RowAction(label = cancelLabel) {
-                    NeedlerPillButton(
-                        text = "Stop",
-                        onClick = { onCancel(pull) },
-                        enabled = !busy,
-                    )
-                }
-            }
+        if (!stacked) {
+            StatusColumn(
+                chip = chipFor(pull),
+                modifier = Modifier
+                    .weight(NeedlerRowLayout.TRAILING_WEIGHT, fill = false)
+                    .align(Alignment.Top),
+                action = statusAction,
+            )
         }
     }
 }
@@ -802,11 +824,10 @@ private fun FinishedPullRow(
         contentDescription = PullsFormat.spokenRow(pull, now),
         artwork = { PullArtwork(pull = pull, ring = null) },
         trailing = {
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+            StatusColumn(
+                chip = chipFor(pull),
+                modifier = Modifier.align(Alignment.Top),
             ) {
-                NeedlerStateBadge(badge = badgeFor(pull))
                 if (ready) {
                     RowAction(label = "Play " + PullsFormat.albumPhrase(pull)) {
                         NeedlerPrimaryButton(
@@ -891,7 +912,8 @@ private fun PullArtwork(pull: Pull, ring: Float?) {
                     .background(NeedlerTheme.colors.artworkScrimStrong),
                 contentAlignment = Alignment.Center,
             ) {
-                NeedlerProgressRing(progress = ring)
+                // Accent, not the pack's green. See the hue note on [PullsScreen].
+                NeedlerProgressRing(progress = ring, color = NeedlerTheme.colors.accent)
             }
         }
     }
@@ -950,7 +972,10 @@ internal fun rowSubtitle(pull: Pull, now: Instant): String {
     val stated: String? = PullsFormat.stateDetail(pull).takeIf { badgeSaysTheDetail(pull) }
     val prose: String? = qualityProse(pull)
     val parts: List<String> = buildList {
-        if (pull.artistName.isNotBlank()) add(pull.artistName)
+        // Not the artist when the title slot is already drawing it: `PullsFormat.albumTitle` now
+        // promotes the artist into the title of a row the mirror could not name, and the line would
+        // otherwise repeat the one name the row has.
+        PullsFormat.artistBeside(PullsFormat.albumTitle(pull), pull.artistName)?.let { add(it) }
         // `stated` is exactly the filter `PullsFormat.spokenRow` applies to the same list, so a
         // repeat is dropped from both; `prose` is this line's alone, because the spoken reading has
         // no column to overflow and is the one place the whole sentence still lands.
@@ -1033,9 +1058,9 @@ private const val QUALITY_LABEL_MAX_CHARS: Int = 24
 /**
  * Whether the badge beside this row already says what [PullsFormat.stateDetail] would say.
  *
- * One exhaustive `when` rather than a string comparison, and it sits beside [badgeFor] because it
- * is the same table read a second way: that one picks the badge, this one records whether the badge
- * it picked leaves the subtitle anything to add. Exhaustive so that a new [PullState] stops this
+ * One exhaustive `when` rather than a string comparison, and it is the chip table
+ * (`app.needler.feature.pulls.common.chipFor`) read a second way: that one picks the chip, this one
+ * records whether the chip it picked leaves the subtitle anything to add. Exhaustive so that a new [PullState] stops this
  * file compiling and has to be decided rather than defaulted — which is the guarantee a heuristic
  * over the two strings could not give, since one of them belongs to `:core:design` and the other to
  * `PullsFormat`, and neither is this work's to change.
@@ -1064,33 +1089,102 @@ internal fun badgeSaysTheDetail(pull: Pull): Boolean = when (pull.state) {
 }
 
 /**
- * Which of the pack's badges this pull's state wears.
+ * The trailing column of every row on this screen: one word, and at most one control under it.
  *
- * `QUEUED`, `DOWNLOADING` and `PROCESSING` all take `Pulling`, because the
- * pack has one badge for the whole of what REQUIREMENTS.md calls the `Acquiring`
- * state and the subtitle carries the distinction — "waiting for a download
- * slot", "12 of 19 files", "importing". The failed states map to `NoSource` for
- * completeness; the screen does not draw a badge on a failed row, which is why
- * that branch is not reached in practice.
+ * ## Why it is a fixed width and aligned to the top
+ *
+ * It was neither, and a reviewer measured what that costs. Each row laid its own trailing column
+ * out independently and right-aligned it, so seven labels of six different lengths began at six
+ * different x positions down one list — `62%`, `Searching`, `Waiting`, `Needs attention`,
+ * `Ready`, `Failed`, `Partly delivered` in `screenshots/pulls-every-state-phone.png`, with nothing
+ * for the eye to run down. And the column was centred in a row whose height depends on whether a
+ * pill follows the word, so the word's own baseline moved from row to row as well.
+ *
+ * One width fixes the first: the column is the same box on every row, so every word starts at the
+ * same x. [Alignment.Top] fixes the second: the word sits against the top of the row beside the
+ * title it describes, and a pill appearing beneath it no longer shifts it.
+ *
+ * [STATUS_COLUMN_DP] is 124dp at the default text size: the widest label is `Needs attention` with
+ * its 16dp clock, and 112dp - the arithmetic width - wrapped it onto two lines on every row of
+ * `screenshots/pulls-all-awaiting-review-phone.png`, so the figure is the measured one with slack.
+ * It leaves the text column 142dp of the 266dp a 390dp phone row has to divide, and every line this
+ * module composes is written to fit that - see `PullsFormat.stateDetail`, where two were shortened
+ * for it. The width follows the font scale so a 200% reader gets a column the words still fit in,
+ * capped because past about 1.5x the title is the thing that needs the room.
+ *
+ * Rejected: `widthIn(min = ...)`. Each row is its own `Row`, so a minimum still lets one long label
+ * widen one row's column and move that row's words — which is the ragged edge, not a fix for it.
+ *
+ * ## Past `NeedlerRowLayout.STACK_ABOVE_FONT_SCALE` it is not a column at all
+ *
+ * The scaling width above is the right answer only while this sits *beside* a title. Past that
+ * threshold the rows it belongs to draw it **below** the title at the row's full width, and a
+ * 124dp-times-scale box inside a full-width slot is a narrow column with dead space to the right of
+ * it - which is what `screenshots/pulls-large-text-phone.png` showed for the settled rows.
+ *
+ * So the alignment argument above is suspended exactly when the thing it aligns against is gone:
+ * stacked, the chip and its action sit side by side across the width. There is no ragged edge to
+ * prevent, because every stacked block starts at the same x already - the row's left margin.
  */
-internal fun badgeFor(pull: Pull): NeedlerAlbumBadge = when (pull.state) {
-    PullState.PENDING_APPROVAL -> NeedlerAlbumBadge.Waiting
-    PullState.SEARCHING -> NeedlerAlbumBadge.Searching
-    PullState.AWAITING_SOURCE_REVIEW -> NeedlerAlbumBadge.NeedsAttention
-    PullState.QUEUED,
-    PullState.DOWNLOADING,
-    PullState.PROCESSING -> NeedlerAlbumBadge.Pulling(PullsFormat.percent(pull.progress.fraction))
-
-    PullState.COMPLETED -> NeedlerAlbumBadge.Ready
-
-    // The state's name only. Why it failed, how far a part-delivered pull got
-    // and who cancelled it are all in the subtitle, from
-    // [PullsFormat.stateDetail] - a badge that repeated them would be the
-    // duplication this row was once drawn without a badge to avoid.
-    PullState.FAILED -> NeedlerAlbumBadge.Failed
-    PullState.PARTIAL -> NeedlerAlbumBadge.PartlyDelivered
-    PullState.CANCELLED -> NeedlerAlbumBadge.Cancelled
+@Composable
+internal fun StatusColumn(
+    chip: PullsChip,
+    modifier: Modifier = Modifier,
+    action: @Composable () -> Unit,
+) {
+    if (NeedlerRowLayout.stacksTrailing) {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StateChip(chip = chip)
+            action()
+        }
+        return
+    }
+    val scale: Float = LocalDensity.current.fontScale.coerceIn(1f, STATUS_COLUMN_MAX_SCALE)
+    Column(
+        modifier = modifier.width(STATUS_COLUMN_DP * scale),
+        horizontalAlignment = Alignment.Start,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        StateChip(chip = chip)
+        action()
+    }
 }
+
+/**
+ * One chip, from either half of [PullsChip].
+ *
+ * The badge half is `:core:design`'s own component. The other half is the one word that module has
+ * no badge for, drawn in the same 13sp/600 and the same secondary tint the glyph-less badges beside
+ * it use, with its text read from `NeedlerAlbumSource` rather than written here — REQUIREMENTS.md,
+ * "Where a record is": "nothing is allowed to write one of these words as a literal". See
+ * [PullsChip.NotRetrieved] for why this screen needs it and `:core:design` does not yet have it.
+ */
+@Composable
+private fun StateChip(chip: PullsChip) {
+    when (chip) {
+        is PullsChip.Badge -> NeedlerStateBadge(badge = chip.badge)
+
+        PullsChip.NotRetrieved -> Text(
+            text = chip.word,
+            style = NeedlerTheme.typography.metaStrong,
+            // No hue, because the state has none: REQUIREMENTS.md gives `Server` the accent and
+            // `Device` the positive and leaves this one uncoloured, since a record that is nowhere
+            // is not somewhere in a third colour.
+            color = NeedlerTheme.colors.textSecondary,
+            maxLines = 2,
+        )
+    }
+}
+
+/** The widest chip label at the default text size, measured rather than computed. See [StatusColumn]. */
+private val STATUS_COLUMN_DP: Dp = 124.dp
+
+/** Past this the title needs the width more than the chip does. See [StatusColumn]. */
+private const val STATUS_COLUMN_MAX_SCALE: Float = 1.5f
 
 /**
  * Keeps an interactive control inside a merged row reachable on its own.
@@ -1118,129 +1212,140 @@ private fun RowAction(label: String, content: @Composable () -> Unit) {
 // ---------------------------------------------------------------------------
 
 /**
+ * The standing facts about this screen, as one box of at most two short lines.
+ *
+ * ## Why one box
+ *
+ * There used to be three, and they stacked. `screenshots/pulls-held-offline-phone.png` spends about
+ * 300px of a 844px phone on two visually identical bordered boxes before a single row is drawn, and
+ * on the same screen the offline fact was told three different ways: an inline banner on the queue,
+ * a differently worded one on the two read-through lanes, and a full-screen takeover on a lane with
+ * nothing cached. Three treatments and three wordings for one fact is three things to read and
+ * learn instead of one.
+ *
+ * So: one component, one wording per fact, and a hard cap of two lines, which is what stops the
+ * header growing without limit as facts accumulate. [bannerLines] decides which two.
+ *
+ * REQUIREMENTS.md, "Offline is a first-class state, not an error" is why none of this is dismissible
+ * and none of it is tinted as a problem: these say what is true, and the rows below them are still
+ * worth reading.
+ *
+ * Rejected: keeping a separate box per fact and simply shortening each. Two boxes of one line are
+ * still two borders, two paddings and two things that look like warnings, and the stacking returns
+ * the moment a third fact is true.
+ */
+@Composable
+private fun HeaderBanner(lines: List<String>) {
+    if (lines.isEmpty()) return
+    val colors = NeedlerTheme.colors
+    val shape = NeedlerTheme.shapes.medium
+    val spoken: String = lines.joinToString(separator = " ")
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.surface)
+            .border(NeedlerTheme.sizes.hairlineThickness, colors.hairline, shape)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = spoken
+                liveRegion = LiveRegionMode.Polite
+            },
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        lines.forEach { line ->
+            Text(
+                text = line,
+                style = NeedlerTheme.typography.caption,
+                color = colors.textSecondary,
+                overflow = TextOverflow.Visible,
+            )
+        }
+    }
+}
+
+/**
+ * Which standing facts the header states, newest-constraint first, and never more than two.
+ *
+ * The order is what a user can do about each. There is no point telling someone twelve pulls need a
+ * source picking on a server they currently cannot reach, so offline leads; the parked count comes
+ * next because it is about rows that are on screen; the held count comes last because it is a
+ * figure about rows that are not.
+ *
+ * **The parked line is new and it is the one a device needed.**
+ * `screenshots/pulls-all-awaiting-review-phone.png` is twelve rows every one of which reads
+ * `Needs attention`, under a header that claimed "12 in progress", with no banner at all - so
+ * nothing on the screen said that the thing to do was open DroppedNeedle's web interface, and the
+ * one component that says exactly that was drawn only for a different population. `held_count` and
+ * the parked rows are two populations, counted by two sources, and `PullsLane`'s own KDoc requires
+ * each figure to name its own: hence two sentences rather than one summed figure.
+ *
+ * Both queue-only. REQUIREMENTS.md, "Queue screen requirements" item 5 takes `held_count` from the
+ * download activity summary, and a history entry or a watch can be neither held nor parked.
+ */
+private fun bannerLines(state: PullsUiState): List<String> = buildList {
+    if (state.showOfflineBanner) add(OFFLINE_NOTE)
+    if (state.lane == PullsLane.QUEUE) {
+        if (state.waitingCount > 0) add(parkedNote(state.waitingCount))
+        if (state.heldCount > 0) add(heldNote(state.heldCount))
+    }
+}.take(MAX_BANNER_LINES)
+
+/**
+ * The parked line: what the twelve rows are waiting for, and who can move them.
+ *
+ * REQUIREMENTS.md, "Acquisition lifecycle", derives this state client-side precisely because "a
+ * human has to pick a source in DroppedNeedle's own web interface", and item 6 adds the approval
+ * queue. Neither is actionable from this app, so the sentence says where it is actionable rather
+ * than offering a control that cannot work - the same decision [heldNote] records.
+ */
+private fun parkedNote(count: Int): String =
+    PullsFormat.plural(count.toLong(), "pull") +
+        " need an approval or a source pick, both done in DroppedNeedle's web interface."
+
+/**
  * Held and quarantined items, as a count and a sentence.
  *
  * REQUIREMENTS.md, "Queue screen requirements" item 5: "Surface `held_count`
  * from the activity summary as a read-only notice. Held and quarantined items
- * need the web UI in v1." Read-only is the whole of it — there is no endpoint in
+ * need the web UI in v1." Read-only is the whole of it - there is no endpoint in
  * `PullRepository` that could resolve one, so offering a button here would be
  * offering something that cannot work. Saying where the work has to happen is
  * more use than saying nothing.
  */
-@Composable
-private fun HeldNotice(count: Int) {
-    val colors = NeedlerTheme.colors
-    val shape = NeedlerTheme.shapes.medium
-    val message: String = PullsFormat.plural(count.toLong(), "item") +
-        " held for review on the server. Releasing them needs DroppedNeedle's own web interface; " +
-        "Needler can only report the count."
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(colors.surface)
-            .border(NeedlerTheme.sizes.hairlineThickness, colors.hairline, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .semantics(mergeDescendants = true) {
-                contentDescription = message
-                liveRegion = LiveRegionMode.Polite
-            },
-    ) {
-        Text(
-            text = message,
-            style = NeedlerTheme.typography.caption,
-            color = colors.textSecondary,
-            overflow = TextOverflow.Visible,
-        )
-    }
-}
+private fun heldNote(count: Int): String =
+    PullsFormat.plural(count.toLong(), "item") +
+        " held for review, released only from DroppedNeedle's web interface."
+
+/** Two lines of caption is about 90px; three is a header taller than the first row under it. */
+private const val MAX_BANNER_LINES: Int = 2
 
 /**
- * The offline line.
+ * The result of the last action: dismissible, assertive, and the one thing here that is not grey.
  *
- * Deliberately not an error and deliberately not dismissible. REQUIREMENTS.md:
- * "Offline is a first-class state, not an error." What it says is what the
- * architecture guarantees: the rows come from the mirror, so they are the last
- * thing the server said rather than nothing at all, and a cancel or retry made
- * here is journalled and replayed on reconnect rather than lost.
+ * It is drawn as a filled card with a tinted bar down its leading edge rather than as a hairline
+ * box. `screenshots/pulls-problem-phone.png` is why: the error from a refused cancel sat *below* a
+ * standing notice, in the same bordered box, in the same secondary text colour, distinguished only
+ * by the outline being a different hue - which is colour as the sole channel, and a channel the
+ * green and the blue on this screen already measure 1.01:1 apart on. A fill, a bar and a dismiss
+ * control are three differences that are not colour.
+ *
+ * It also sits above the standing banner now. This is the only thing on the screen the user caused,
+ * and it is the only one that goes away.
  */
-@Composable
-private fun OfflineNote() {
-    val colors = NeedlerTheme.colors
-    val shape = NeedlerTheme.shapes.medium
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(colors.surface)
-            .border(NeedlerTheme.sizes.hairlineThickness, colors.hairline, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .semantics(mergeDescendants = true) {
-                contentDescription = OFFLINE_NOTE
-                liveRegion = LiveRegionMode.Polite
-            },
-    ) {
-        Text(
-            text = OFFLINE_NOTE,
-            style = NeedlerTheme.typography.caption,
-            color = colors.textSecondary,
-            overflow = TextOverflow.Visible,
-        )
-    }
-}
-
-/**
- * The offline line for a lane that has no mirror behind it.
- *
- * A different sentence from [OfflineNote]'s, because a different thing is true. The queue's rows
- * come from the `pull` table and are the last state the *server* reported, whenever that was; these
- * rows are the page this *session* fetched while it still had a connection, and the server may have
- * moved on since. Saying "the last figures the server sent" over them would overstate how current
- * they are.
- *
- * Still not an error and still not dismissible, for the reason [OfflineNote] gives:
- * REQUIREMENTS.md, "Offline is a first-class state, not an error". The rows are kept rather than
- * blanked, which is the whole point of the note existing — a list the user was reading should not
- * vanish because the radio did.
- */
-@Composable
-private fun StaleLaneNote() {
-    val colors = NeedlerTheme.colors
-    val shape = NeedlerTheme.shapes.medium
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(colors.surface)
-            .border(NeedlerTheme.sizes.hairlineThickness, colors.hairline, shape)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .semantics(mergeDescendants = true) {
-                contentDescription = STALE_LANE_NOTE
-                liveRegion = LiveRegionMode.Polite
-            },
-    ) {
-        Text(
-            text = STALE_LANE_NOTE,
-            style = NeedlerTheme.typography.caption,
-            color = colors.textSecondary,
-            overflow = TextOverflow.Visible,
-        )
-    }
-}
-
-/** A one-line result of the last action, dismissible. */
 @Composable
 private fun NoticeCard(notice: PullsNotice, onDismiss: () -> Unit) {
     val colors = NeedlerTheme.colors
     val shape = NeedlerTheme.shapes.medium
-    val tint = if (notice.isProblem) colors.destructive else colors.positive
+    // Accent for an accepted cancel, retry or clear: all three are things the *server* has agreed
+    // to, and this screen's green now means on this device and nothing else.
+    val tint = if (notice.isProblem) colors.destructive else colors.accent
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(shape)
-            .background(colors.surface)
-            .border(NeedlerTheme.sizes.hairlineThickness, tint, shape)
-            .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 4.dp)
+            .background(colors.surfaceRaised)
+            .padding(end = 4.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = notice.message
                 liveRegion = LiveRegionMode.Assertive
@@ -1248,11 +1353,19 @@ private fun NoticeCard(notice: PullsNotice, onDismiss: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Box(
+            modifier = Modifier
+                .width(NOTICE_BAR_DP)
+                .height(NOTICE_BAR_HEIGHT_DP)
+                .background(tint),
+        )
         Text(
             text = notice.message,
             style = NeedlerTheme.typography.caption,
-            color = colors.textSecondary,
-            modifier = Modifier.weight(1f),
+            color = colors.textPrimary,
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 10.dp),
         )
         NeedlerIconButton(
             contentDescription = "Dismiss",
@@ -1263,6 +1376,12 @@ private fun NoticeCard(notice: PullsNotice, onDismiss: () -> Unit) {
         }
     }
 }
+
+/** The notice's leading bar: wide enough to read as a deliberate mark, not as a border. */
+private val NOTICE_BAR_DP: Dp = 4.dp
+
+/** Tall enough to cover a two-line message, which is the longest `ProblemMessages` writes. */
+private val NOTICE_BAR_HEIGHT_DP: Dp = 56.dp
 
 /**
  * The loading state.
@@ -1326,14 +1445,23 @@ private fun PullsSkeleton(gutter: Dp) {
 /**
  * Nothing has ever been pulled.
  *
- * The way out of this state is on another screen, so the copy names it rather
- * than offering a button that would only navigate. It also says what the tab
- * badge is for, because REQUIREMENTS.md makes the badge "the reliable channel"
- * for pull state and a user who has never seen a pull has no way of knowing
- * that a notification is the unreliable one.
+ * ## It now offers the thing it names
+ *
+ * The copy read "Find an album under Search and tap Pull" and there was no way to get to Search
+ * from it, on the argument that "the way out of this state is on another screen, so the copy names
+ * it rather than offering a button that would only navigate". A button that only navigates is
+ * exactly what an empty state is for: `screenshots/playlists-empty-phone.png` is this app's own
+ * template - a headline, an explanation that teaches something true, and the action right there -
+ * and REQUIREMENTS.md "Accessibility" wants every route reachable as a control, which an instruction
+ * in prose is not. Three empty states on this screen made the same mistake; all three now carry the
+ * same button to the same place.
+ *
+ * The third paragraph stays and is the thing that teaches: REQUIREMENTS.md makes the tab badge "the
+ * reliable channel" for pull state, and a user who has never seen a pull has no way of knowing that
+ * a notification is the unreliable one.
  */
 @Composable
-private fun PullsEmptyState(offline: Boolean, gutter: Dp) {
+private fun PullsEmptyState(offline: Boolean, gutter: Dp, onOpenSearch: () -> Unit) {
     val colors = NeedlerTheme.colors
     val typography = NeedlerTheme.typography
     val spacing = NeedlerTheme.spacing
@@ -1354,9 +1482,9 @@ private fun PullsEmptyState(offline: Boolean, gutter: Dp) {
                 "Nothing has been requested from this server, and there is no connection to " +
                     "request anything over. Everything already in your library still plays."
             } else {
-                "Nothing has been requested from this server yet. Find an album under Search " +
-                    "and tap Pull; the server does the downloading over its own connection, and " +
-                    "this screen shows it searching, fetching and importing."
+                "A pull asks the server to go and get a record it has not got. The server does " +
+                    "the downloading over its own connection, and this screen shows it searching, " +
+                    "fetching and importing."
             },
             style = typography.body,
             color = colors.textSecondary,
@@ -1368,6 +1496,10 @@ private fun PullsEmptyState(offline: Boolean, gutter: Dp) {
             style = typography.caption,
             color = colors.textMuted,
         )
+        // Offered offline too. Search reaches the mirrored catalogue with no connection -
+        // REQUIREMENTS.md, "Search behaviour" - and the request sheet journals a pull for the
+        // write queue to replay, so the button leads somewhere useful either way.
+        NeedlerPrimaryButton(text = FIND_MUSIC, onClick = onOpenSearch)
     }
 }
 
@@ -1387,12 +1519,27 @@ private const val EMPTY_NOW: String = "Nothing is being acquired right now."
 
 private const val EMPTY_EARLIER: String = "Nothing has finished yet."
 
-internal const val OFFLINE_NOTE: String =
-    "Offline. These are the last figures the server sent. Pulls carry on at the server's end, " +
-        "and a cancel or retry made here is sent as soon as you are back online."
+/** The one way out of every empty state on this screen. See `PullsEmptyState`. */
+internal const val FIND_MUSIC: String = "Find music to pull"
 
-/** See [StaleLaneNote] for why this is not [OFFLINE_NOTE]. */
-internal const val STALE_LANE_NOTE: String =
-    "Offline. This is what was loaded while you were connected, and the server may have moved " +
-        "on since. These lists are kept on the server, so there is nothing newer on this device " +
-        "to show."
+/**
+ * The one offline sentence, for all three lanes and for the banner and the empty pane alike.
+ *
+ * There were two, and they were argued for: the queue's rows come from the mirror and are the last
+ * thing the *server* said, while a read-through lane's rows are the page this *session* fetched, so
+ * "the last figures the server sent" would overstate how current the second lot are. True, and not
+ * worth two sentences. A user is told one thing - there is no connection, what is on screen is not
+ * live, and nothing they do here is lost - and that is true of all three lanes. The second sentence
+ * was also a third treatment of a fact already told two other ways on the same screen.
+ *
+ * REQUIREMENTS.md, "Offline is a first-class state, not an error": it states what is true and offers
+ * nothing to dismiss. The write-queue promise is the part worth keeping from the queue's old
+ * wording, because it is the one thing a user would otherwise assume had failed.
+ *
+ * Rejected: keeping the distinction and merging only the *treatment*. The two sentences differ in a
+ * detail no user acts on, and the cost of the precision was that the same fact looked like two
+ * different facts when a user moved between tabs.
+ */
+internal const val OFFLINE_NOTE: String =
+    "Offline, so this is the last the server said. A Stop or Retry made here is sent when you " +
+        "are back online."
