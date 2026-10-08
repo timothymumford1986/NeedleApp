@@ -744,11 +744,13 @@ The third one pulls artist following into v1, which the feature scope had deferr
 | --- | --- | --- |
 | Pulls screen foregrounded | 2 s | Coroutine, full task list |
 | App foregrounded, elsewhere | 20 s | Coroutine, activity summary. Owned by `:app` - only the host knows what "elsewhere" is |
-| Pull placed, app backgrounded | 1 min, then backing off to 15 min | Expedited `WorkManager` |
+| Pull placed, app backgrounded | 1 min, then backing off to 15 min | One-time `WorkManager`, delayed |
 | Active pulls, app backgrounded | 15 min | Periodic `WorkManager` |
 | No active pulls | 6 h | Periodic `WorkManager`, also drives metadata sync |
 
-Fifteen minutes is the floor `WorkManager` allows for periodic work, so a pull that finishes soon after a poll can take that long to surface. Expediting the first check after a pull is placed covers the common case of a user waiting for something small.
+Fifteen minutes is the floor `WorkManager` allows for periodic work, so a pull that finishes soon after a poll can take that long to surface. A one-off check a minute after a pull is placed covers the common case of a user waiting for something small.
+
+**That row said "Expedited `WorkManager`" until 2026-10-08, and it is not a combination `WorkManager` offers.** `WorkRequest.Builder.build()` throws `IllegalArgumentException: Expedited jobs cannot be delayed` when a request carries both `setExpedited` and `setInitialDelay`, and `WorkManagerScheduler` carried both — so placing any pull from the UI crashed the app the moment the request reached the server. The delay is the half that is the behaviour: polling the instant the server was asked returns the state it has just reported. "Expedited" described the urgency of the one-minute ladder against the fifteen-minute periodic floor, not the API, and the wording invited the API call. `WorkManagerSchedulerTest` now builds every request this app enqueues, which is the assertion that was missing — the suite reached the scheduler only through a fake whose implementation was a counter.
 
 The `revision` field on the activity summary makes an unchanged poll almost free, so the app can compare revisions and skip all downstream work when nothing has moved.
 
