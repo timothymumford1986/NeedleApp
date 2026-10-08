@@ -18,6 +18,9 @@ import app.needler.connect.ProxyPreset
 import app.needler.core.domain.model.CertificateInfo
 import app.needler.core.domain.model.OfflineCause
 import java.awt.image.BufferedImage
+import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
+import com.github.takahirom.roborazzi.RoborazziOptions
+import com.github.takahirom.roborazzi.RoborazziTaskType
 import java.io.File
 import javax.imageio.ImageIO
 import kotlin.time.ExperimentalTime
@@ -282,8 +285,18 @@ class ConnectScreenshotTest {
      * afterwards. A name parameter on the shared helper would have every other caller reading past
      * a case that applies to one.
      */
+    @OptIn(ExperimentalRoborazziApi::class)
     private fun captureTo(file: File, device: NeedlerDevice, state: ConnectUiState) {
-        val rendered: File = captureNeedlerScreen(SCRATCH_NAME, device) {
+        val rendered: File = captureNeedlerScreen(
+            SCRATCH_NAME,
+            device,
+            // Forced to Record. Roborazzi picks record-or-verify from a system property for the
+            // whole run, so under `-Pneedler.screenshots.verify` this would try to compare against
+            // `screenshots/scratch-connect-proxy-shut-phone.png`, which is deliberately never
+            // committed, and fail with "The original file was not found". It is a baseline rendered
+            // in this run, not a golden, so it records in both modes.
+            roborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record),
+        ) {
             Screen(state, device)
         }
         rendered.copyTo(file, overwrite = true)

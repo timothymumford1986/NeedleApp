@@ -12,6 +12,9 @@ import app.needler.feature.library.SampleLibrary
 import app.needler.feature.library.screenshot.NeedlerDevice
 import app.needler.feature.library.screenshot.NeedlerScreenshots
 import app.needler.feature.library.screenshot.assertRendered
+import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
+import com.github.takahirom.roborazzi.RoborazziOptions
+import com.github.takahirom.roborazzi.RoborazziTaskType
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import java.io.File
 import org.junit.Assert.assertFalse
@@ -76,7 +79,12 @@ class SortMenuScreenshotTest {
         compose.waitForIdle()
 
         val shut: File = File.createTempFile("needler-sort-menu-shut", ".png")
-        captureScreenRoboImage(file = shut)
+        // Forced to Record. Roborazzi picks record-or-verify from a system property for the whole
+        // run, so under `-Pneedler.screenshots.verify` this scratch capture would try to compare
+        // against a golden that is deliberately never committed and fail the build with
+        // `NullPointerException: read(...) must not be null`. It is a measurement taken in this
+        // run, not a golden, so it records in both modes.
+        captureScreenRoboImage(file = shut, roborazziOptions = SCRATCH)
 
         // The semantics action rather than a tap: the pill's coordinates depend on the controls row
         // wrapping, and what is being recorded is the menu rather than the hit box.
@@ -117,6 +125,10 @@ class SortMenuScreenshotTest {
     }
 
     /** Fails if the committed image is the screen with the menu shut. See the file's KDoc. */
+    /** Always records, never compares. See the call site. */
+    @OptIn(ExperimentalRoborazziApi::class)
+    private val SCRATCH: RoborazziOptions = RoborazziOptions(taskType = RoborazziTaskType.Record)
+
     private fun assertMenuOpened(golden: File, shut: File) {
         assertFalse(
             golden.name + " is byte-identical to the same screen with the sort menu shut, so the " +

@@ -6,6 +6,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import app.needler.core.design.theme.NeedlerTheme
 import com.github.takahirom.roborazzi.RoborazziComposeOptions
+import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.size
 import java.io.File
@@ -144,6 +145,7 @@ fun captureNeedlerScreen(
     name: String,
     device: NeedlerDevice,
     fontScale: Float = 1f,
+    roborazziOptions: RoborazziOptions = RoborazziOptions(),
     content: @Composable () -> Unit,
 ): File {
     RuntimeEnvironment.setQualifiers(device.qualifiers)
@@ -152,6 +154,7 @@ fun captureNeedlerScreen(
 
     captureRoboImage(
         file = file,
+        roborazziOptions = roborazziOptions,
         roborazziComposeOptions = RoborazziComposeOptions {
             size(widthDp = device.widthDp, heightDp = device.heightDp)
         },
